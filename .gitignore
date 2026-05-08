@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# OMC 세션 메타데이터
+.omc/
+
+# 환경 / 비밀
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 로그 / 임시
+*.log
+tmp/
+.cache/
+
+# 노드 (도구로 쓰일 경우)
+node_modules/
+
+# 파이썬 (도구로 쓰일 경우)
+__pycache__/
+*.pyc
+.venv/
+venv/
