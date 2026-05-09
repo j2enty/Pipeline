@@ -1,0 +1,134 @@
+name: critic-dispatch
+
+on:
+  workflow_call:
+    inputs:
+      parent-url:
+        description: "Parent issue URL"
+        type: string
+        required: true
+      working-directory:
+        description: "self-hosted runner 작업 디렉토리"
+        type: string
+        required: true
+      owner:
+        description: "GitHub 조직/사용자 (URL 검증 + API 호출에 사용)"
+        type: string
+        required: true
+      parent-repository:
+        description: "parent issue 레포 (<owner>/<repo>)"
+        type: string
+        required: true
+      modules-ignore:
+        description: "제외 모듈 JSON 배열 (예: '[\"Design\"]')"
+        type: string
+        required: false
+        default: '[]'
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  run-critic:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    concurrency:
+      group: critic-run-${{ inputs.parent-url }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: App 토큰 발급
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Parent URL 검증
+        env:
+          PARENT_URL: ${{ inputs.parent-url }}
+          OWNER: ${{ inputs.owner }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PARENT_URL" =~ ^https://github\.com/${OWNER}/[A-Za-z0-9._-]+/issues/[0-9]+$ ]]; then
+            echo "Invalid parent URL: $PARENT_URL" >&2
+            exit 1
+          fi
+          echo "Parent URL 검증 완료: $PARENT_URL"
+
+      - name: /review --bot (critic) 실행
+        env:
+          PARENT_URL: ${{ inputs.parent-url }}
+        run: |
+          set -euo pipefail
+          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot"
+
+      - name: 모든 영역 PR squash merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          OWNER: ${{ inputs.owner }}
+          PARENT_REPO: ${{ inputs.parent-repository }}
+          MODULES_IGNORE: ${{ inputs.modules-ignore }}
+        run: |
+          set -euo pipefail
+          PARENT_NUM=$(echo "$PARENT_URL" | grep -oE '[0-9]+$')
+
+          # sub-issue 목록 + modules-ignore 필터
+          SIBLINGS=$(gh api "/repos/$PARENT_REPO/issues/$PARENT_NUM/sub_issues" \
+            --jq '.[]' | python3 -c "
+import json, sys, os
+modules_ignore = json.loads(os.environ.get('MODULES_IGNORE', '[]'))
+for line in sys.stdin:
+    issue = json.loads(line)
+    repo_name = issue['repository']['name']
+    if repo_name not in modules_ignore:
+        print(issue['repository']['name'], issue['number'])
+")
+
+          echo "머지 대상:"
+          echo "$SIBLINGS"
+
+          while IFS=' ' read -r REPO SUB_NUM; do
+            [ -z "$REPO" ] && continue
+            PR_NUM=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $num: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $num) {
+                    closedByPullRequestsReferences(first: 3, includeClosedPrs: false) {
+                      nodes { number state }
+                    }
+                  }
+                }
+              }' -f owner="$OWNER" -f repo="$REPO" -F num="$SUB_NUM" \
+              --jq '.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN") | .number' \
+              | head -1)
+            if [ -z "${PR_NUM:-}" ]; then
+              echo "  $REPO#$SUB_NUM — open PR 없음 (스킵)"
+              continue
+            fi
+            echo "  $REPO#$PR_NUM squash merge..."
+            gh pr merge "$PR_NUM" --squash --repo "$OWNER/$REPO" || \
+              echo "  $REPO#$PR_NUM 머지 실패"
+          done <<< "$SIBLINGS"
+
+      - name: 에스컬레이션 (실패 시)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$PARENT_URL" \
+            --body "critic-dispatch 실패. 수동 처리 필요. 로그: $RUN_URL" \
+            2>/dev/null || true
