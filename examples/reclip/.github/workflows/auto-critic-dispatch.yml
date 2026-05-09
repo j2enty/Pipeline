@@ -1,0 +1,24 @@
+name: Auto critic (dispatch)
+
+# 이 파일은 영역 레포(.github/workflows/)에 복사해서 사용하는 호출자 yml 예시.
+# Pipeline 레포의 critic-dispatch.yml reusable workflow를 호출함.
+#
+# 트리거: critic-triggered repository_dispatch 이벤트
+# (폴러 또는 App이 모든 sibling APPROVED 감지 시 발사)
+
+on:
+  repository_dispatch:
+    types: [critic-triggered]
+
+jobs:
+  critic-dispatch:
+    uses: MKFactory-Reclip/Pipeline/.github/workflows/critic-dispatch.yml@main
+    with:
+      parent-url: ${{ github.event.client_payload.parent_url }}
+      working-directory: ${{ vars.PIPELINE_WORKING_DIRECTORY }}
+      owner: ${{ vars.PIPELINE_OWNER }}
+      parent-repository: ${{ vars.PIPELINE_PARENT_REPOSITORY }}
+      modules-ignore: ${{ vars.PIPELINE_MODULES_IGNORE || '[]' }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}
