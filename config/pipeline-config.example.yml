@@ -1,0 +1,47 @@
+# pipeline-config.example.yml
+# 새 프로젝트 이식 시 이 파일을 복사해서 값을 채워넣으세요.
+# install.sh가 이 파일을 읽어 org variables·secrets를 자동 등록합니다.
+
+project:
+  # GitHub 조직명 또는 사용자명 (org variables: PIPELINE_OWNER)
+  owner: ""
+
+  # parent issue가 있는 레포 — <owner>/<repo> 형식 (org variables: PIPELINE_PARENT_REPOSITORY)
+  parent-repository: ""
+
+  # GitHub Project v2 번호 (org variables: PIPELINE_PROJECT_NUMBER)
+  # 프로젝트 URL의 마지막 숫자: github.com/orgs/<org>/projects/<number>
+  project-number: 0
+
+  # self-hosted runner의 워크스페이스 루트 경로 (org variables: PIPELINE_WORKING_DIRECTORY)
+  # 예: /Users/username/Projects/MyProject
+  working-directory: ""
+
+  # 슬랙 알림 채널 이름 (org variables: PIPELINE_SLACK_CHANNEL)
+  # 미설정 시 Slack 알림 스킵 (파이프라인은 정상 진행)
+  slack-channel: ""
+
+modules:
+  # 자동화를 적용할 모듈 목록
+  # 각 모듈은 영역 레포 하나에 대응 (예: Backend → <org>/Backend 레포)
+  - name: ""
+    # 해당 모듈의 CI workflow 이름 (GHA Actions 탭에 표시되는 이름)
+    # auto-merge.yml이 CI pass 여부를 확인할 때 사용
+    ci-workflow-name: ""
+
+  # 추가 모듈 예시:
+  # - name: Admin
+  #   ci-workflow-name: Admin CI
+  # - name: iOS
+  #   ci-workflow-name: iOS CI
+
+modules-ignore:
+  # 자동화에서 제외할 모듈 목록 (org variables: PIPELINE_MODULES_IGNORE)
+  # critic·dispatch 등 multi-module 판정 시 이 목록은 sibling 집계에서 제외
+  # 예: Design, Docs 등 코드 변경이 없는 영역
+  - ""
+
+reviewer:
+  # AI 리뷰(Reviewer 봇) 사용 여부
+  # false 이면 REVIEWER_* secrets 등록 불필요
+  enabled: false

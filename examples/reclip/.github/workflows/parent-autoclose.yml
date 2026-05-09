@@ -1,0 +1,13 @@
+name: sub-issue 전부 닫히면 parent 자동 close
+
+# 이 파일은 영역 레포(.github/workflows/)에 복사해서 사용하는 호출자 yml 예시.
+# Pipeline 레포의 parent-autoclose.yml reusable workflow를 호출만 함.
+
+on:
+  issues:
+    types: [closed]
+
+jobs:
+  close-parent:
+    uses: MKFactory-Reclip/Pipeline/.github/workflows/parent-autoclose.yml@main
+    secrets: inherit
