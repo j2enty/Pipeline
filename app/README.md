@@ -38,10 +38,10 @@ GitHub 조직 설정 → Developer settings → GitHub Apps → New GitHub App
 - Contents: Read & Write
 - Issues: Read & Write
 - Pull requests: Read & Write
-- Actions: Read
+- Workflows: Read & Write
 
 **이벤트 구독**:
-- Issues, Pull request, Pull request review, Workflow run
+- Issues, Issue comment, Pull request
 
 등록 후 → App ID·Private Key·Installation ID 를 `.env`에 입력.
 
@@ -51,11 +51,13 @@ GitHub 조직 설정 → Developer settings → GitHub Apps → New GitHub App
 
 **권한**: Pull requests: Read & Write
 
+**이벤트 구독**: Pull request review
+
 ## 운영 배포 (Docker)
 
 ```bash
 # 이미지 빌드 + 실행
-docker compose up -d
+docker compose up -d --build
 
 # 로그 확인
 docker compose logs -f app
