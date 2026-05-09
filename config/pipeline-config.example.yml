@@ -9,9 +9,10 @@ project:
   # parent issue가 있는 레포 — <owner>/<repo> 형식 (org variables: PIPELINE_PARENT_REPOSITORY)
   parent-repository: ""
 
-  # GitHub Project v2 번호 (org variables: PIPELINE_PROJECT_NUMBER)
+  # 폴러가 동시에 모니터링할 GitHub Project v2 번호 배열 (App 환경변수: PROJECT_NUMBERS)
   # 프로젝트 URL의 마지막 숫자: github.com/orgs/<org>/projects/<number>
-  project-number: 0
+  # 여러 보드를 동시에 운영하는 경우 모두 나열 (예: 마일스톤 + 상시 CS 보드)
+  project-numbers: [0]
 
   # self-hosted runner의 워크스페이스 루트 경로 (org variables: PIPELINE_WORKING_DIRECTORY)
   # 예: /Users/username/Projects/MyProject

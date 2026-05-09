@@ -68,7 +68,7 @@ check_requirements() {
 # ── Config 파싱 (python3, pyyaml 불필요) ────────────────────
 parse_config() {
   python3 - "$CONFIG_FILE" <<'PYEOF'
-import sys, re
+import sys, re, json
 
 path = sys.argv[1]
 with open(path) as f:
@@ -81,14 +81,18 @@ def get_scalar(key, default=''):
 # 스칼라 값
 print(f"OWNER='{get_scalar('owner')}'")
 print(f"PARENT_REPO='{get_scalar('parent-repository')}'")
-print(f"PROJECT_NUMBER='{get_scalar('project-number')}'")
 print(f"WORKING_DIR='{get_scalar('working-directory')}'")
 print(f"SLACK_CHANNEL='{get_scalar('slack-channel')}'")
+
+# project-numbers 배열 (예: project-numbers: [3, 5])
+pn = re.search(r'project-numbers:\s*\[([^\]]*)\]', content)
+pn_items = [int(n) for n in re.findall(r'\d+', pn.group(1))] if pn else []
+print(f"PROJECT_NUMBERS_JSON={json.dumps(pn_items)}")
 
 # modules-ignore JSON 배열
 mi = re.search(r'modules-ignore:\s*\n((?:\s+-\s*.+\n?)*)', content)
 items = re.findall(r'-\s*"?([^"\n]+)"?', mi.group(1)) if mi else []
-print(f"MODULES_IGNORE_JSON=[{', '.join(repr(i.strip()) for i in items)}]")
+print(f"MODULES_IGNORE_JSON={json.dumps([i.strip() for i in items])}")
 
 # reviewer enabled
 rev = re.search(r'reviewer:\s*\n\s+enabled:\s*(\w+)', content)
@@ -102,6 +106,9 @@ for i, name in enumerate(names):
     print(f"MODULE_{i}_NAME='{name.strip()}'")
     print(f"MODULE_{i}_CI='{ci}'")
 print(f"MODULE_COUNT={len(names)}")
+
+# 영역 모듈 이름들을 JSON 배열로 (App 폴러 환경변수 MODULES 용)
+print(f"MODULES_JSON={json.dumps([n.strip() for n in names])}")
 PYEOF
 }
 
@@ -169,7 +176,6 @@ register_variables() {
   echo "  variables 등록 중..."
   gh variable set PIPELINE_OWNER                    --repo "$repo" --body "$OWNER"
   gh variable set PIPELINE_PARENT_REPOSITORY        --repo "$repo" --body "$PARENT_REPO"
-  gh variable set PIPELINE_PROJECT_NUMBER           --repo "$repo" --body "$PROJECT_NUMBER"
   gh variable set PIPELINE_MODULES_IGNORE           --repo "$repo" --body "$MODULES_IGNORE_JSON"
   gh variable set PIPELINE_WORKING_DIRECTORY        --repo "$repo" --body "$WORKING_DIR"
   gh variable set PIPELINE_REVIEWER_BOT_LOGIN       --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
@@ -230,6 +236,9 @@ REVIEWER_BOT_LOGIN=$REVIEWER_BOT_LOGIN
 EOF
   fi
   cat >> "$env_file" <<EOF
+OWNER=$OWNER
+PROJECT_NUMBERS=$PROJECT_NUMBERS_JSON
+MODULES=$MODULES_JSON
 MODULES_IGNORE=$MODULES_IGNORE_JSON
 SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
 WEBHOOK_SECRET=$WEBHOOK_SECRET

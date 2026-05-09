@@ -4,7 +4,9 @@
 project:
   owner: MKFactory-Reclip
   parent-repository: MKFactory-Reclip/Reclip
-  project-number: 3
+  # 폴러가 동시에 모니터링할 GitHub Project v2 번호 배열
+  # (예: 마일스톤 보드 + 상시 CS/버그 보드)
+  project-numbers: [3]
   working-directory: /Users/miller/Home/Develop/MKFactory/Reclip
   slack-channel: "#reclip-alerts"
 

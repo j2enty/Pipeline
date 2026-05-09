@@ -187,7 +187,7 @@ Phase 2가 사실상 최종 형태일 가능성이 높음. Phase 3는 운영자�
 
 | 분류 | 정의 | 예시 |
 |---|---|---|
-| input | 누설돼도 보안 영향 없음 | `module`, `owner`, `project-number`, `working-directory` |
+| input | 누설돼도 보안 영향 없음 | `module`, `owner`, `working-directory` |
 | secret | 누설되면 권한·리소스 도난 가능 | `AUTHOR_APP_ID`, `AUTHOR_PRIVATE_KEY`, `SLACK_WEBHOOK_URL` |
 
 App ID·Installation ID는 공식적으로 공개 가능하지만, fingerprinting 위험이 있어 **보수적으로 secret**으로 분류.
@@ -213,7 +213,6 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `module` | string | module 동작 yml | 어느 모듈 (`Backend`, `iOS` 등) |
 | `owner` | string | 거의 모든 yml | GitHub 조직/사용자 |
 | `parent-repository` | string | parent 추적 yml | `<owner>/<repo>` 형식 |
-| `project-number` | number | Project v2 사용 yml | GitHub Project v2 번호 |
 | `modules-ignore` | string | multi-module yml | JSON 배열. 제외 모듈 (예: `'["Design"]'`) |
 | `working-directory` | string | slash command 실행 yml | runner 작업 디렉토리 |
 | `slack-channel` | string | 알림 yml (옵션) | 슬랙 채널 |
@@ -279,7 +278,6 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 |---|---|---|
 | `PIPELINE_OWNER` | `owner` | GitHub 조직명 |
 | `PIPELINE_PARENT_REPOSITORY` | `parent-repository` | `<owner>/<repo>` |
-| `PIPELINE_PROJECT_NUMBER` | `project-number` | GitHub Project v2 번호 |
 | `PIPELINE_MODULES_IGNORE` | `modules-ignore` | 제외 모듈 JSON 배열 |
 | `PIPELINE_WORKING_DIRECTORY` | `working-directory` | runner 작업 경로 |
 | `PIPELINE_SLACK_CHANNEL` | `slack-channel` | 슬랙 채널 |
@@ -288,16 +286,30 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 
 ### App 환경변수
 
-secret 카탈로그와 동일 이름 사용 → GHA secret ↔ App 환경변수 1:1 매핑
+App 인증·자동화 동작 두 그룹.
+
+**인증** — secret 카탈로그와 동일 이름 (GHA secret ↔ App 환경변수 1:1 매핑):
 
 ```env
 AUTHOR_APP_ID=
-AUTHOR_PRIVATE_KEY=
+AUTHOR_PEM=                # PEM 파일 절대경로 (App 은 파일을 읽음)
 AUTHOR_INSTALLATION_ID=
-REVIEWER_APP_ID=          # 옵션 (AI 리뷰 미사용 시 비워둠)
-REVIEWER_PRIVATE_KEY=     # 옵션
-REVIEWER_INSTALLATION_ID= # 옵션
-SLACK_WEBHOOK_URL=        # 옵션
+REVIEWER_APP_ID=           # 옵션 (AI 리뷰 미사용 시 비워둠)
+REVIEWER_PEM=              # 옵션
+REVIEWER_INSTALLATION_ID=  # 옵션
+SLACK_WEBHOOK_URL=         # 옵션
+WEBHOOK_SECRET=            # GitHub App webhook secret
+```
+
+**자동화 동작** — App-내 결정 로직(폴러·핸들러)이 사용:
+
+```env
+OWNER=                          # 조직명 (Project v2 폴링 대상)
+PROJECT_NUMBERS=[3,5]           # 폴러가 동시 모니터링할 Project v2 번호 배열
+MODULES=["Backend","iOS"]       # 영역 모듈 이름 (폴러 dispatch 대상 식별)
+MODULES_IGNORE=["Design"]       # sibling 집계 시 제외할 모듈
+REVIEWER_BOT_LOGIN=             # Reviewer 봇 로그인 prefix (review 핸들러 검증용)
+STATUS_POLLER_INTERVAL_MS=300000  # 폴링 간격 (옵션, 기본 5분)
 ```
 
 
