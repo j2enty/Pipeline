@@ -1,0 +1,73 @@
+name: Auto merge (single-area CI pass + APPROVE squash merge)
+
+# 이 파일은 영역 레포(.github/workflows/)에 복사해서 사용하는 호출자 yml 예시.
+# Pipeline 레포의 merge.yml reusable workflow를 호출함.
+#
+# ⚠ GHA 제약: workflow_run.workflows 는 정적 값만 가능.
+#   각 영역 레포에 복사 후 아래 "Backend CI" 를 해당 영역 CI 이름으로 변경 필요.
+#   (예: Admin → "Admin CI", Frontend → "Frontend CI")
+
+on:
+  pull_request_review:
+    types: [submitted]
+  workflow_run:
+    workflows: ["Backend CI"]  # ← 영역별 CI workflow 이름으로 변경
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to merge'
+        required: true
+        type: string
+
+jobs:
+  # PR 번호 resolve — 트리거 종류에 따라 다르게 추출
+  resolve:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    outputs:
+      pr-number: ${{ steps.resolve.outputs.pr_number }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - name: PR 번호 추출
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_FROM_REVIEW: ${{ github.event.pull_request.number }}
+          PR_FROM_DISPATCH: ${{ inputs.pr_number }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            PR_NUMBER="$PR_FROM_REVIEW"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PR_NUMBER="$PR_FROM_DISPATCH"
+          else
+            PR_NUMBER=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" \
+              --state open --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  merge:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    uses: MKFactory-Reclip/Pipeline/.github/workflows/merge.yml@main
+    with:
+      pr-number: ${{ needs.resolve.outputs.pr-number }}
+      pr-repo: ${{ github.repository }}
+      ci-workflow-name: ${{ vars.PIPELINE_CI_WORKFLOW_NAME }}
+      reviewer-bot-login: ${{ vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+      strict-review-bot-check: ${{ vars.PIPELINE_STRICT_REVIEW_BOT_CHECK == 'true' }}
+      modules-ignore: ${{ vars.PIPELINE_MODULES_IGNORE || '[]' }}
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}
