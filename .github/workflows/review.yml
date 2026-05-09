@@ -1,0 +1,118 @@
+name: review
+
+on:
+  workflow_call:
+    inputs:
+      pr-url:
+        description: "PR URL"
+        type: string
+        required: true
+      parent-url:
+        description: "Parent issue URL"
+        type: string
+        required: true
+      working-directory:
+        description: "self-hosted runner 작업 디렉토리 (vars.PIPELINE_WORKING_DIRECTORY)"
+        type: string
+        required: true
+      owner:
+        description: "GitHub 조직/사용자 — URL 검증 패턴에 사용 (vars.PIPELINE_OWNER)"
+        type: string
+        required: true
+      reviewer-bot-login:
+        description: "Reviewer 봇 로그인 이름 — 미설정 시 vars.PIPELINE_REVIEWER_BOT_LOGIN 사용"
+        type: string
+        required: false
+        default: ''
+      max-attempts:
+        description: "최대 review 시도 횟수 (기본값: 3)"
+        type: number
+        required: false
+        default: 3
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: self-hosted
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    concurrency:
+      group: review-${{ inputs.pr-url }}
+      cancel-in-progress: false
+
+    steps:
+      - name: URL 검증
+        env:
+          PR_URL: ${{ inputs.pr-url }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          OWNER: ${{ inputs.owner }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PR_URL" =~ ^https://github\.com/${OWNER}/[A-Za-z0-9._-]+/pull/[0-9]+$ ]]; then
+            echo "Invalid PR URL: $PR_URL" >&2
+            exit 1
+          fi
+          if [[ ! "$PARENT_URL" =~ ^https://github\.com/${OWNER}/[A-Za-z0-9._-]+/issues/[0-9]+$ ]]; then
+            echo "Invalid parent URL: $PARENT_URL" >&2
+            exit 1
+          fi
+          echo "URL 검증 완료"
+
+      - name: Review and fix loop
+        env:
+          PR_URL: ${{ inputs.pr-url }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+          # input 우선, 없으면 Pipeline 레포 vars에서 (호출자가 vars에서 전달 권장)
+          REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login != '' && inputs.reviewer-bot-login || vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          attempt=0
+          APPROVED=false
+          # [bot] suffix 제거 — startswith 검색용
+          BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
+
+          while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
+            echo "=== Review attempt $((attempt + 1))/$MAX_ATTEMPTS ==="
+            claude --dangerously-skip-permissions -p "/review $PR_URL --bot"
+
+            LATEST_STATE=$(gh pr view "$PR_URL" \
+              --json reviews \
+              --jq "[.reviews[] | select(.author.login | startswith(\"${BOT_PREFIX}\"))] | last | .state // \"NONE\"")
+
+            echo "Latest review state: $LATEST_STATE"
+
+            if [ "$LATEST_STATE" = "APPROVED" ]; then
+              echo "PR approved."
+              APPROVED=true
+              break
+            fi
+
+            attempt=$((attempt + 1))
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "REQUEST_CHANGES — /kickoff --bot 실행..."
+              claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot"
+            fi
+          done
+
+          if [ "$APPROVED" != "true" ]; then
+            echo "Fix loop 한도 초과 ($MAX_ATTEMPTS 회)." >&2
+            exit 1
+          fi
+
+      - name: 에스컬레이션 (실패 시)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ inputs.pr-url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR_URL" \
+            --body "## 🚨 auto-review 실패 — 수동으로 \`/review\` 실행 필요. 로그: $RUN_URL" \
+            2>/dev/null || true

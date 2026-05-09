@@ -1,0 +1,177 @@
+name: merge
+
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        description: "머지할 PR 번호"
+        type: string
+        required: true
+      pr-repo:
+        description: "PR 레포 (owner/repo)"
+        type: string
+        required: true
+      ci-workflow-name:
+        description: "CI workflow 이름 (예: Backend CI) — vars.PIPELINE_CI_WORKFLOW_NAME"
+        type: string
+        required: true
+      reviewer-bot-login:
+        description: "Reviewer 봇 로그인 이름 — 미설정 시 vars.PIPELINE_REVIEWER_BOT_LOGIN 사용"
+        type: string
+        required: false
+        default: ''
+      strict-review-bot-check:
+        description: "true: 누구의 CHANGES_REQUESTED든 차단 / false: Reviewer 봇 것만 확인"
+        type: boolean
+        required: false
+        default: true
+      modules-ignore:
+        description: "제외 모듈 JSON 배열 (예: '[\"Design\"]') — vars.PIPELINE_MODULES_IGNORE"
+        type: string
+        required: false
+        default: '[]'
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: auto-merge-${{ inputs.pr-repo }}-${{ inputs.pr-number }}
+      cancel-in-progress: false
+    steps:
+      - name: App 토큰 발급
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: 머지 조건 확인
+        id: check
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_REPO: ${{ inputs.pr-repo }}
+          CI_WORKFLOW_NAME: ${{ inputs.ci-workflow-name }}
+          REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login != '' && inputs.reviewer-bot-login || vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+          STRICT_REVIEW_BOT_CHECK: ${{ inputs.strict-review-bot-check }}
+          MODULES_IGNORE: ${{ inputs.modules-ignore }}
+        run: |
+          set -euo pipefail
+
+          PR_OWNER=$(echo "$PR_REPO" | cut -d/ -f1)
+          PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
+          BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
+
+          PR_INFO=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $num: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $num) {
+                  state
+                  isDraft
+                  headRefName
+                  labels(first: 20) { nodes { name } }
+                  closingIssuesReferences(first: 5) {
+                    nodes {
+                      parent {
+                        subIssues(first: 50) {
+                          nodes { repository { nameWithOwner } }
+                        }
+                      }
+                    }
+                  }
+                  reviews(first: 50) {
+                    nodes { state author { login } }
+                  }
+                }
+              }
+            }
+          ' -f owner="$PR_OWNER" -f repo="$PR_REPO_NAME" -F num="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest')
+
+          PR_STATE=$(echo "$PR_INFO" | jq -r '.state')
+          if [ "$PR_STATE" != "OPEN" ]; then
+            echo "PR OPEN 아님 ($PR_STATE) — 스킵"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          if [ "$(echo "$PR_INFO" | jq -r '.isDraft')" = "true" ]; then
+            echo "Draft PR — 스킵"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          if [ "$(echo "$PR_INFO" | jq '[.labels.nodes[] | select(.name == "blocked")] | length')" -gt 0 ]; then
+            echo "blocked 라벨 — 스킵"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # sibling count 확인 — modules-ignore 필터 적용
+          SIBLING_COUNT=$(echo "$PR_INFO" | python3 -c "
+import json, sys, os
+pr = json.load(sys.stdin)
+ignore = json.loads(os.environ.get('MODULES_IGNORE', '[]'))
+nodes = pr.get('closingIssuesReferences', {}).get('nodes', [])
+parent = nodes[0].get('parent') if nodes else None
+if not parent:
+    print(0); sys.exit(0)
+siblings = [n for n in parent.get('subIssues', {}).get('nodes', [])
+            if n['repository']['nameWithOwner'].split('/')[-1] not in ignore]
+print(len(siblings))
+")
+          if [ "$SIBLING_COUNT" -gt 1 ]; then
+            echo "Multi-area (sibling=$SIBLING_COUNT) — critic 처리 — 스킵"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # Reviewer 봇 APPROVE 확인
+          APPROVED=$(echo "$PR_INFO" | jq --arg bot "$BOT_PREFIX" \
+            '[.reviews.nodes[] | select((.author.login | startswith($bot)) and .state == "APPROVED")] | length')
+          if [ "$APPROVED" = "0" ]; then
+            echo "Reviewer 봇 APPROVE 없음 — 스킵"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # CHANGES_REQUESTED 확인 (strict 모드 분기)
+          if [ "$STRICT_REVIEW_BOT_CHECK" = "true" ]; then
+            CHANGES=$(echo "$PR_INFO" | jq '[.reviews.nodes[] | select(.state == "CHANGES_REQUESTED")] | length')
+          else
+            CHANGES=$(echo "$PR_INFO" | jq --arg bot "$BOT_PREFIX" \
+              '[.reviews.nodes[] | select((.author.login | startswith($bot)) and .state == "CHANGES_REQUESTED")] | length')
+          fi
+          if [ "$CHANGES" != "0" ]; then
+            echo "CHANGES_REQUESTED 존재 ($CHANGES) — 머지 차단"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # CI 상태 확인
+          HEAD_BRANCH=$(echo "$PR_INFO" | jq -r '.headRefName')
+          CI_CONCLUSION=$(gh run list --repo "$PR_REPO" \
+            --workflow "$CI_WORKFLOW_NAME" --branch "$HEAD_BRANCH" \
+            --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')
+          if [ "$CI_CONCLUSION" != "success" ]; then
+            echo "CI 미통과 ($CI_CONCLUSION) — 스킵"
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          echo "모든 머지 조건 충족"
+          echo "should_merge=true" >> "$GITHUB_OUTPUT"
+
+      - name: Squash merge
+        if: steps.check.outputs.should_merge == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_REPO: ${{ inputs.pr-repo }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
