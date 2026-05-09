@@ -214,9 +214,13 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `owner` | string | 거의 모든 yml | GitHub 조직/사용자 |
 | `parent-repository` | string | parent 추적 yml | `<owner>/<repo>` 형식 |
 | `project-number` | number | Project v2 사용 yml | GitHub Project v2 번호 |
-| `modules-ignore` | string | multi-module yml | JSON 배열. 제외 모듈 |
+| `modules-ignore` | string | multi-module yml | JSON 배열. 제외 모듈 (예: `'["Design"]'`) |
 | `working-directory` | string | slash command 실행 yml | runner 작업 디렉토리 |
 | `slack-channel` | string | 알림 yml (옵션) | 슬랙 채널 |
+| `ci-workflow-name` | string | auto-merge yml | 해당 모듈의 CI workflow 이름 (예: `Backend CI`) |
+| `reviewer-bot-login` | string | review·critic yml | Reviewer 봇 GitHub 로그인 이름 (예: `reclip-review-bot[bot]`) |
+| `verdict-state-dir` | string | critic yml | verdict 상태 파일 디렉토리 (예: `.omc/state/reviews`) |
+| `strict-review-bot-check` | boolean | review·critic yml | `true`: 누구의 CHANGES_REQUESTED든 차단 / `false`: Reviewer 봇 것만 확인 |
 
 ### 5. 표준 secret 카탈로그
 
@@ -279,6 +283,8 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `PIPELINE_MODULES_IGNORE` | `modules-ignore` | 제외 모듈 JSON 배열 |
 | `PIPELINE_WORKING_DIRECTORY` | `working-directory` | runner 작업 경로 |
 | `PIPELINE_SLACK_CHANNEL` | `slack-channel` | 슬랙 채널 |
+| `PIPELINE_REVIEWER_BOT_LOGIN` | `reviewer-bot-login` | Reviewer 봇 로그인 이름 (예: `review-bot[bot]`) |
+| `PIPELINE_VERDICT_DIR` | `verdict-state-dir` | critic verdict 상태 파일 디렉토리 |
 
 ### App 환경변수
 
