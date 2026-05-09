@@ -1,0 +1,81 @@
+name: sub-issue 전부 닫히면 parent 자동 close
+
+on:
+  workflow_call:
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  close-parent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: App 토큰 발급
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: 모든 sub-issue 닫혔으면 parent close
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SUB_REPO_OWNER: ${{ github.repository_owner }}
+          SUB_REPO_NAME: ${{ github.event.repository.name }}
+          SUB_ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          PARENT_JSON=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $num: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $num) {
+                  parent {
+                    number
+                    state
+                    repository { nameWithOwner }
+                    subIssues(first: 50) {
+                      totalCount
+                      nodes { state }
+                    }
+                  }
+                }
+              }
+            }
+          ' -f owner="$SUB_REPO_OWNER" -f repo="$SUB_REPO_NAME" -F num="$SUB_ISSUE_NUM" \
+            --jq '.data.repository.issue.parent')
+
+          if [ -z "$PARENT_JSON" ] || [ "$PARENT_JSON" = "null" ]; then
+            echo "sub-issue 아님 — 스킵"
+            exit 0
+          fi
+
+          PARENT_REPO=$(echo "$PARENT_JSON" | jq -r '.repository.nameWithOwner')
+          PARENT_NUM=$(echo "$PARENT_JSON" | jq -r '.number')
+          PARENT_STATE=$(echo "$PARENT_JSON" | jq -r '.state')
+
+          echo "Parent: $PARENT_REPO#$PARENT_NUM (state=$PARENT_STATE)"
+
+          if [ "$PARENT_STATE" = "CLOSED" ]; then
+            echo "Parent 이미 닫힘 — 스킵"
+            exit 0
+          fi
+
+          OPEN_COUNT=$(echo "$PARENT_JSON" | jq '[.subIssues.nodes[] | select(.state == "OPEN")] | length')
+          TOTAL=$(echo "$PARENT_JSON" | jq '.subIssues.totalCount')
+
+          echo "Sub-issues: $OPEN_COUNT open / $TOTAL total"
+
+          if [ "$OPEN_COUNT" = "0" ]; then
+            echo "모든 sub-issue 완료 — parent $PARENT_REPO#$PARENT_NUM 닫기"
+            gh issue close "$PARENT_NUM" --repo "$PARENT_REPO" --reason completed \
+              --comment "모든 sub-issue 완료 — 자동 close"
+          else
+            echo "열린 sub-issue ${OPEN_COUNT}개 남음 — parent 유지"
+          fi
