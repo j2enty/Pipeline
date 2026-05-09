@@ -1,0 +1,59 @@
+name: kickoff
+
+on:
+  workflow_call:
+    inputs:
+      parent-url:
+        description: "Parent issue URL"
+        type: string
+        required: true
+      working-directory:
+        description: "self-hosted runner 작업 디렉토리 (vars.PIPELINE_WORKING_DIRECTORY)"
+        type: string
+        required: true
+      owner:
+        description: "GitHub 조직/사용자 — URL 검증 패턴에 사용 (vars.PIPELINE_OWNER)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  kickoff:
+    # claude CLI + 로컬 환경이 있는 self-hosted runner 필요
+    runs-on: self-hosted
+    timeout-minutes: 60
+    concurrency:
+      group: kickoff-${{ inputs.parent-url }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Parent URL 검증
+        env:
+          PARENT_URL: ${{ inputs.parent-url }}
+          OWNER: ${{ inputs.owner }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PARENT_URL:-}" ]; then
+            echo "parent-url 미지정 — 종료" >&2
+            exit 1
+          fi
+          # script injection 방지 — owner 조직의 issue URL 만 허용
+          if [[ ! "$PARENT_URL" =~ ^https://github\.com/${OWNER}/[A-Za-z0-9._-]+/issues/[0-9]+$ ]]; then
+            echo "Invalid parent URL: $PARENT_URL" >&2
+            exit 1
+          fi
+          echo "Parent URL 검증 완료: $PARENT_URL"
+
+      - name: /kickoff --bot 실행
+        env:
+          PARENT_URL: ${{ inputs.parent-url }}
+        run: |
+          set -euo pipefail
+          claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot"
