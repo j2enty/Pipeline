@@ -11,10 +11,11 @@
 #   - 영역 레포별 GitHub variables 등록 (PIPELINE_*)
 #   - 영역 레포에 호출자 yml 설치
 #   - app/.env 파일 생성
+#   - app/package-lock.json 생성 (Docker build 준비)
 #
 # 사용자 수동 작업 (스크립트 완료 후):
-#   1. Cloudflare Tunnel 설정 → App webhook URL 업데이트
-#   2. cd app && docker compose up -d
+#   1. GitHub App 두 개의 Webhook Secret 업데이트
+#   2. cd app && docker compose up -d --build
 
 set -euo pipefail
 
@@ -29,11 +30,25 @@ warn()    { echo -e "${YELLOW}⚠️ ${NC} $1"; }
 error()   { echo -e "${RED}❌${NC} $1" >&2; }
 section() { echo -e "\n${CYAN}══ $1 ══${NC}"; }
 
+# ── 사전 준비 체크리스트 ─────────────────────────────────────
+show_checklist() {
+  echo ""
+  echo -e "${YELLOW}📋 시작 전 준비 확인:${NC}"
+  echo "   ✔ GitHub App 2개 생성 완료? (Automation Bot, Review Bot)"
+  echo "     → github.com/organizations/<org>/settings/apps/new"
+  echo "   ✔ 각 App에서 Private Key 생성 → .pem 파일 다운로드 완료?"
+  echo "     → App 페이지 → Private keys → Generate a private key"
+  echo "   ✔ 각 App을 org에 Install 완료?"
+  echo "     → App 페이지 → Install App → org 선택"
+  echo ""
+  read -rp "$(echo -e "${CYAN}?${NC} 준비됐으면 Enter, 취소는 Ctrl+C: ")" _
+}
+
 # ── 필수 도구 체크 ──────────────────────────────────────────
 check_requirements() {
   section "환경 체크"
   local ok=true
-  for cmd in gh python3; do
+  for cmd in gh python3 npm; do
     if command -v "$cmd" &>/dev/null; then
       info "$cmd 확인"
     else
@@ -64,11 +79,11 @@ def get_scalar(key, default=''):
     return m.group(1).strip().strip("'\"") if m else default
 
 # 스칼라 값
-print(f"OWNER={get_scalar('owner')}")
-print(f"PARENT_REPO={get_scalar('parent-repository')}")
-print(f"PROJECT_NUMBER={get_scalar('project-number')}")
-print(f"WORKING_DIR={get_scalar('working-directory')}")
-print(f"SLACK_CHANNEL={get_scalar('slack-channel')}")
+print(f"OWNER='{get_scalar('owner')}'")
+print(f"PARENT_REPO='{get_scalar('parent-repository')}'")
+print(f"PROJECT_NUMBER='{get_scalar('project-number')}'")
+print(f"WORKING_DIR='{get_scalar('working-directory')}'")
+print(f"SLACK_CHANNEL='{get_scalar('slack-channel')}'")
 
 # modules-ignore JSON 배열
 mi = re.search(r'modules-ignore:\s*\n((?:\s+-\s*.+\n?)*)', content)
@@ -84,8 +99,8 @@ names = re.findall(r'^\s+-\s+name:\s*(.+)$', content, re.MULTILINE)
 ci_names = re.findall(r'^\s+ci-workflow-name:\s*"?([^"#\n]*)"?\s*$', content, re.MULTILINE)
 for i, name in enumerate(names):
     ci = ci_names[i].strip().strip("'\"") if i < len(ci_names) else ''
-    print(f"MODULE_{i}_NAME={name.strip()}")
-    print(f"MODULE_{i}_CI={ci}")
+    print(f"MODULE_{i}_NAME='{name.strip()}'")
+    print(f"MODULE_{i}_CI='{ci}'")
 print(f"MODULE_COUNT={len(names)}")
 PYEOF
 }
@@ -104,9 +119,9 @@ prompt() {
 
 prompt_pem() {
   local label="$1"
+  echo -e "  ${YELLOW}→ App 페이지 → Private keys → Generate a private key → Downloads에 저장됨${NC}" >&2
   while true; do
     read -rp "$(echo -e "${CYAN}?${NC} ${label} PEM 파일 경로: ")" pem_path
-    # 홈 디렉토리 ~ 처리
     pem_path="${pem_path/#\~/$HOME}"
     if [ -f "$pem_path" ] && [ -r "$pem_path" ]; then
       echo "$pem_path"
@@ -114,6 +129,18 @@ prompt_pem() {
     fi
     error "파일 없음 또는 읽기 불가: $pem_path"
   done
+}
+
+prompt_app_id() {
+  local label="$1"
+  echo -e "  ${YELLOW}→ github.com/organizations/<org>/settings/apps → App 클릭 → 상단 App ID${NC}" >&2
+  prompt "$label App ID"
+}
+
+prompt_installation_id() {
+  local label="$1"
+  echo -e "  ${YELLOW}→ github.com/organizations/<org>/settings/installations → Configure → URL 마지막 숫자${NC}" >&2
+  prompt "$label Installation ID"
 }
 
 # ── Secrets 등록 ─────────────────────────────────────────────
@@ -140,16 +167,16 @@ register_secrets() {
 register_variables() {
   local repo="$1" ci_name="$2" strict="$3"
   echo "  variables 등록 중..."
-  gh variable set PIPELINE_OWNER                 --repo "$repo" --body "$OWNER"
-  gh variable set PIPELINE_PARENT_REPOSITORY     --repo "$repo" --body "$PARENT_REPO"
-  gh variable set PIPELINE_PROJECT_NUMBER        --repo "$repo" --body "$PROJECT_NUMBER"
-  gh variable set PIPELINE_MODULES_IGNORE        --repo "$repo" --body "$MODULES_IGNORE_JSON"
-  gh variable set PIPELINE_WORKING_DIRECTORY     --repo "$repo" --body "$WORKING_DIR"
-  gh variable set PIPELINE_REVIEWER_BOT_LOGIN    --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
-  gh variable set PIPELINE_VERDICT_DIR           --repo "$repo" --body "$VERDICT_DIR"
-  gh variable set PIPELINE_STRICT_REVIEW_BOT_CHECK --repo "$repo" --body "$strict"
+  gh variable set PIPELINE_OWNER                    --repo "$repo" --body "$OWNER"
+  gh variable set PIPELINE_PARENT_REPOSITORY        --repo "$repo" --body "$PARENT_REPO"
+  gh variable set PIPELINE_PROJECT_NUMBER           --repo "$repo" --body "$PROJECT_NUMBER"
+  gh variable set PIPELINE_MODULES_IGNORE           --repo "$repo" --body "$MODULES_IGNORE_JSON"
+  gh variable set PIPELINE_WORKING_DIRECTORY        --repo "$repo" --body "$WORKING_DIR"
+  gh variable set PIPELINE_REVIEWER_BOT_LOGIN       --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
+  gh variable set PIPELINE_VERDICT_DIR              --repo "$repo" --body "$VERDICT_DIR"
+  gh variable set PIPELINE_STRICT_REVIEW_BOT_CHECK  --repo "$repo" --body "$strict"
   [ -n "$ci_name" ] && \
-    gh variable set PIPELINE_CI_WORKFLOW_NAME    --repo "$repo" --body "$ci_name"
+    gh variable set PIPELINE_CI_WORKFLOW_NAME       --repo "$repo" --body "$ci_name"
   info "variables 등록 완료"
 }
 
@@ -175,10 +202,10 @@ install_caller_ymls() {
       --jq .sha 2>/dev/null || echo "")
     msg="[자동화] Pipeline 호출자 yml 설치 — install.sh"
     if [ -n "$sha" ]; then
-      gh api PUT "/repos/$repo/contents/.github/workflows/$yml" \
+      gh api -X PUT "/repos/$repo/contents/.github/workflows/$yml" \
         -f message="$msg" -f content="$content" -f sha="$sha" > /dev/null
     else
-      gh api PUT "/repos/$repo/contents/.github/workflows/$yml" \
+      gh api -X PUT "/repos/$repo/contents/.github/workflows/$yml" \
         -f message="$msg" -f content="$content" > /dev/null
     fi
     echo "    ✅ $yml"
@@ -211,14 +238,26 @@ EOF
   info "app/.env 생성 완료 ($env_file)"
 }
 
+# ── package-lock.json 생성 ───────────────────────────────────
+generate_package_lock() {
+  local app_dir="$REPO_ROOT/app"
+  if [ ! -f "$app_dir/package-lock.json" ]; then
+    echo "  npm install 실행 중..."
+    npm install --prefix "$app_dir" --silent
+    info "package-lock.json 생성 완료"
+  else
+    info "package-lock.json 이미 존재 — 스킵"
+  fi
+}
+
 # ── 메인 ─────────────────────────────────────────────────────
 main() {
   echo ""
   echo -e "${CYAN}╔══════════════════════════════════╗${NC}"
   echo -e "${CYAN}║   Pipeline install.sh            ║${NC}"
   echo -e "${CYAN}╚══════════════════════════════════╝${NC}"
-  echo ""
 
+  show_checklist
   check_requirements
 
   # Config 파일 확인
@@ -240,22 +279,22 @@ main() {
   warn "PEM 파일 내용 전체가 secret으로 등록돼요 (경로가 아닌 내용)"
   echo ""
 
-  AUTHOR_APP_ID=$(prompt "Author 봇 App ID" "3461645")
+  AUTHOR_APP_ID=$(prompt_app_id "Author 봇")
   AUTHOR_PEM_PATH=$(prompt_pem "Author 봇")
   AUTHOR_PRIVATE_KEY=$(cat "$AUTHOR_PEM_PATH")
-  AUTHOR_INSTALLATION_ID=$(prompt "Author 봇 Installation ID")
+  AUTHOR_INSTALLATION_ID=$(prompt_installation_id "Author 봇")
 
-  REVIEWER_BOT_LOGIN="reclip-review-bot[bot]"
+  REVIEWER_BOT_LOGIN=""
   REVIEWER_APP_ID=""; REVIEWER_PEM_PATH=""; REVIEWER_PRIVATE_KEY=""; REVIEWER_INSTALLATION_ID=""
 
   if [ "$REVIEWER_ENABLED" = "true" ]; then
     echo ""
     warn "Reviewer 봇 (AI 리뷰용)"
-    REVIEWER_APP_ID=$(prompt "Reviewer 봇 App ID" "3569774")
+    REVIEWER_APP_ID=$(prompt_app_id "Reviewer 봇")
     REVIEWER_PEM_PATH=$(prompt_pem "Reviewer 봇")
     REVIEWER_PRIVATE_KEY=$(cat "$REVIEWER_PEM_PATH")
-    REVIEWER_INSTALLATION_ID=$(prompt "Reviewer 봇 Installation ID" "128731161")
-    REVIEWER_BOT_LOGIN=$(prompt "Reviewer 봇 로그인 이름" "reclip-review-bot[bot]")
+    REVIEWER_INSTALLATION_ID=$(prompt_installation_id "Reviewer 봇")
+    REVIEWER_BOT_LOGIN=$(prompt "Reviewer 봇 로그인 이름 (예: my-review-bot[bot])")
   fi
 
   read -rp "$(echo -e "${CYAN}?${NC} Slack Webhook URL (없으면 Enter): ")" SLACK_WEBHOOK_URL || SLACK_WEBHOOK_URL=""
@@ -289,6 +328,10 @@ main() {
   section "App 환경변수 생성"
   generate_env
 
+  # package-lock.json 생성
+  section "npm install"
+  generate_package_lock
+
   # 완료 + 다음 단계
   echo ""
   echo -e "${GREEN}╔═══════════════════════════════════════╗${NC}"
@@ -297,21 +340,15 @@ main() {
   echo ""
   echo "📋 남은 수동 작업:"
   echo ""
-  echo -e "${YELLOW}1️⃣  Cloudflare Tunnel 설정 (webhook URL 노출)${NC}"
-  echo "   brew install cloudflared"
-  echo "   cloudflared tunnel login"
-  echo "   cloudflared tunnel --url localhost:3000  # 임시 URL"
-  echo "   # 또는 고정 도메인 사용 시: tunnel create + route dns"
-  echo ""
-  echo -e "${YELLOW}2️⃣  GitHub App webhook URL 업데이트 (GitHub UI)${NC}"
-  echo "   reclip-automation-bot → https://<tunnel-url>/api/github/webhooks"
-  echo "   reclip-review-bot     → https://<tunnel-url>/api/github/webhooks"
-  echo "   Webhook Secret (app/.env에도 저장됨):"
+  echo -e "${YELLOW}1️⃣  GitHub App webhook URL + Secret 업데이트 (GitHub UI)${NC}"
+  echo "   두 App 모두 → Webhook URL:"
+  echo "   https://<tunnel-url>/api/github/webhooks"
+  echo "   Webhook Secret:"
   echo "   $WEBHOOK_SECRET"
   echo ""
-  echo -e "${YELLOW}3️⃣  App 실행${NC}"
+  echo -e "${YELLOW}2️⃣  App 실행${NC}"
   echo "   cd $REPO_ROOT/app"
-  echo "   docker compose up -d"
+  echo "   docker compose up -d --build"
   echo "   docker compose logs -f  # 로그 확인"
   echo ""
   info "모두 완료되면 자동화 파이프라인이 작동합니다 🚀"
