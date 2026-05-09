@@ -1,0 +1,334 @@
+name: critic
+
+on:
+  workflow_call:
+    inputs:
+      pr-repo:
+        description: "현재 PR 레포 (owner/repo)"
+        type: string
+        required: true
+      pr-number:
+        description: "현재 PR 번호"
+        type: string
+        required: true
+      reviewer-bot-login:
+        description: "Reviewer 봇 로그인 이름 — 미설정 시 vars.PIPELINE_REVIEWER_BOT_LOGIN"
+        type: string
+        required: false
+        default: ''
+      working-directory:
+        description: "self-hosted runner 작업 디렉토리"
+        type: string
+        required: true
+      owner:
+        description: "GitHub 조직/사용자"
+        type: string
+        required: true
+      parent-repository:
+        description: "parent issue 레포 (<owner>/<repo>)"
+        type: string
+        required: true
+      verdict-state-dir:
+        description: "critic verdict 상태 파일 디렉토리"
+        type: string
+        required: false
+        default: '.omc/state/reviews'
+      modules-ignore:
+        description: "제외 모듈 JSON 배열 (예: '[\"Design\"]')"
+        type: string
+        required: false
+        default: '[]'
+      strict-review-bot-check:
+        description: "true: 누구의 CHANGES_REQUESTED든 차단 / false: Reviewer 봇 것만"
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      AUTHOR_APP_ID:
+        required: true
+      AUTHOR_PRIVATE_KEY:
+        required: true
+      SLACK_WEBHOOK_URL:
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check-and-critic:
+    runs-on: ubuntu-latest
+    outputs:
+      all_approved: ${{ steps.check.outputs.all_approved }}
+      parent_url: ${{ steps.check.outputs.parent_url }}
+      sibling_count: ${{ steps.check.outputs.sibling_count }}
+      blocked: ${{ steps.check.outputs.blocked }}
+    concurrency:
+      group: critic-check-${{ inputs.pr-repo }}-${{ inputs.pr-number }}
+      cancel-in-progress: false
+    steps:
+      - name: App 토큰 발급
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Sibling 전부 APPROVED 확인
+        id: check
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_REPO: ${{ inputs.pr-repo }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login != '' && inputs.reviewer-bot-login || vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+          MODULES_IGNORE: ${{ inputs.modules-ignore }}
+          STRICT_REVIEW_BOT_CHECK: ${{ inputs.strict-review-bot-check }}
+        run: |
+          set -euo pipefail
+          PR_OWNER=$(echo "$PR_REPO" | cut -d/ -f1)
+          PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
+          BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
+
+          SUB_ISSUE_JSON=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $num: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $num) {
+                  closingIssuesReferences(first: 5) {
+                    nodes {
+                      number
+                      repository { nameWithOwner }
+                      parent {
+                        number
+                        repository { nameWithOwner }
+                        subIssues(first: 50) {
+                          nodes {
+                            number state
+                            repository { nameWithOwner }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ' -f owner="$PR_OWNER" -f repo="$PR_REPO_NAME" -F num="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0]')
+
+          if [ -z "$SUB_ISSUE_JSON" ] || [ "$SUB_ISSUE_JSON" = "null" ]; then
+            echo "PR 이 sub-issue 를 닫지 않음 — critic 스킵"
+            echo "all_approved=false" >> "$GITHUB_OUTPUT"
+            echo "blocked=no-sub-issue" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PARENT_JSON=$(echo "$SUB_ISSUE_JSON" | jq '.parent')
+          if [ -z "$PARENT_JSON" ] || [ "$PARENT_JSON" = "null" ]; then
+            echo "Sub-issue 에 parent 없음 — critic 스킵"
+            echo "all_approved=false" >> "$GITHUB_OUTPUT"
+            echo "blocked=no-parent" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PARENT_REPO=$(echo "$PARENT_JSON" | jq -r '.repository.nameWithOwner')
+          PARENT_NUM=$(echo "$PARENT_JSON" | jq -r '.number')
+          PARENT_URL="https://github.com/$PARENT_REPO/issues/$PARENT_NUM"
+          echo "parent_url=$PARENT_URL" >> "$GITHUB_OUTPUT"
+
+          # modules-ignore 필터 적용
+          SIBLINGS=$(echo "$PARENT_JSON" | python3 -c "
+import json, sys, os
+parent = json.load(sys.stdin)
+modules_ignore = json.loads(os.environ.get('MODULES_IGNORE', '[]'))
+siblings = [n for n in parent['subIssues']['nodes']
+            if n['repository']['nameWithOwner'].split('/')[-1] not in modules_ignore]
+for s in siblings:
+    print(json.dumps(s))
+")
+          SIBLING_COUNT=$(echo "$SIBLINGS" | grep -c '^{' || echo 0)
+          echo "sibling_count=$SIBLING_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Sibling (modules-ignore 제외): $SIBLING_COUNT"
+
+          if [ "$SIBLING_COUNT" -le 1 ]; then
+            echo "단일 영역 — auto-merge 가 처리"
+            echo "all_approved=false" >> "$GITHUB_OUTPUT"
+            echo "blocked=single-area" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ALL_APPROVED=true
+          while IFS= read -r SIBLING; do
+            [ -z "$SIBLING" ] && continue
+            S_REPO=$(echo "$SIBLING" | jq -r '.repository.nameWithOwner')
+            S_NUM=$(echo "$SIBLING" | jq -r '.number')
+            S_OWNER=$(echo "$S_REPO" | cut -d/ -f1)
+            S_REPO_NAME=$(echo "$S_REPO" | cut -d/ -f2)
+
+            SIBLING_PR=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $num: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $num) {
+                    state
+                    closedByPullRequestsReferences(first: 5, includeClosedPrs: false) {
+                      nodes {
+                        number state
+                        labels(first: 20) { nodes { name } }
+                        reviews(first: 50) { nodes { state author { login } } }
+                      }
+                    }
+                  }
+                }
+              }
+            ' -f owner="$S_OWNER" -f repo="$S_REPO_NAME" -F num="$S_NUM" \
+              --jq '.data.repository.issue')
+
+            S_STATE=$(echo "$SIBLING_PR" | jq -r '.state')
+            if [ "$S_STATE" = "CLOSED" ]; then
+              echo "  $S_REPO#$S_NUM — closed (완료로 간주)"
+              continue
+            fi
+
+            PR_NODES=$(echo "$SIBLING_PR" | jq '.closedByPullRequestsReferences.nodes')
+            if [ "$(echo "$PR_NODES" | jq 'length')" = "0" ]; then
+              echo "  $S_REPO#$S_NUM — 연결 PR 없음 — 미완료"
+              ALL_APPROVED=false; break
+            fi
+
+            HAS_BLOCKED=$(echo "$PR_NODES" | jq '[.[] | .labels.nodes[] | select(.name == "blocked")] | length')
+            if [ "$HAS_BLOCKED" -gt 0 ]; then
+              echo "  $S_REPO#$S_NUM — blocked 라벨"
+              echo "blocked=blocked-label" >> "$GITHUB_OUTPUT"
+              ALL_APPROVED=false; break
+            fi
+
+            APPROVED=$(echo "$PR_NODES" | jq --arg bot "$BOT_PREFIX" \
+              '[.[] | .reviews.nodes[] | select((.author.login | startswith($bot)) and .state == "APPROVED")] | length')
+            if [ "$APPROVED" = "0" ]; then
+              echo "  $S_REPO#$S_NUM — Reviewer 봇 APPROVE 없음"
+              ALL_APPROVED=false; break
+            fi
+
+            if [ "$STRICT_REVIEW_BOT_CHECK" = "true" ]; then
+              CHANGES=$(echo "$PR_NODES" | jq \
+                '[.[] | .reviews.nodes[] | select(.state == "CHANGES_REQUESTED")] | length')
+            else
+              CHANGES=$(echo "$PR_NODES" | jq --arg bot "$BOT_PREFIX" \
+                '[.[] | .reviews.nodes[] | select((.author.login | startswith($bot)) and .state == "CHANGES_REQUESTED")] | length')
+            fi
+            if [ "$CHANGES" != "0" ]; then
+              echo "  $S_REPO#$S_NUM — CHANGES_REQUESTED 존재"
+              echo "blocked=changes-requested" >> "$GITHUB_OUTPUT"
+              ALL_APPROVED=false; break
+            fi
+            echo "  $S_REPO#$S_NUM — APPROVED"
+          done < <(echo "$SIBLINGS")
+
+          if [ "$ALL_APPROVED" = "true" ]; then
+            echo "all_approved=true" >> "$GITHUB_OUTPUT"
+            echo "blocked=" >> "$GITHUB_OUTPUT"
+            echo "모든 sibling APPROVED — critic 진행"
+          else
+            echo "all_approved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  run-critic:
+    needs: check-and-critic
+    if: needs.check-and-critic.outputs.all_approved == 'true'
+    runs-on: self-hosted
+    timeout-minutes: 60
+    concurrency:
+      group: critic-run-${{ needs.check-and-critic.outputs.parent_url }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: /review --bot (critic) 실행
+        env:
+          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
+        run: |
+          set -euo pipefail
+          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot"
+
+      - name: Critic verdict 파싱
+        id: verdict
+        env:
+          VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
+        run: |
+          set -euo pipefail
+          CRITIC_VERDICT=$(find "$VERDICT_STATE_DIR" -name "*.json" -newer "$VERDICT_STATE_DIR" \
+            -exec jq -r '.aggregate.verdict // empty' {} \; 2>/dev/null | tail -1)
+          echo "critic_verdict=${CRITIC_VERDICT:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: App 토큰 발급
+        id: merge-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Blocker — Slack 에스컬레이션 + 머지 차단
+        if: steps.verdict.outputs.critic_verdict == 'blocker'
+        env:
+          GH_TOKEN: ${{ steps.merge-token.outputs.token }}
+          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          COMMENT_URL=$(gh issue comment "$PARENT_URL" \
+            --body "## 🚨 critic blocker 발견 — 머지 차단
+
+critic 리뷰에서 blocker 가 발견됐어요. 머지 전 확인이 필요합니다.
+
+**Actions 로그**: $RUN_URL" \
+            --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
+
+          if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+            PAYLOAD=$(python3 -c '
+import json, sys
+title, url, context = sys.argv[1], sys.argv[2], sys.argv[3]
+text = f"🚨 *{title}*\n{context}\n👀 <{url}|GitHub 코멘트 열기>"
+print(json.dumps({"text": text}))
+' "critic blocker — 머지 차단" "$COMMENT_URL" "parent: $PARENT_URL")
+            curl -sS -X POST -H 'Content-type: application/json' \
+              --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
+          fi
+          exit 1
+
+      - name: Major — 머지 + backlog 이슈 생성
+        if: steps.verdict.outputs.critic_verdict == 'concerns'
+        env:
+          GH_TOKEN: ${{ steps.merge-token.outputs.token }}
+          PR_REPO: ${{ inputs.pr-repo }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
+          PARENT_REPO: ${{ inputs.parent-repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
+          PARENT_NUM=$(echo "$PARENT_URL" | grep -oE '[0-9]+$')
+          PARENT_TITLE=$(gh issue view "$PARENT_NUM" --repo "$PARENT_REPO" --json title --jq .title 2>/dev/null || echo "")
+          gh issue create \
+            --repo "$PARENT_REPO" \
+            --title "critic fix: major findings — $PARENT_TITLE" \
+            --body "## 배경
+critic 리뷰에서 major findings 가 발견됐어요. 머지는 진행했지만 후속 처리가 필요합니다.
+
+**원본 parent**: $PARENT_URL
+**Actions 로그**: $RUN_URL" || true
+
+      - name: Pass — 머지
+        if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'unknown'
+        env:
+          GH_TOKEN: ${{ steps.merge-token.outputs.token }}
+          PR_REPO: ${{ inputs.pr-repo }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
