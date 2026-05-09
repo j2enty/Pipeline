@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # PEM 파일 마운트 — .env의 AUTHOR_PEM/REVIEWER_PEM 경로와 일치해야 함
+      - type: bind
+        source: ${AUTHOR_PEM:-/dev/null}
+        target: ${AUTHOR_PEM:-/dev/null}
+        read_only: true
+    restart: unless-stopped
