@@ -1,0 +1,21 @@
+{
+  "name": "pipeline-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pipeline GitHub App — webhook 수신 + chain orchestrator",
+  "main": "lib/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node lib/server.js",
+    "dev": "ts-node src/server.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "probot": "^13.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0"
+  }
+}
