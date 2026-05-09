@@ -60,7 +60,7 @@ jobs:
   merge:
     needs: resolve
     if: needs.resolve.outputs.skip != 'true'
-    uses: MKFactory-Reclip/Pipeline/.github/workflows/merge.yml@main
+    uses: j2enty/Pipeline/.github/workflows/merge.yml@main
     with:
       pr-number: ${{ needs.resolve.outputs.pr-number }}
       pr-repo: ${{ github.repository }}

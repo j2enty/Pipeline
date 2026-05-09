@@ -19,7 +19,7 @@ on:
 
 jobs:
   review:
-    uses: MKFactory-Reclip/Pipeline/.github/workflows/review.yml@main
+    uses: j2enty/Pipeline/.github/workflows/review.yml@main
     with:
       pr-url: ${{ github.event.client_payload.pr_url || inputs.pr_url }}
       parent-url: ${{ github.event.client_payload.parent_url || inputs.parent_url }}

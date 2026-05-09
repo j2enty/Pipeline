@@ -15,7 +15,7 @@ on:
 
 jobs:
   kickoff:
-    uses: MKFactory-Reclip/Pipeline/.github/workflows/kickoff.yml@main
+    uses: j2enty/Pipeline/.github/workflows/kickoff.yml@main
     with:
       parent-url: ${{ github.event.client_payload.parent_url || inputs.parent_issue_url }}
       working-directory: ${{ vars.PIPELINE_WORKING_DIRECTORY }}
