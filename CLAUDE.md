@@ -384,6 +384,24 @@ examples/
 - GitHub 이슈 생성은 항상 수행 (영구 기록 목적)
 
 
+## 운영 결정 사항
+
+### secrets/variables 등록 방식 — 레포별 직접 등록 (org-level 아님)
+
+**결정**: org-level secrets/variables 대신 각 영역 레포에 직접 Repository secrets/variables 등록.
+
+**이유**:
+- MKFactory-Reclip org가 GitHub Free 플랜
+- Free 플랜에서 org secrets/variables는 **Private 레포에 적용 불가** (Public 레포에만 가능)
+- 영역 레포(Backend·Admin·iOS 등)는 소스 코드 보호를 위해 Private 유지 필요
+- Public 전환 시 비즈니스 로직·API 설계 전체 노출 → 채택 불가
+
+**해결**: `install.sh`가 `gh secret set` / `gh variable set` CLI 명령어로 각 레포에 일괄 자동 등록.
+새 프로젝트 이식 시에도 동일하게 재사용 가능 — org 플랜과 무관하게 작동.
+
+**만약 향후 org 플랜 업그레이드 시**: `install.sh`에서 `--repo` 루프 대신 `--org` 한 번으로 교체 가능. 코드 변경 최소화.
+
+
 ## 비-목표
 
 - 특정 프로젝트 전용 자동화 (Reclip은 첫 적용 사례일 뿐)
