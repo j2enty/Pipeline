@@ -7,6 +7,10 @@ on:
   issues:
     types: [closed]
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   close-parent:
     uses: j2enty/Pipeline/.github/workflows/parent-autoclose.yml@main

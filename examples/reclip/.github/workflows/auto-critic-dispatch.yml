@@ -10,6 +10,11 @@ on:
   repository_dispatch:
     types: [critic-triggered]
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 jobs:
   critic-dispatch:
     uses: j2enty/Pipeline/.github/workflows/critic-dispatch.yml@main

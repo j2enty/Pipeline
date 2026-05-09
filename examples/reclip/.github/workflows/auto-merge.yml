@@ -20,6 +20,11 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
 jobs:
   # PR 번호 resolve — 트리거 종류에 따라 다르게 추출
   resolve:
