@@ -86,15 +86,8 @@ jobs:
 
           # sub-issue 목록 + modules-ignore 필터
           SIBLINGS=$(gh api "/repos/$PARENT_REPO/issues/$PARENT_NUM/sub_issues" \
-            --jq '.[]' | python3 -c "
-import json, sys, os
-modules_ignore = json.loads(os.environ.get('MODULES_IGNORE', '[]'))
-for line in sys.stdin:
-    issue = json.loads(line)
-    repo_name = issue['repository']['name']
-    if repo_name not in modules_ignore:
-        print(issue['repository']['name'], issue['number'])
-")
+            | jq -r --argjson mi "$MODULES_IGNORE" \
+            '.[] | select(.repository.name as $n | ($mi | index($n)) | not) | "\(.repository.name) \(.number)"')
 
           echo "머지 대상:"
           echo "$SIBLINGS"
