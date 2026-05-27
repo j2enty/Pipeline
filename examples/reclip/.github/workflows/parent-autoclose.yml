@@ -14,4 +14,6 @@ permissions:
 jobs:
   close-parent:
     uses: j2enty/Pipeline/.github/workflows/parent-autoclose.yml@main
-    secrets: inherit
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}
