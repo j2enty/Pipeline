@@ -1,3 +1,5 @@
+import { Octokit } from "@octokit/core";
+import { createAppAuth } from "@octokit/auth-app";
 import type { Probot } from "probot";
 
 // repository_dispatch 이벤트 발사 옵션
@@ -8,13 +10,34 @@ export interface RepositoryDispatchOptions {
   clientPayload: Record<string, unknown>;
 }
 
+// Author 봇 자격의 Octokit 생성 — Probot 인증 우회
+//
+// Probot 의 app.auth() 는 Probot 이 시작된 App 자격으로만 토큰 발급 가능.
+// Reviewer 봇 webhook 으로 진입한 핸들러에서 Author 봇 dispatch 를 발사하려면
+// Author App 자격으로 직접 인증해야 한다.
+function createAuthorOctokit(authorInstallationId: number): Octokit {
+  const appId = process.env.APP_ID ?? process.env.AUTHOR_APP_ID;
+  const privateKey = process.env.PRIVATE_KEY;
+
+  if (!appId || !privateKey) {
+    throw new Error(
+      "Author 봇 인증 실패 — APP_ID/AUTHOR_APP_ID 또는 PRIVATE_KEY 미설정"
+    );
+  }
+
+  return new Octokit({
+    authStrategy: createAppAuth,
+    auth: {
+      appId: Number(appId),
+      privateKey,
+      installationId: authorInstallationId,
+    },
+  });
+}
+
 // repository_dispatch 발사 — 영역 레포의 호출자 yml 트리거
 //
-// dispatch 권한은 Author 봇만 보유. Reviewer 봇 webhook이 들어와도 dispatch는
-// Author 봇 인증으로 발사해야 하므로 installation ID 를 받아서 새 토큰 발급.
-//
-// DRY_RUN=true 환경변수 시 실제 발사 대신 로그만 찍음. 폴러/핸들러 동작 검증 시
-// 영역 레포 자동화를 트리거하지 않고 안전하게 통합 테스트할 때 사용.
+// DRY_RUN=true 환경변수 시 실제 발사 대신 로그만 찍음.
 export async function fireRepositoryDispatch(
   app: Probot,
   authorInstallationId: number,
@@ -33,7 +56,7 @@ export async function fireRepositoryDispatch(
     return;
   }
 
-  const octokit = await app.auth(authorInstallationId);
+  const octokit = createAuthorOctokit(authorInstallationId);
   await octokit.request("POST /repos/{owner}/{repo}/dispatches", {
     owner: options.owner,
     repo: options.repo,
