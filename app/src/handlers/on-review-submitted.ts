@@ -1,6 +1,7 @@
 import type { Probot } from "probot";
 import { aggregateSiblingApprovalStatus } from "../lib/github";
 import { fireRepositoryDispatch } from "../lib/dispatch";
+import { notifyFailure } from "../lib/alert";
 
 // pull_request_review.submitted 핸들러 등록
 //
@@ -97,6 +98,11 @@ export function registerOnReviewSubmitted(app: Probot): void {
     const authorInstallationIdRaw = process.env.AUTHOR_INSTALLATION_ID;
     if (!authorInstallationIdRaw) {
       app.log.error("AUTHOR_INSTALLATION_ID 미설정 — dispatch 발사 불가");
+      await notifyFailure(app, {
+        title: "review 핸들러 dispatch 불가",
+        context: "AUTHOR_INSTALLATION_ID 미설정 — critic-triggered dispatch 발사 불가",
+        url: pullRequest.html_url,
+      });
       return;
     }
     const authorInstallationId = Number(authorInstallationIdRaw);

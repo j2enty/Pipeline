@@ -7,6 +7,8 @@ import { extractParentUrlFromIssueBody } from "../lib/parent-extractor";
 import { findOpenPullRequestUrlForIssue } from "../lib/sub-issue-pr";
 import { isWorkflowFileInProgress } from "../lib/workflow-runs";
 import { fireRepositoryDispatch } from "../lib/dispatch";
+import { notifyFailure } from "../lib/alert";
+import { recordTick } from "../lib/poller-state";
 
 // 폴러 설정 — App 외부에서 환경변수 → 옵션 객체로 변환 후 주입
 export interface StatusPollerOptions {
@@ -52,8 +54,15 @@ export function startStatusPoller(
   const tick = async (): Promise<void> => {
     try {
       await runPollingTick(app, options);
+      // 성공 tick 시각 기록 — 헬스체크가 "살아있음" 판단에 사용.
+      recordTick();
     } catch (err) {
       app.log.error({ err }, "Status 폴러 tick 실패 — 다음 tick 까지 대기");
+      // tick 전체 실패만 알림 (부분 실패는 기존 로그 유지). 쿨다운이 스팸 방지.
+      await notifyFailure(app, {
+        title: "Status 폴러 tick 실패",
+        context: String(err),
+      });
     }
   };
 

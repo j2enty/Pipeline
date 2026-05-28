@@ -1,6 +1,7 @@
 import { Octokit } from "@octokit/core";
 import { createAppAuth } from "@octokit/auth-app";
 import type { Probot } from "probot";
+import { notifyFailure } from "./alert";
 
 // repository_dispatch 이벤트 발사 옵션
 export interface RepositoryDispatchOptions {
@@ -57,10 +58,19 @@ export async function fireRepositoryDispatch(
   }
 
   const octokit = createAuthorOctokit(authorInstallationId);
-  await octokit.request("POST /repos/{owner}/{repo}/dispatches", {
-    owner: options.owner,
-    repo: options.repo,
-    event_type: options.eventType,
-    client_payload: options.clientPayload,
-  });
+  try {
+    await octokit.request("POST /repos/{owner}/{repo}/dispatches", {
+      owner: options.owner,
+      repo: options.repo,
+      event_type: options.eventType,
+      client_payload: options.clientPayload,
+    });
+  } catch (err) {
+    // 발사 실패 알림 후 re-throw — 상위(폴러 tick catch 등)가 기존 흐름 유지.
+    await notifyFailure(app, {
+      title: "dispatch 발사 실패",
+      context: `${options.owner}/${options.repo} (${options.eventType}): ${String(err)}`,
+    });
+    throw err;
+  }
 }
