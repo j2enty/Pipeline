@@ -116,18 +116,13 @@ jobs:
           fi
 
           # sibling count 확인 — modules-ignore 필터 적용
-          SIBLING_COUNT=$(echo "$PR_INFO" | python3 -c "
-import json, sys, os
-pr = json.load(sys.stdin)
-ignore = json.loads(os.environ.get('MODULES_IGNORE', '[]'))
-nodes = pr.get('closingIssuesReferences', {}).get('nodes', [])
-parent = nodes[0].get('parent') if nodes else None
-if not parent:
-    print(0); sys.exit(0)
-siblings = [n for n in parent.get('subIssues', {}).get('nodes', [])
-            if n['repository']['nameWithOwner'].split('/')[-1] not in ignore]
-print(len(siblings))
-")
+          SIBLING_COUNT=$(echo "$PR_INFO" | jq --argjson ignore "$MODULES_IGNORE" '
+            (.closingIssuesReferences.nodes[0].parent) as $parent
+            | if $parent == null then 0
+              else [ $parent.subIssues.nodes[]
+                     | (.repository.nameWithOwner | split("/") | last) as $name
+                     | select($ignore | index($name) | not) ] | length
+              end')
           if [ "$SIBLING_COUNT" -gt 1 ]; then
             echo "Multi-area (sibling=$SIBLING_COUNT) — critic 처리 — 스킵"
             echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0

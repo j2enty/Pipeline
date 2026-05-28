@@ -138,15 +138,8 @@ jobs:
           echo "parent_url=$PARENT_URL" >> "$GITHUB_OUTPUT"
 
           # modules-ignore 필터 적용
-          SIBLINGS=$(echo "$PARENT_JSON" | python3 -c "
-import json, sys, os
-parent = json.load(sys.stdin)
-modules_ignore = json.loads(os.environ.get('MODULES_IGNORE', '[]'))
-siblings = [n for n in parent['subIssues']['nodes']
-            if n['repository']['nameWithOwner'].split('/')[-1] not in modules_ignore]
-for s in siblings:
-    print(json.dumps(s))
-")
+          SIBLINGS=$(echo "$PARENT_JSON" | jq -c --argjson ignore "$MODULES_IGNORE" \
+            '.subIssues.nodes[] | select((.repository.nameWithOwner | split("/") | last) as $name | ($ignore | index($name) | not))')
           SIBLING_COUNT=$(echo "$SIBLINGS" | grep -c '^{' || echo 0)
           echo "sibling_count=$SIBLING_COUNT" >> "$GITHUB_OUTPUT"
           echo "Sibling (modules-ignore 제외): $SIBLING_COUNT"
@@ -289,12 +282,11 @@ critic 리뷰에서 blocker 가 발견됐어요. 머지 전 확인이 필요합�
             --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
 
           if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
-            PAYLOAD=$(python3 -c '
-import json, sys
-title, url, context = sys.argv[1], sys.argv[2], sys.argv[3]
-text = f"🚨 *{title}*\n{context}\n👀 <{url}|GitHub 코멘트 열기>"
-print(json.dumps({"text": text}))
-' "critic blocker — 머지 차단" "$COMMENT_URL" "parent: $PARENT_URL")
+            PAYLOAD=$(jq -n \
+              --arg title "critic blocker — 머지 차단" \
+              --arg url "$COMMENT_URL" \
+              --arg context "parent: $PARENT_URL" \
+              '{text: "🚨 *\($title)*\n\($context)\n👀 <\($url)|GitHub 코멘트 열기>"}')
             curl -sS -X POST -H 'Content-type: application/json' \
               --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
           fi
