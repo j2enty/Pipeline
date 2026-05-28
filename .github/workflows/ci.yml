@@ -42,3 +42,27 @@ jobs:
       - name: 타입 검사
         working-directory: app
         run: npm run lint
+
+  # App 단위 테스트 — 결정 로직(파서·집계·env) 회귀 그물망 (vitest)
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node 20 셋업
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 의존성 설치
+        working-directory: app
+        run: npm ci
+
+      - name: 테스트 파일 타입 검사
+        working-directory: app
+        run: npm run typecheck:test
+
+      - name: 단위 테스트
+        working-directory: app
+        run: npm test
