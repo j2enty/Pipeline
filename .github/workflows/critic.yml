@@ -91,6 +91,8 @@ jobs:
           PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
           BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
 
+          # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
+          # shellcheck disable=SC2016
           SUB_ISSUE_JSON=$(gh api graphql -f query='
             query($owner: String!, $repo: String!, $num: Int!) {
               repository(owner: $owner, name: $repo) {
@@ -138,6 +140,8 @@ jobs:
           echo "parent_url=$PARENT_URL" >> "$GITHUB_OUTPUT"
 
           # modules-ignore 필터 적용
+          # $name/$ignore 는 jq 변수 — single quote 안 미확장 의도적
+          # shellcheck disable=SC2016
           SIBLINGS=$(echo "$PARENT_JSON" | jq -c --argjson ignore "$MODULES_IGNORE" \
             '.subIssues.nodes[] | select((.repository.nameWithOwner | split("/") | last) as $name | ($ignore | index($name) | not))')
           SIBLING_COUNT=$(echo "$SIBLINGS" | grep -c '^{' || echo 0)
@@ -159,6 +163,8 @@ jobs:
             S_OWNER=$(echo "$S_REPO" | cut -d/ -f1)
             S_REPO_NAME=$(echo "$S_REPO" | cut -d/ -f2)
 
+            # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
+            # shellcheck disable=SC2016
             SIBLING_PR=$(gh api graphql -f query='
               query($owner: String!, $repo: String!, $num: Int!) {
                 repository(owner: $owner, name: $repo) {
@@ -273,12 +279,10 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
+          BODY=$(printf '## 🚨 critic blocker 발견 — 머지 차단\n\ncritic 리뷰에서 blocker 가 발견됐어요. 머지 전 확인이 필요합니다.\n\n**Actions 로그**: %s' "$RUN_URL")
           COMMENT_URL=$(gh issue comment "$PARENT_URL" \
-            --body "## 🚨 critic blocker 발견 — 머지 차단
-
-critic 리뷰에서 blocker 가 발견됐어요. 머지 전 확인이 필요합니다.
-
-**Actions 로그**: $RUN_URL" \
+            --body "$BODY" \
             --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
 
           if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
@@ -306,14 +310,12 @@ critic 리뷰에서 blocker 가 발견됐어요. 머지 전 확인이 필요합�
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
           PARENT_NUM=$(echo "$PARENT_URL" | grep -oE '[0-9]+$')
           PARENT_TITLE=$(gh issue view "$PARENT_NUM" --repo "$PARENT_REPO" --json title --jq .title 2>/dev/null || echo "")
+          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
+          BODY=$(printf '## 배경\ncritic 리뷰에서 major findings 가 발견됐어요. 머지는 진행했지만 후속 처리가 필요합니다.\n\n**원본 parent**: %s\n**Actions 로그**: %s' "$PARENT_URL" "$RUN_URL")
           gh issue create \
             --repo "$PARENT_REPO" \
             --title "critic fix: major findings — $PARENT_TITLE" \
-            --body "## 배경
-critic 리뷰에서 major findings 가 발견됐어요. 머지는 진행했지만 후속 처리가 필요합니다.
-
-**원본 parent**: $PARENT_URL
-**Actions 로그**: $RUN_URL" || true
+            --body "$BODY" || true
 
       - name: Pass — 머지
         if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'unknown'

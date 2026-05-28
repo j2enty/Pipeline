@@ -1,0 +1,44 @@
+# Pipeline 레포 자체 정적 검사 CI
+# - actionlint: 워크플로 yml 문법 + run 블록 쉘(shellcheck) 검사
+# - tsc: App(TypeScript) 타입 검사
+# run 블록 안에 들여쓰기 0칸 Python 등으로 YAML 파싱이 깨지는 사고를 커밋 시점에 차단한다.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # 워크플로 yml 정적 검사 — actionlint 가 run 블록 쉘을 추출해 shellcheck 로 검사
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      # 버전 핀 필수 (rolling tag 금지). shellcheck 는 ubuntu 러너 기본 제공분 사용.
+      - name: actionlint 실행
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
+  # App TypeScript 타입 검사 — app/package.json 의 lint 스크립트(tsc --noEmit) 재사용
+  tsc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node 20 셋업
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 의존성 설치
+        working-directory: app
+        run: npm ci
+
+      - name: 타입 검사
+        working-directory: app
+        run: npm run lint

@@ -85,6 +85,8 @@ jobs:
           PARENT_NUM=$(echo "$PARENT_URL" | grep -oE '[0-9]+$')
 
           # sub-issue 목록 + modules-ignore 필터
+          # $n/$mi 는 jq 변수 — single quote 안 미확장 의도적
+          # shellcheck disable=SC2016
           SIBLINGS=$(gh api "/repos/$PARENT_REPO/issues/$PARENT_NUM/sub_issues" \
             | jq -r --argjson mi "$MODULES_IGNORE" \
             '.[] | select(.repository.name as $n | ($mi | index($n)) | not) | "\(.repository.name) \(.number)"')
@@ -94,6 +96,8 @@ jobs:
 
           while IFS=' ' read -r REPO SUB_NUM; do
             [ -z "$REPO" ] && continue
+            # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
+            # shellcheck disable=SC2016
             PR_NUM=$(gh api graphql -f query='
               query($owner: String!, $repo: String!, $num: Int!) {
                 repository(owner: $owner, name: $repo) {

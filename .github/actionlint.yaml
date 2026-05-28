@@ -1,0 +1,7 @@
+# actionlint 설정
+# self-hosted runner 라벨을 known label 로 등록한다.
+# reusable workflow(kickoff/review/critic/critic-dispatch)가 `runs-on: self-hosted`를
+# 쓰는데, 등록하지 않으면 actionlint가 unknown label 가짜 경고를 낸다.
+self-hosted-runner:
+  labels:
+    - self-hosted

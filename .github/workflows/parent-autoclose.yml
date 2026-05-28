@@ -32,6 +32,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
+          # shellcheck disable=SC2016
           PARENT_JSON=$(gh api graphql -f query='
             query($owner: String!, $repo: String!, $num: Int!) {
               repository(owner: $owner, name: $repo) {

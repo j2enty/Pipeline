@@ -73,6 +73,8 @@ jobs:
           PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
           BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
 
+          # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
+          # shellcheck disable=SC2016
           PR_INFO=$(gh api graphql -f query='
             query($owner: String!, $repo: String!, $num: Int!) {
               repository(owner: $owner, name: $repo) {
