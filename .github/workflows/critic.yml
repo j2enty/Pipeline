@@ -246,12 +246,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: /review --bot (critic) 실행
+      - name: /review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
         run: |
           set -euo pipefail
-          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot"
+          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
 
       - name: Critic verdict 파싱
         id: verdict

@@ -66,12 +66,12 @@ jobs:
           fi
           echo "Parent URL 검증 완료: $PARENT_URL"
 
-      - name: /review --bot (critic) 실행
+      - name: /review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ inputs.parent-url }}
         run: |
           set -euo pipefail
-          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot"
+          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
 
       - name: 모든 영역 PR squash merge
         env:
