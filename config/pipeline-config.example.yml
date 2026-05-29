@@ -29,10 +29,16 @@ modules:
     # 해당 모듈의 CI workflow 이름 (GHA Actions 탭에 표시되는 이름)
     # auto-merge.yml이 CI pass 여부를 확인할 때 사용
     ci-workflow-name: ""
+    # (선택, 기본 true) Reviewer 봇 리뷰만 머지 차단 기준으로 볼지 여부
+    # true: Reviewer 봇의 CHANGES_REQUESTED만 차단 기준
+    # false: 봇 외 다른 리뷰어의 CHANGES_REQUESTED도 허용(완화)
+    # 미지정 모듈은 자동으로 true (org variables: PIPELINE_STRICT_REVIEW_BOT_CHECK)
+    # strict-review-bot-check: true
 
   # 추가 모듈 예시:
   # - name: Admin
   #   ci-workflow-name: Admin CI
+  #   strict-review-bot-check: false
   # - name: iOS
   #   ci-workflow-name: iOS CI
 

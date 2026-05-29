@@ -155,17 +155,42 @@ print(f"MODULES_IGNORE_JSON='{json.dumps([i.strip() for i in items], separators=
 rev = re.search(r'reviewer:\s*\n\s+enabled:\s*(\w+)', content)
 print(f"REVIEWER_ENABLED={rev.group(1) if rev else 'false'}")
 
-# modules
-names = re.findall(r'^\s+-\s+name:\s*(.+)$', content, re.MULTILINE)
-ci_names = re.findall(r'^\s+ci-workflow-name:\s*"?([^"#\n]*)"?\s*$', content, re.MULTILINE)
-for i, name in enumerate(names):
-    ci = ci_names[i].strip().strip("'\"") if i < len(ci_names) else ''
-    print(f"MODULE_{i}_NAME='{name.strip()}'")
-    print(f"MODULE_{i}_CI='{ci}'")
+# modules — 블록 단위 파싱
+# 주의: ci-workflow-name 은 모든 모듈에 있지만 strict-review-bot-check 는
+#       일부 모듈에만 있어, 전체에서 위치(positional)로 뽑으면 모듈↔값 정렬이
+#       어긋난다. 따라서 각 `- name:` 부터 다음 `- name:` 전까지를 한 블록으로
+#       잘라 블록 내부에서만 ci·strict 를 찾아 정렬을 보장한다.
+
+# modules: 섹션부터 다음 최상위 키(modules-ignore / reviewer 등) 직전까지 추출
+ms = re.search(r'^modules:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
+modules_block = ms.group(1) if ms else ''
+
+# 각 `- name:` 위치를 기준으로 블록 분할
+name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+)"?\s*$', modules_block, re.MULTILINE))
+names = []
+for idx, m in enumerate(name_iter):
+    name = m.group(1).strip().strip("'\"")
+    block_start = m.end()
+    block_end = name_iter[idx + 1].start() if idx + 1 < len(name_iter) else len(modules_block)
+    block = modules_block[block_start:block_end]
+
+    ci_m = re.search(r'^\s+ci-workflow-name:\s*"?([^"#\n]*)"?\s*$', block, re.MULTILINE)
+    ci = ci_m.group(1).strip().strip("'\"") if ci_m else ''
+
+    # strict-review-bot-check — 미지정 시 기본 true
+    strict_m = re.search(r'^\s+strict-review-bot-check:\s*(\w+)', block, re.MULTILINE)
+    strict = strict_m.group(1).strip().lower() if strict_m else 'true'
+    if strict not in ('true', 'false'):
+        strict = 'true'
+
+    names.append(name)
+    print(f"MODULE_{idx}_NAME='{name}'")
+    print(f"MODULE_{idx}_CI='{ci}'")
+    print(f"MODULE_{idx}_STRICT='{strict}'")
 print(f"MODULE_COUNT={len(names)}")
 
 # 영역 모듈 이름들을 JSON 배열로 (App 폴러 환경변수 MODULES 용)
-print(f"MODULES_JSON='{json.dumps([n.strip() for n in names], separators=(',', ':'))}'")
+print(f"MODULES_JSON='{json.dumps(names, separators=(',', ':'))}'")
 
 PYEOF
 }
@@ -448,13 +473,13 @@ main() {
   for i in $(seq 0 $((MODULE_COUNT - 1))); do
     local_name_var="MODULE_${i}_NAME"
     local_ci_var="MODULE_${i}_CI"
+    local_strict_var="MODULE_${i}_STRICT"
     MOD_NAME="${!local_name_var}"
     MOD_CI="${!local_ci_var}"
     REPO="$OWNER/$MOD_NAME"
 
-    # Admin은 strict=false (review bot 체크 완화)
-    STRICT="true"
-    [ "$MOD_NAME" = "Admin" ] && STRICT="false"
+    # strict-review-bot-check — config에서 주입 (미지정 모듈은 parse_config가 true로 emit)
+    STRICT="${!local_strict_var}"
 
     echo ""
     echo -e "${CYAN}▶ $REPO${NC}"

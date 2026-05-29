@@ -15,6 +15,8 @@ modules:
     ci-workflow-name: Backend CI
   - name: Admin
     ci-workflow-name: Admin CI
+    # Admin은 Reviewer 봇 외 리뷰도 허용 (strict 완화)
+    strict-review-bot-check: false
   - name: Frontend
     ci-workflow-name: Frontend CI
   - name: iOS
