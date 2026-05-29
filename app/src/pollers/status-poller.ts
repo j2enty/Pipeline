@@ -1,6 +1,6 @@
 import type { Probot } from "probot";
 import {
-  fetchProjectV2ItemsForOrganization,
+  fetchProjectV2Items,
   type ProjectV2ItemSnapshot,
 } from "../lib/project-graphql";
 import { extractParentUrlFromIssueBody } from "../lib/parent-extractor";
@@ -78,7 +78,7 @@ async function runPollingTick(
   for (const projectNumber of options.projectNumbers) {
     let items: ProjectV2ItemSnapshot[];
     try {
-      items = await fetchProjectV2ItemsForOrganization(
+      items = await fetchProjectV2Items(
         app,
         options.authorInstallationId,
         { ownerLogin: options.ownerLogin, projectNumber }
