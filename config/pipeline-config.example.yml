@@ -52,3 +52,9 @@ reviewer:
   # AI 리뷰(Reviewer 봇) 사용 여부
   # false 이면 REVIEWER_* secrets 등록 불필요
   enabled: false
+
+pipeline:
+  # 이 Pipeline 프레임워크가 사는 레포 (호출자 yml의 uses: 경로에 들어감)
+  repo: <owner>/Pipeline
+  # 핀할 ref (브랜치 또는 태그, 안정화 후 v1.0 등으로 핀 권장)
+  ref: main

@@ -1,0 +1,33 @@
+name: Auto Review
+
+# 이 파일은 영역 레포(.github/workflows/)에 복사해서 사용하는 호출자 yml 예시.
+# Pipeline 레포의 review.yml reusable workflow를 호출만 함.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_url:
+        description: "PR URL"
+        required: true
+        type: string
+      parent_url:
+        description: "Parent issue URL"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [review-triggered]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    uses: __PIPELINE_REPO__/.github/workflows/review.yml@__PIPELINE_REF__
+    with:
+      pr-url: ${{ github.event.client_payload.pr_url || inputs.pr_url }}
+      parent-url: ${{ github.event.client_payload.parent_url || inputs.parent_url }}
+      working-directory: ${{ vars.PIPELINE_WORKING_DIRECTORY }}
+      owner: ${{ vars.PIPELINE_OWNER }}
+      reviewer-bot-login: ${{ vars.PIPELINE_REVIEWER_BOT_LOGIN }}

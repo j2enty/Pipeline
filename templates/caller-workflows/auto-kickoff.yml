@@ -1,0 +1,27 @@
+name: Auto kickoff (parent /kickoff --bot)
+
+# 이 파일은 영역 레포(.github/workflows/)에 복사해서 사용하는 호출자 yml 예시.
+# Pipeline 레포의 kickoff.yml reusable workflow를 호출만 함.
+
+on:
+  workflow_dispatch:
+    inputs:
+      parent_issue_url:
+        description: "Parent issue URL (예: https://github.com/org/Repo/issues/10)"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [kickoff-triggered]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  kickoff:
+    uses: __PIPELINE_REPO__/.github/workflows/kickoff.yml@__PIPELINE_REF__
+    with:
+      parent-url: ${{ github.event.client_payload.parent_url || inputs.parent_issue_url }}
+      working-directory: ${{ vars.PIPELINE_WORKING_DIRECTORY }}
+      owner: ${{ vars.PIPELINE_OWNER }}

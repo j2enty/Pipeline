@@ -140,6 +140,19 @@ print(f"PARENT_REPO='{get_scalar('parent-repository')}'")
 print(f"WORKING_DIR='{get_scalar('working-directory')}'")
 print(f"SLACK_CHANNEL='{get_scalar('slack-channel')}'")
 
+# pipeline 섹션 — 호출자 yml의 uses: 경로 치환에 사용
+# modules 블록 파싱과 동일 방식으로 pipeline: 섹션만 슬라이스한 뒤
+# 그 안에서만 repo:/ref: 를 찾아 다른 섹션의 같은 키와 충돌 방지
+# repo: 없으면 빈 문자열로 emit (필수 검증은 main 에서)
+# ref:  없으면 'main' 기본
+ps = re.search(r'^pipeline:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
+pipeline_block = ps.group(1) if ps else ''
+def get_scalar_in(block, key, default=''):
+    m = re.search(rf'^\s+{re.escape(key)}:\s*"?([^"#\n]+)"?\s*$', block, re.MULTILINE)
+    return m.group(1).strip().strip("'\"") if m else default
+print(f"PIPELINE_REPO='{get_scalar_in(pipeline_block, 'repo')}'")
+print(f"PIPELINE_REF='{get_scalar_in(pipeline_block, 'ref', 'main')}'")
+
 # project-numbers 배열 (예: project-numbers: [3, 5])
 pn = re.search(r'project-numbers:\s*\[([^\]]*)\]', content)
 pn_items = [int(n) for n in re.findall(r'\d+', pn.group(1))] if pn else []
@@ -337,21 +350,27 @@ register_variables() {
 # ── 호출자 yml 설치 ──────────────────────────────────────────
 install_caller_ymls() {
   local repo="$1" mod_ci="${2:-}"
-  local src="$REPO_ROOT/examples/reclip/.github/workflows"
+  # 제네릭 템플릿을 소스로 사용 — placeholder 를 config 값으로 치환해 설치
+  local src="$REPO_ROOT/templates/caller-workflows"
   echo "  호출자 yml 설치 중..."
   for yml in auto-kickoff.yml auto-review.yml auto-merge.yml \
              auto-critic.yml auto-critic-dispatch.yml parent-autoclose.yml; do
     [ -f "$src/$yml" ] || continue
     local content sha msg tmp_file
+    tmp_file=$(mktemp)
+    # 모든 yml 공통: Pipeline 레포 경로·ref placeholder 치환
+    #   값에 '/' 가 들어가므로(레포 경로) sed 구분자를 '|' 로 사용
+    sed -e "s|__PIPELINE_REPO__|$PIPELINE_REPO|g" \
+        -e "s|__PIPELINE_REF__|$PIPELINE_REF|g" \
+        "$src/$yml" > "$tmp_file"
     # auto-merge.yml: workflow_run.workflows CI 이름을 영역별로 치환
-    if [ "$yml" = "auto-merge.yml" ] && [ -n "$mod_ci" ]; then
-      tmp_file=$(mktemp)
-      sed "s|workflows: \[\"Backend CI\"\]|workflows: [\"$mod_ci\"]|g" "$src/$yml" > "$tmp_file"
-      content=$(base64 < "$tmp_file" | tr -d '\n')
-      rm -f "$tmp_file"
-    else
-      content=$(base64 < "$src/$yml" | tr -d '\n')
+    #   (GHA 제약상 workflow_run.workflows 는 리터럴만 가능 → 텍스트 치환)
+    if [ "$yml" = "auto-merge.yml" ]; then
+      sed -i.bak "s|__CI_WORKFLOW_NAME__|$mod_ci|g" "$tmp_file"
+      rm -f "$tmp_file.bak"
     fi
+    content=$(base64 < "$tmp_file" | tr -d '\n')
+    rm -f "$tmp_file"
     sha=$(gh api "/repos/$repo/contents/.github/workflows/$yml" \
       --jq .sha 2>/dev/null || echo "")
     msg="[자동화] Pipeline 호출자 yml 설치 — install.sh"
@@ -433,6 +452,17 @@ main() {
   eval "$(parse_config)"
   info "프로젝트: $OWNER (parent: $PARENT_REPO)"
   info "모듈 수: $MODULE_COUNT"
+
+  # pipeline.repo 필수 — 호출자 yml 의 uses: 경로에 들어감
+  if [ -z "$PIPELINE_REPO" ]; then
+    error "config 의 pipeline.repo 가 비어있습니다 — 호출자 yml 의 uses: 경로에 필요합니다."
+    echo "  config 에 다음을 추가하세요 (예):" >&2
+    echo "    pipeline:" >&2
+    echo "      repo: <owner>/Pipeline" >&2
+    echo "      ref: main" >&2
+    exit 1
+  fi
+  info "Pipeline 레포: $PIPELINE_REPO@$PIPELINE_REF"
 
   # Secrets 입력 — 비대화형은 환경변수에서, 대화형은 프롬프트로
   section "Secrets 입력"

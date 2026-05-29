@@ -22,7 +22,7 @@ jobs:
     if: |
       github.event.review.state == 'approved' &&
       startsWith(github.event.review.user.login, vars.PIPELINE_REVIEWER_BOT_LOGIN)
-    uses: j2enty/Pipeline/.github/workflows/critic.yml@main
+    uses: __PIPELINE_REPO__/.github/workflows/critic.yml@__PIPELINE_REF__
     with:
       pr-repo: ${{ github.event.pull_request.base.repo.full_name }}
       pr-number: ${{ github.event.pull_request.number }}

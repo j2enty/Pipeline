@@ -29,3 +29,7 @@ modules-ignore:
 
 reviewer:
   enabled: true
+
+pipeline:
+  repo: j2enty/Pipeline
+  ref: main
