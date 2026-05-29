@@ -108,7 +108,7 @@ install.sh 를 실제로 돌려 드러난 버그·위반 (전부 수정 완료):
 |---|---|---|
 | `review.md`(/review·/kickoff)가 org·레포 하드코딩 | sandbox 에서 GHA 실행 단계 e2e 불가 | Reclip 워크스페이스 (Pipeline 외) |
 | sandbox org 에 self-hosted 러너 없음 | GHA 호출자 실행 검증 불가 | sandbox 운영 시 러너 등록 필요 |
-| dev App 권한에 Projects 누락 | 폴러가 Project v2 조회 시 `NOT_FOUND`. dev App 을 `app/README.md` 권한 목록(Contents/Issues/PRs/Workflows)대로 만들면 Projects 권한이 빠진다. (단 `NOT_FOUND` 는 권한 누락·프로젝트 부재 양쪽에서 나므로, Projects 권한 추가 후 재확인 권장.) | **README 에 Projects(Read) 권한 추가 필요** |
+| dev App 권한에 Projects 누락 | 폴러가 Project v2 조회 시 `NOT_FOUND`. (운영 App 실제 권한 조회로 확인: Author=`organization_projects:write`, README 목록엔 빠져있었음.) | ✅ `app/README.md` 정정 완료 (Author: Organization→Projects R&W + Actions:Read, Reviewer: Contents:Read 추가). 기존 sandbox dev App 은 생성 시 빠뜨려서 *폴러* 사용 시 권한 추가 필요 — 단 Scenario B webhook replay 는 폴러 불필요 |
 | CI 이름 없는 모듈(`ci-workflow-name: ""`) | auto-merge 의 `workflow_run.workflows: [""]` 로 비활성 (단 `pull_request_review` 트리거로 머지는 동작) | 기능 회귀 아님 — 필요 시 조건부 트리거 검토 |
 
 ---

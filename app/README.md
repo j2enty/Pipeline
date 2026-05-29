@@ -34,11 +34,12 @@ GitHub 조직 설정 → Developer settings → GitHub Apps → New GitHub App
 | Webhook URL | `https://<your-domain>/api/github/webhooks` |
 | Webhook secret | `.env`의 `WEBHOOK_SECRET` 값 |
 
-**권한 (Repository permissions)**:
-- Contents: Read & Write
-- Issues: Read & Write
-- Pull requests: Read & Write
-- Workflows: Read & Write
+**권한**:
+- Repository → Contents: Read & Write
+- Repository → Issues: Read & Write
+- Repository → Pull requests: Read & Write
+- Repository → Actions: Read (auto-merge 가 CI workflow 결과 확인)
+- **Organization → Projects: Read & Write** (폴러가 Project v2 조회 + Status 전환 — 누락 시 폴러가 Project 를 못 읽어 kickoff 자동화가 조용히 멈춤)
 
 **이벤트 구독**:
 - Issues, Issue comment, Pull request
@@ -49,7 +50,9 @@ GitHub 조직 설정 → Developer settings → GitHub Apps → New GitHub App
 
 동일 방법, 다른 이름 (`<project>-review-bot`).
 
-**권한**: Pull requests: Read & Write
+**권한**:
+- Repository → Pull requests: Read & Write
+- Repository → Contents: Read (diff 읽기용)
 
 **이벤트 구독**: Pull request review
 
