@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePollerConfigFromEnv } from "../src/lib/env";
+import { parsePollerConfigFromEnv, parseModulesIgnore } from "../src/lib/env";
 
 // parsePollerConfigFromEnv — 환경변수에서 폴러 활성/비활성 + config 를
 // 순수하게 판단한다. index.ts 가 이 결과에 맞춰 로깅·폴러 시작을 한다.
@@ -121,5 +121,58 @@ describe("parsePollerConfigFromEnv", () => {
     }
     expect(result.config.authorInstallationId).toBe(999);
     expect(typeof result.config.authorInstallationId).toBe("number");
+  });
+});
+
+// parseModulesIgnore — MODULES_IGNORE 환경변수 문자열을 제외 모듈명 배열로 변환한다.
+// "조용한 실패 → 시끄러운 실패" 안전망의 일부: 깨진 JSON 이나 배열이 아닌 값은
+// 조용히 [] 로 폴백하지 않고 throw 해서 호출부가 에스컬레이션하게 한다.
+//
+// 빈 값(미설정/빈/공백)은 정상 → [], 그 외 잘못된 값은 throw 로 나뉜다.
+describe("parseModulesIgnore", () => {
+  // 빈 값 계열 — 제외 모듈 없음(정상)으로 본다.
+  it("undefined 이면 빈 배열을 반환한다", () => {
+    expect(parseModulesIgnore(undefined)).toEqual([]);
+  });
+
+  it("빈 문자열이면 빈 배열을 반환한다", () => {
+    expect(parseModulesIgnore("")).toEqual([]);
+  });
+
+  it("공백만 있으면 빈 배열을 반환한다", () => {
+    expect(parseModulesIgnore("   ")).toEqual([]);
+  });
+
+  // 올바른 JSON 배열 계열 — 파싱된 배열을 그대로 돌려준다.
+  it("빈 JSON 배열 문자열이면 빈 배열을 반환한다", () => {
+    expect(parseModulesIgnore("[]")).toEqual([]);
+  });
+
+  it("원소 1개짜리 JSON 배열을 그대로 반환한다", () => {
+    expect(parseModulesIgnore('["Design"]')).toEqual(["Design"]);
+  });
+
+  it("원소 여러 개짜리 JSON 배열을 그대로 반환한다", () => {
+    expect(parseModulesIgnore('["Design","Docs"]')).toEqual([
+      "Design",
+      "Docs",
+    ]);
+  });
+
+  // 잘못된 값 계열 — 조용히 폴백하지 않고 throw 한다.
+  it("따옴표 없는 깨진 JSON 이면 throw 한다", () => {
+    expect(() => parseModulesIgnore("[Design]")).toThrow();
+  });
+
+  it("배열이 아닌 객체이면 throw 한다", () => {
+    expect(() => parseModulesIgnore("{}")).toThrow();
+  });
+
+  it("배열이 아닌 문자열이면 throw 한다", () => {
+    expect(() => parseModulesIgnore('"Design"')).toThrow();
+  });
+
+  it("배열이 아닌 null 이면 throw 한다", () => {
+    expect(() => parseModulesIgnore("null")).toThrow();
   });
 });

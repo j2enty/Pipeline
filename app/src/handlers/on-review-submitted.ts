@@ -2,6 +2,7 @@ import type { Probot } from "probot";
 import { aggregateSiblingApprovalStatus } from "../lib/github";
 import { fireRepositoryDispatch } from "../lib/dispatch";
 import { notifyFailure } from "../lib/alert";
+import { parseModulesIgnore } from "../lib/env";
 
 // pull_request_review.submitted 핸들러 등록
 //
@@ -45,11 +46,21 @@ export function registerOnReviewSubmitted(app: Probot): void {
     }
 
     // 3. sibling APPROVED 집계
-    let modulesIgnore: string[] = [];
+    let modulesIgnore: string[];
     try {
-      modulesIgnore = JSON.parse(process.env.MODULES_IGNORE ?? "[]");
+      modulesIgnore = parseModulesIgnore(process.env.MODULES_IGNORE);
     } catch (err) {
-      app.log.warn({ err }, "MODULES_IGNORE 파싱 실패 — 빈 배열로 처리");
+      app.log.error(
+        { err, raw: process.env.MODULES_IGNORE },
+        "MODULES_IGNORE 파싱 실패 — 자동화 중단 (config 오류)"
+      );
+      await notifyFailure(app, {
+        title: "MODULES_IGNORE 설정 오류",
+        context: `MODULES_IGNORE 가 올바른 JSON 배열이 아닙니다 (받은 값: ${process.env.MODULES_IGNORE}). 예: ["Design"] — 각 모듈명을 큰따옴표로 감싸야 합니다.`,
+        url: pullRequest.html_url,
+        key: "modules-ignore-parse-error",
+      });
+      return;
     }
 
     const siblingStatus = await aggregateSiblingApprovalStatus(context, {

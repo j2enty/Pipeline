@@ -80,3 +80,21 @@ export function parsePollerConfigFromEnv(
     },
   };
 }
+
+// MODULES_IGNORE 환경변수 문자열 → 제외 모듈명 배열 (순수 함수, 부수효과 없음).
+//
+//   - undefined / 빈 문자열 / 공백만 → [] (제외 안 함, 정상)
+//   - 올바른 JSON 배열 → 그 배열
+//   - JSON 파싱 실패(예: 따옴표 없는 [Design]) 또는 배열이 아님 → Error throw
+//     (호출부가 잡아서 에스컬레이션 — 조용한 폴백 금지)
+export function parseModulesIgnore(raw: string | undefined): string[] {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") {
+    return [];
+  }
+  const parsed = JSON.parse(trimmed); // 깨진 JSON 이면 여기서 throw
+  if (!Array.isArray(parsed)) {
+    throw new Error(`MODULES_IGNORE 가 JSON 배열이 아님 (받은 타입: ${typeof parsed})`);
+  }
+  return parsed;
+}
