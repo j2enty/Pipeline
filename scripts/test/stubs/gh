@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# 가짜 gh — 테스트용 스텁.
+# 모든 인자를 한 줄로 $GH_LOG 에 append 하고 exit 0.
+# 부작용(레포 변경) 없이 install.sh 가 어떤 gh 호출을 했는지 기록만 한다.
+#
+# 특수 분기:
+#   - `gh auth status`                       → 인증 OK 로 통과 (exit 0)
+#   - `gh api ... --jq .sha` 류              → 빈 문자열 반환 (신규 파일 경로)
+#   - `gh variable list --repo <repo> --json name,value`
+#       → 환경변수 GH_STUB_VARLIST_<SLUG> 에서 JSON 반환.
+#         SLUG = 레포 경로의 '/'·'-' 를 '_' 로 치환하고 대문자화.
+#         예) test-org/ModuleA → GH_STUB_VARLIST_TEST_ORG_MODULEA
+#         미설정이면 빈 배열 '[]' 반환.
+#
+# 실패 시뮬레이션:
+#   GH_STUB_VARLIST_FAIL_<SLUG>=1   → variable list exit 1 (gh 명령 실패)
+#   GH_STUB_VARLIST_BROKEN_<SLUG>=1 → variable list 깨진 JSON 출력 (파싱 오류)
+#
+# 로그 포맷: 인자들을 공백으로 join 한 한 줄. 테스트는 grep/카운트로 단언.
+
+if [ -n "${GH_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$GH_LOG"
+fi
+
+# gh auth status — install.sh check_requirements 통과용
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  exit 0
+fi
+
+# gh variable list --repo <repo> --json name,value
+# 기존 variable 값 조회 시 테스트가 주입한 JSON 반환
+if [ "${1:-}" = "variable" ] && [ "${2:-}" = "list" ]; then
+  repo=""
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2 ;;
+      *)      shift ;;
+    esac
+  done
+  slug="$(printf '%s' "${repo:-}" | tr '/-' '_' | tr '[:lower:]' '[:upper:]')"
+
+  # eval 로 동적 환경변수를 읽는다. shellcheck 가 동적 변수명을 추적하지 못해
+  # SC2154 를 발생시키므로 python3 로 우회(os.environ 직접 조회 — eval 제거).
+
+  # 실패 시뮬레이션 — GH_STUB_VARLIST_FAIL_<SLUG>=1 (gh 권한·네트워크 오류)
+  fail_flag="$(python3 -c "import os,sys; print(os.environ.get('GH_STUB_VARLIST_FAIL_'+sys.argv[1],'0'))" "$slug")"
+  if [ "$fail_flag" = "1" ]; then
+    printf 'Error: HTTP 403 Forbidden\n' >&2
+    exit 1
+  fi
+
+  # 깨진 JSON 시뮬레이션 — GH_STUB_VARLIST_BROKEN_<SLUG>=1 (stdout 에 비JSON 출력)
+  broken_flag="$(python3 -c "import os,sys; print(os.environ.get('GH_STUB_VARLIST_BROKEN_'+sys.argv[1],'0'))" "$slug")"
+  if [ "$broken_flag" = "1" ]; then
+    printf 'not-valid-json\n'
+    exit 0
+  fi
+
+  # 정상 — 주입된 JSON 반환 (미설정이면 빈 배열)
+  json="$(python3 -c "import os,sys; print(os.environ.get('GH_STUB_VARLIST_'+sys.argv[1],'[]'))" "$slug")"
+  printf '%s\n' "$json"
+  exit 0
+fi
+
+# gh api ... — sha 조회 등은 빈 문자열 반환(신규 파일 경로)
+# user --jq .login 도 빈 문자열로 충분 (로그 출력용)
+if [ "${1:-}" = "api" ]; then
+  exit 0
+fi
+
+# 그 외 (secret set / variable set / label create) — 성공만
+exit 0

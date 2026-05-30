@@ -17,13 +17,20 @@
 #                        secrets/variables/caller-yml/env 전부 스킵하고
 #                        config 파싱 + Claude 슬래시커맨드 배포만 실행 후 종료
 #                        (커맨드 템플릿 수정 후 빠른 로컬 재배포용)
+#   --reapply            secrets/.env/커맨드/npm 전부 스킵하고
+#                        variables + 추적 라벨 + 호출자 yml 만 멱등 재적용 후 종료.
+#                        운영 App 가동 중 부분 재적용용 — app/.env(WEBHOOK_SECRET) 불변 보장.
+#   --rotate-webhook-secret
+#                        기존 .env 의 WEBHOOK_SECRET 을 보존하지 않고 새로 생성(의도적 회전).
+#                        풀 install 시에만 의미 있음(--reapply 는 .env 자체를 안 건드림).
+#                        회전 후 양쪽 GitHub App 의 webhook secret 재설정 필요.
 #
 # 비대화형 모드(--non-interactive)에서 읽는 환경변수:
 #   AUTHOR_APP_ID, AUTHOR_PEM(=PEM 파일 경로), AUTHOR_INSTALLATION_ID  — 필수
 #   REVIEWER_APP_ID, REVIEWER_PEM, REVIEWER_INSTALLATION_ID, REVIEWER_BOT_LOGIN
 #                        — reviewer.enabled=true 일 때만 필수
 #   SLACK_WEBHOOK_URL    — 옵션 (없으면 빈 값)
-#   WEBHOOK_SECRET       — 옵션 (없으면 자동 생성)
+#   WEBHOOK_SECRET       — 옵션 (기존 .env 값 보존 > 환경변수 > 자동 생성 순)
 #
 # 예시:
 #   ./scripts/install.sh my-config.yml
@@ -52,6 +59,8 @@ ENV_FILE=""                 # --env-file (미지정 시 아래에서 app/.env)
 PORT_VALUE="3000"           # --port
 NON_INTERACTIVE=false       # --non-interactive
 UPDATE_COMMANDS_ONLY=false  # --update-commands-only
+REAPPLY=false               # --reapply (variables+labels+caller-yml만 멱등 재적용)
+ROTATE_WEBHOOK_SECRET=false # --rotate-webhook-secret (WEBHOOK_SECRET 의도적 회전)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -69,6 +78,10 @@ while [ $# -gt 0 ]; do
       NON_INTERACTIVE=true; shift ;;
     --update-commands-only)
       UPDATE_COMMANDS_ONLY=true; shift ;;
+    --reapply)
+      REAPPLY=true; shift ;;
+    --rotate-webhook-secret)
+      ROTATE_WEBHOOK_SECRET=true; shift ;;
     -*)
       echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
     *)
@@ -334,6 +347,143 @@ resolve_pem_path() {
   return 1
 }
 
+# ── 기존 .env 의 WEBHOOK_SECRET 읽기 ──────────────────────────
+# ENV_FILE 이 존재하면 `WEBHOOK_SECRET=` 라인의 값을 추출(없으면 빈 문자열).
+# 운영 App 가동 중 재실행 시 webhook 서명 secret 이 회전되어 수신이 깨지는 것을 막기 위함.
+# 값이 비어있으면(키만 있고 값 없음) 경고 — resolve_webhook_secret 가 새로 생성하도록 빈 값 반환.
+read_existing_webhook_secret() {
+  [ -f "$ENV_FILE" ] || { printf '%s' ""; return 0; }
+  local line value
+  # docker compose dotenv 호환 파싱:
+  #   - 선택적 `export ` 접두 허용
+  #   - 키와 `=` 사이/뒤 공백 허용
+  #   - 정확히 WEBHOOK_SECRET 키만 매칭 (유사키 OLD_WEBHOOK_SECRET·WEBHOOK_SECRET_BAK 제외)
+  #   앵커: 줄 시작 + (export + 공백)? + WEBHOOK_SECRET + 공백? + = + 공백? + 값
+  line="$(grep -m1 -E '^(export[[:space:]]+)?WEBHOOK_SECRET[[:space:]]*=' "$ENV_FILE" 2>/dev/null || true)"
+  [ -n "$line" ] || { printf '%s' ""; return 0; }
+  # = 이후를 값으로 추출
+  value="${line#*=}"
+  # ① 선행 공백 제거
+  value="${value#"${value%%[! ]*}"}"
+  # ② 후행 CR 제거 (CRLF 파일 대응) — CR이 닫는 따옴표 뒤에 붙어 따옴표 매칭을 깨뜨리므로
+  #    반드시 CR을 먼저 털고 나서 따옴표를 벗겨야 한다.
+  value="${value%$'\r'}"
+  # ③ 짝맞는 큰따옴표 제거
+  if [ "${value#\"}" != "$value" ]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  # 짝맞는 작은따옴표 제거
+  elif [ "${value#\'}" != "$value" ]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  if [ -z "$value" ]; then
+    warn "기존 .env 의 WEBHOOK_SECRET 값이 비어있음 — 새로 생성합니다 ($ENV_FILE)" >&2
+    printf '%s' ""
+    return 0
+  fi
+  printf '%s' "$value"
+}
+
+# ── WEBHOOK_SECRET 결정 (우선순위 통합) ──────────────────────────
+# 대화형·비대화형 양쪽이 공유하는 단일 결정 로직. 우선순위:
+#   ① --rotate-webhook-secret  → 항상 새로 생성 (의도적 회전)
+#   ② 기존 .env 에 값 있음      → 보존 (운영 App 파손 방지 — 안전 기본값)
+#   ③ 환경변수 WEBHOOK_SECRET   → 사용 (비대화형 하위호환)
+#   ④ 그 외                     → 새로 생성
+# 결과를 전역 WEBHOOK_SECRET 에 채운다.
+resolve_webhook_secret() {
+  local existing
+  if [ "${ROTATE_WEBHOOK_SECRET:-false}" = "true" ]; then
+    WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+    info "Webhook Secret — 회전(--rotate-webhook-secret) 새로 생성"
+    return 0
+  fi
+
+  existing="$(read_existing_webhook_secret)"
+  if [ -n "$existing" ]; then
+    # 환경변수도 제공됐고 .env 값과 다르면 warn — 보존 우선이지만 조용한 무시는 위험
+    if [ -n "${WEBHOOK_SECRET:-}" ] && [ "${WEBHOOK_SECRET:-}" != "$existing" ]; then
+      warn "환경변수 WEBHOOK_SECRET 이 제공됐으나 기존 .env 값을 보존합니다. 회전하려면 --rotate-webhook-secret 을 사용하세요."
+    fi
+    WEBHOOK_SECRET="$existing"
+    info "Webhook Secret — 기존 .env 값 보존 ($ENV_FILE)"
+    return 0
+  fi
+
+  if [ -n "${WEBHOOK_SECRET:-}" ]; then
+    info "Webhook Secret — 환경변수 사용"
+    return 0
+  fi
+
+  WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+  info "Webhook Secret 자동 생성"
+}
+
+# ── 레포의 기존 GitHub variable 값 조회 (fail-closed) ───────
+# `gh variable list --json name,value` 로 기존 variable 값을 읽어 반환.
+# 반환 규칙:
+#   - 성공 + 키 존재 → 값 출력 (exit 0)
+#   - 성공 + 키 부재 → 빈 문자열 출력 (exit 0)  ← "키 없음" 정상 케이스
+#   - gh 실패(exit≠0) / JSON 파싱 오류 → exit 1 (fail-closed — 호출자가 중단)
+# reapply 보존 경로가 운영 실패를 "값 없음"으로 위장하는 것을 방지.
+read_existing_repo_variable() {
+  local repo="$1" var_name="$2"
+  local raw rc=0
+  # gh 실패는 즉시 캐치 — stderr 는 보존해 호출자/운영자가 원인 확인 가능
+  raw="$(gh variable list --repo "$repo" --json name,value 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    error "gh variable list 실패 (repo=$repo, exit=$rc): $raw" >&2
+    return 1
+  fi
+  # JSON 파싱 — python3 로 jq 의존 없이 처리. 파싱 실패 시 exit 1
+  printf '%s' "$raw" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except (json.JSONDecodeError, ValueError) as e:
+    print('JSON 파싱 오류: ' + str(e), file=sys.stderr)
+    sys.exit(1)
+name = sys.argv[1]
+for item in data:
+    if item.get('name') == name:
+        print(item.get('value', ''), end='')
+        sys.exit(0)
+# 키 부재 — 빈 문자열 (정상 케이스)
+" "$var_name"
+}
+
+# ── reapply 모드 전용: REVIEWER_BOT_LOGIN 보존 결정 ──────────────
+# config 에서 파생 불가능한 secret-time 입력값이므로, reapply 에서는
+# 기존 레포 variable 값을 읽어 보존한다. 우선순위:
+#   ① 환경변수 REVIEWER_BOT_LOGIN 이 명시 제공된 경우 → 그 값 사용
+#   ② 해당 레포의 기존 PIPELINE_REVIEWER_BOT_LOGIN 이 있으면 → 보존
+#   ③ 둘 다 없거나 빈 값 → REVIEWER_BOT_LOGIN 을 "_SKIP_" 로 표시
+#      (register_variables 내부 가드가 skip 처리 — 빈 값 덮어쓰기 방지)
+# 전역 REVIEWER_BOT_LOGIN 에 결과를 채운다.
+resolve_reviewer_bot_login_for_reapply() {
+  local repo="$1"
+  # ① 환경변수 명시 제공
+  if [ -n "${REVIEWER_BOT_LOGIN:-}" ]; then
+    return 0
+  fi
+  # ② 기존 레포 variable 읽기 (fail-closed — gh 실패 시 exit 1 전파)
+  local existing
+  existing="$(read_existing_repo_variable "$repo" "PIPELINE_REVIEWER_BOT_LOGIN")" || {
+    error "PIPELINE_REVIEWER_BOT_LOGIN 조회 실패 ($repo) — reapply 중단." >&2
+    error "REVIEWER_BOT_LOGIN 환경변수를 명시 제공하거나 gh 권한을 확인하세요." >&2
+    return 1
+  }
+  if [ -n "$existing" ]; then
+    REVIEWER_BOT_LOGIN="$existing"
+    info "PIPELINE_REVIEWER_BOT_LOGIN — 기존 레포 값 보존 ($repo)"
+    return 0
+  fi
+  # ③ 둘 다 없음 — skip 표시 (gh 성공·키 부재 케이스만 여기 도달)
+  REVIEWER_BOT_LOGIN="_SKIP_"
+  warn "PIPELINE_REVIEWER_BOT_LOGIN 값 없음 — 이 레포 등록 스킵 ($repo)"
+}
+
 # ── 비대화형 모드 — 환경변수에서 App 자격 로드 ─────────────────
 # 필수 env 누락 시 어느 변수가 빠졌는지 명시하고 exit 1
 load_credentials_from_env() {
@@ -375,13 +525,8 @@ load_credentials_from_env() {
   # Slack — 옵션 (없으면 빈 값)
   SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 
-  # Webhook Secret — 옵션 (없으면 자동 생성)
-  if [ -n "${WEBHOOK_SECRET:-}" ]; then
-    info "Webhook Secret — 환경변수 사용"
-  else
-    WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    info "Webhook Secret 자동 생성"
-  fi
+  # Webhook Secret 결정은 main 에서 resolve_webhook_secret 로 통합 처리
+  # (기존 .env 보존 > 환경변수 > 새 생성 — 운영 App 파손 방지)
 
   info "App 자격 — 환경변수에서 로드 완료"
 }
@@ -407,14 +552,22 @@ register_secrets() {
 }
 
 # ── Variables 등록 ───────────────────────────────────────────
+# $4=reapply — "true" 일 때만 REVIEWER_BOT_LOGIN 스킵 로직 적용.
+# 풀 install(기본 "false")에서는 이전과 동일하게 무조건 등록(빈 값 포함).
 register_variables() {
-  local repo="$1" ci_name="$2" strict="$3"
+  local repo="$1" ci_name="$2" strict="$3" is_reapply="${4:-false}"
   echo "  variables 등록 중..."
   gh variable set PIPELINE_OWNER                    --repo "$repo" --body "$OWNER"
   gh variable set PIPELINE_PARENT_REPOSITORY        --repo "$repo" --body "$PARENT_REPO"
   gh variable set PIPELINE_MODULES_IGNORE           --repo "$repo" --body "$MODULES_IGNORE_JSON"
   gh variable set PIPELINE_WORKING_DIRECTORY        --repo "$repo" --body "$WORKING_DIR"
-  gh variable set PIPELINE_REVIEWER_BOT_LOGIN       --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
+  # reapply 모드에서만 _SKIP_ / 빈 값 스킵. 풀 install 은 무조건 등록(기존 동작 보존).
+  if [ "$is_reapply" = "true" ] && \
+     { [ "${REVIEWER_BOT_LOGIN:-}" = "_SKIP_" ] || [ -z "${REVIEWER_BOT_LOGIN:-}" ]; }; then
+    : # 빈 값 덮어쓰기 방지 — 등록 스킵
+  else
+    gh variable set PIPELINE_REVIEWER_BOT_LOGIN     --repo "$repo" --body "${REVIEWER_BOT_LOGIN:-}"
+  fi
   gh variable set PIPELINE_VERDICT_DIR              --repo "$repo" --body "$VERDICT_DIR"
   gh variable set PIPELINE_STRICT_REVIEW_BOT_CHECK  --repo "$repo" --body "$strict"
   [ -n "$ci_name" ] && \
@@ -641,6 +794,21 @@ main() {
   echo -e "${CYAN}║   Pipeline install.sh            ║${NC}"
   echo -e "${CYAN}╚══════════════════════════════════╝${NC}"
 
+  # ── 상호배타 플래그 거부 ────────────────────────────────────────
+  # 두 부분 모드를 동시에 지정하면 어느 쪽이 실행될지 불명확 → 즉시 거부.
+  # --rotate-webhook-secret 은 reapply 가 .env 를 건드리지 않으므로 조용히 무시됨 → 거부.
+  if [ "$REAPPLY" = "true" ] && [ "$ROTATE_WEBHOOK_SECRET" = "true" ]; then
+    error "--reapply 와 --rotate-webhook-secret 은 함께 사용할 수 없습니다."
+    echo "  --reapply 는 .env 를 건드리지 않으므로 --rotate-webhook-secret 이 무시됩니다." >&2
+    echo "  secret 을 회전하려면 풀 install 에서 --rotate-webhook-secret 만 지정하세요." >&2
+    exit 1
+  fi
+  if [ "$REAPPLY" = "true" ] && [ "$UPDATE_COMMANDS_ONLY" = "true" ]; then
+    error "--reapply 와 --update-commands-only 는 함께 사용할 수 없습니다."
+    echo "  둘 다 부분 모드입니다. 원하는 동작 한 가지만 지정하세요." >&2
+    exit 1
+  fi
+
   # 체크리스트는 대화형 모드에서만 노출 (비대화형은 스킵)
   [ "$NON_INTERACTIVE" = "true" ] || show_checklist
   check_requirements
@@ -680,6 +848,52 @@ main() {
   fi
   info "Pipeline 레포: $PIPELINE_REPO@$PIPELINE_REF"
 
+  # ── --reapply — 운영 중 부분 재적용 후 종료 ────────────────────────
+  # variables + 추적 라벨 + 호출자 yml 만 멱등 재적용.
+  # secrets / generate_env(.env) / 커맨드 / npm 전부 스킵 →
+  # app/.env(WEBHOOK_SECRET 포함) 를 일절 건드리지 않아 운영 App 파손 위험 0.
+  if [ "$REAPPLY" = "true" ]; then
+    VERDICT_DIR=".omc/state/reviews"
+    section "부분 재적용 (--reapply)"
+    warn "secrets/.env/커맨드/npm 스킵 — variables·라벨·호출자 yml 만 재적용"
+    # 환경변수 REVIEWER_BOT_LOGIN 원본을 보존.
+    # 미제공(빈 값)이면 레포마다 기존 variable 을 읽어 결정(보존 or skip).
+    # 제공된 경우는 모든 레포에 동일 값 사용.
+    _REAPPLY_REVIEWER_ENV="${REVIEWER_BOT_LOGIN:-}"
+    for i in $(seq 0 $((MODULE_COUNT - 1))); do
+      local_name_var="MODULE_${i}_NAME"
+      local_ci_var="MODULE_${i}_CI"
+      local_strict_var="MODULE_${i}_STRICT"
+      MOD_NAME="${!local_name_var}"
+      MOD_CI="${!local_ci_var}"
+      STRICT="${!local_strict_var}"
+      REPO="$OWNER/$MOD_NAME"
+      echo ""
+      echo -e "${CYAN}▶ $REPO${NC}"
+      # 매 레포마다 환경변수 원본으로 리셋 후 결정 — 이전 레포의 기존값이 오염 안 되도록.
+      REVIEWER_BOT_LOGIN="$_REAPPLY_REVIEWER_ENV"
+      # reviewer.enabled=true 일 때만 기존 레포 variable 조회(fail-closed).
+      # false 면 reviewer bot login 은 불필요 — 조회 자체를 건너뛰고 _SKIP_ 처리.
+      if [ "$REVIEWER_ENABLED" = "true" ]; then
+        resolve_reviewer_bot_login_for_reapply "$REPO" || exit 1
+      else
+        REVIEWER_BOT_LOGIN="_SKIP_"
+      fi
+      register_variables "$REPO" "$MOD_CI" "$STRICT" "true"
+      install_caller_ymls "$REPO" "$MOD_CI"
+      register_labels "$REPO"
+    done
+    # parent 레포 추적 라벨 (tracking.enabled=false 면 register_labels 내부 스킵)
+    if [ -n "$PARENT_REPO" ]; then
+      echo ""
+      echo -e "${CYAN}▶ $PARENT_REPO (parent)${NC}"
+      register_labels "$PARENT_REPO"
+    fi
+    echo ""
+    info "부분 재적용 완료 — secrets/.env/커맨드/npm 스킵됨 (--reapply)"
+    exit 0
+  fi
+
   # Secrets 입력 — 비대화형은 환경변수에서, 대화형은 프롬프트로
   section "Secrets 입력"
   if [ "$NON_INTERACTIVE" = "true" ]; then
@@ -707,10 +921,10 @@ main() {
     fi
 
     read -rp "$(echo -e "${CYAN}?${NC} Slack Webhook URL (없으면 Enter): ")" SLACK_WEBHOOK_URL || SLACK_WEBHOOK_URL=""
-
-    WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    info "Webhook Secret 자동 생성"
   fi
+
+  # Webhook Secret 결정 — 대화형·비대화형 공통 (기존 .env 값 보존이 안전 기본값)
+  resolve_webhook_secret
 
   VERDICT_DIR=".omc/state/reviews"
 
@@ -777,4 +991,7 @@ main() {
   info "모두 완료되면 자동화 파이프라인이 작동합니다 🚀"
 }
 
-main "$@"
+# 직접 실행 시에만 main 실행. `source` 로 로드되면 함수만 등록(테스트 하니스용).
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  main "$@"
+fi

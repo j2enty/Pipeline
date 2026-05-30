@@ -1,0 +1,29 @@
+# 테스트용 더미 config — tracking 비활성 변형 (종속성 제로)
+# T8(tracking.enabled=false → label create 안함) 테스트용.
+
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+  slack-channel: "#test-alerts"
+
+modules:
+  - name: ModuleA
+    ci-workflow-name: ModuleA CI
+
+modules-ignore:
+  - ModuleIgnored
+
+reviewer:
+  enabled: false
+
+pipeline:
+  repo: test-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+
+tracking:
+  enabled: false
