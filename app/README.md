@@ -80,3 +80,43 @@ docker compose logs -f app
 | `WEBHOOK_SECRET` | ✅ | GitHub App Webhook Secret |
 | `PORT` | - | 포트 (기본값: 3000) |
 | `LOG_LEVEL` | - | 로그 레벨 (기본값: info) |
+
+## finding 추적 (Tech Debt)
+
+리뷰·critic이 낸 major/minor 지적을 GitHub 이슈로 자동 추적하는 기능이다.
+
+### 무엇을 하는가
+
+- **review yml** 이 끝난 뒤 major/minor 지적 항목을 영역 레포 이슈로 자동 생성
+- **critic yml** 이 종합 지적을 낸 경우 parent 레포 이슈로 생성
+- 이슈에 `major-issue` 또는 `minor-issue` 라벨이 붙어 GitHub Project 뷰에서 집계 가능
+
+### 켜는 법
+
+`config/pipeline-config.example.yml`의 `tracking:` 섹션을 채운다:
+
+```yaml
+tracking:
+  enabled: true
+  major_label: major-issue   # 생략 시 기본값 사용
+  minor_label: minor-issue   # 생략 시 기본값 사용
+```
+
+`install.sh`를 실행하면:
+1. 각 영역 레포에 `major-issue` / `minor-issue` 라벨 자동 등록 (`register_labels()`)
+2. org variables `PIPELINE_TRACKING_*` 자동 등록
+
+### Tech Debt 뷰 만들기 (프로젝트당 1회, 수동)
+
+GitHub Project에 필터 뷰를 만들면 쌓인 finding을 한눈에 볼 수 있다.
+
+1. GitHub Project 열기 → **New view** 클릭
+2. **Table** 레이아웃 선택
+3. 상단 Filter 입력창에 `label:major-issue,minor-issue` 입력
+4. 뷰 이름 저장 (예: `Tech Debt`)
+
+이후 리뷰가 이슈를 생성할 때마다 이 뷰에 자동으로 집계된다.
+
+### 이슈 닫기
+
+finding 이슈는 수동으로 close한다. 수정 완료 후 PR에서 `Closes #<이슈번호>`를 명시하거나 직접 이슈를 close.

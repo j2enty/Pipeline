@@ -263,6 +263,23 @@ for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_blo
     area_hash = am.group(2).strip().strip("'\"")
     print(f"CMD_AREA_ID_{area_name.upper()}='{area_hash}'")
 
+# ── tracking 섹션 — finding 추적 라벨 자동 등록용 ───────────────────────
+# tracking: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
+# (claude-commands 블록 파싱과 동일 방식 — 다른 섹션의 동명 키와 충돌 방지)
+tk = re.search(r'^tracking:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
+tk_block = tk.group(1) if tk else ''
+
+# enabled — 미지정 시 기본 false
+tk_en = re.search(r'^\s+enabled:\s*(\w+)', tk_block, re.MULTILINE)
+tk_enabled = tk_en.group(1).strip().lower() if tk_en else 'false'
+if tk_enabled not in ('true', 'false'):
+    tk_enabled = 'false'
+print(f"TRACKING_ENABLED={tk_enabled}")
+
+# 라벨명 — 미지정 시 기본값 (major-issue / minor-issue)
+print(f"TRACKING_MAJOR_LABEL='{get_scalar_in(tk_block, 'major-label', 'major-issue')}'")
+print(f"TRACKING_MINOR_LABEL='{get_scalar_in(tk_block, 'minor-label', 'minor-issue')}'")
+
 PYEOF
 }
 
@@ -402,7 +419,25 @@ register_variables() {
   gh variable set PIPELINE_STRICT_REVIEW_BOT_CHECK  --repo "$repo" --body "$strict"
   [ -n "$ci_name" ] && \
     gh variable set PIPELINE_CI_WORKFLOW_NAME       --repo "$repo" --body "$ci_name"
+  gh variable set PIPELINE_TRACKING_ENABLED         --repo "$repo" --body "$TRACKING_ENABLED"
+  gh variable set PIPELINE_TRACKING_MAJOR_LABEL     --repo "$repo" --body "$TRACKING_MAJOR_LABEL"
+  gh variable set PIPELINE_TRACKING_MINOR_LABEL     --repo "$repo" --body "$TRACKING_MINOR_LABEL"
   info "variables 등록 완료"
+}
+
+# ── 추적 라벨 등록 ───────────────────────────────────────────
+# finding(리뷰 지적) 추적 이슈에 붙일 라벨을 영역/parent 레포에 등록.
+# tracking.enabled=false 면 스킵. 이미 존재하는 라벨은 gh label create 가
+# 실패하므로 '|| true' 로 무시(idempotent).
+register_labels() {
+  local repo="$1"
+  [ "$TRACKING_ENABLED" = "true" ] || return 0
+  echo "  추적 라벨 등록 중..."
+  gh label create "$TRACKING_MAJOR_LABEL" --repo "$repo" \
+    --color "d93f0b" --description "릴리즈 전 필수 수정 (finding 추적)" 2>/dev/null || true
+  gh label create "$TRACKING_MINOR_LABEL" --repo "$repo" \
+    --color "fbca04" --description "후속 처리 대상 (finding 추적)" 2>/dev/null || true
+  info "추적 라벨 등록 완료"
 }
 
 # ── 호출자 yml 설치 ──────────────────────────────────────────
@@ -697,7 +732,16 @@ main() {
     register_secrets "$REPO"
     register_variables "$REPO" "$MOD_CI" "$STRICT"
     install_caller_ymls "$REPO" "$MOD_CI"
+    register_labels "$REPO"
   done
+
+  # parent 레포 추적 라벨 — critic 추적 이슈가 parent 레포에 생기므로 1회 등록
+  # (모듈 루프 밖. tracking.enabled=false 면 register_labels 내부에서 스킵)
+  if [ -n "$PARENT_REPO" ]; then
+    echo ""
+    echo -e "${CYAN}▶ $PARENT_REPO (parent)${NC}"
+    register_labels "$PARENT_REPO"
+  fi
 
   # App .env 생성
   section "App 환경변수 생성"

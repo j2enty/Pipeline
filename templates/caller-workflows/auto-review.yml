@@ -31,3 +31,11 @@ jobs:
       working-directory: ${{ vars.PIPELINE_WORKING_DIRECTORY }}
       owner: ${{ vars.PIPELINE_OWNER }}
       reviewer-bot-login: ${{ vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+      tracking-enabled: ${{ vars.PIPELINE_TRACKING_ENABLED == 'true' }}
+      major-label: ${{ vars.PIPELINE_TRACKING_MAJOR_LABEL }}
+      minor-label: ${{ vars.PIPELINE_TRACKING_MINOR_LABEL }}
+    # 추적 finding 이슈 생성용 — tracking-enabled=true 일 때만 review.yml 이 토큰 발급에 사용.
+    # review.yml 에서 optional 로 선언되어 미설정이어도 추적 비활성 시 무방.
+    secrets:
+      AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
+      AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}

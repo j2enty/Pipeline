@@ -29,6 +29,28 @@ on:
         type: number
         required: false
         default: 3
+      tracking-enabled:
+        description: "리뷰 finding 추적(이슈 생성) 활성화 여부. false 면 추적 step 스킵"
+        type: boolean
+        required: false
+        default: false
+      major-label:
+        description: "major finding 이슈에 붙일 라벨 (tracking-enabled=true 일 때만)"
+        type: string
+        required: false
+        default: 'major-issue'
+      minor-label:
+        description: "minor finding 이슈에 붙일 라벨 (tracking-enabled=true 일 때만)"
+        type: string
+        required: false
+        default: 'minor-issue'
+    secrets:
+      # 추적 step 이 이슈 생성을 위해 Author App 토큰을 발급할 때만 필요.
+      # tracking-enabled=false 면 토큰 발급 step 자체가 스킵되므로 미설정이어도 무방.
+      AUTHOR_APP_ID:
+        required: false
+      AUTHOR_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -105,6 +127,81 @@ jobs:
             echo "Fix loop 한도 초과 ($MAX_ATTEMPTS 회)." >&2
             exit 1
           fi
+
+      # ── finding 추적 (tracking-enabled=true 일 때만) ──
+      # 리뷰가 APPROVED 로 정상 완료된 경우에만 도달(위 step 실패 시 job 중단).
+      # track-findings composite action 은 Pipeline 레포(reusable workflow 정의 레포)에
+      # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
+      # 체크아웃해야 한다. working-directory(self-hosted 실제 작업 경로)를 덮어쓰지
+      # 않도록 path 로 별도 디렉토리에 체크아웃한다.
+      - name: Pipeline 체크아웃 (추적 action 용)
+        if: ${{ inputs.tracking-enabled }}
+        uses: actions/checkout@v4
+        with:
+          path: .pipeline-action-checkout
+
+      - name: 추적용 App 토큰 발급
+        id: tracking-token
+        if: ${{ inputs.tracking-enabled }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      # 상태파일 경로 + area 키 해석.
+      # /review 가 단일 PR 리뷰 시 .omc/state/reviews/ 아래에 상태파일을 쓴다
+      #   (단일 수동: pr-<repo>-<number>.json / parent 추적: <slug>.json).
+      # review.yml 은 정확한 파일명 규칙을 알 필요 없이, critic.yml 과 동일하게
+      # "이 리뷰 실행으로 갱신된 가장 최신 .json"을 짚는다(단일 PR 리뷰라 1개).
+      # area 는 PR URL repo 명에 의존하지 않고, 상태파일 prs 객체의 실제 키를 읽어 쓴다
+      #   (prs.<area> 스키마와 정확히 일치 — repo명≠모듈명이어도 안전).
+      - name: 추적 상태파일 해석
+        id: track-resolve
+        if: ${{ inputs.tracking-enabled }}
+        env:
+          REVIEWS_DIR: .omc/state/reviews
+          PR_URL: ${{ inputs.pr-url }}
+        run: |
+          set -euo pipefail
+          # area-repo = 실제 PR 이 있는 <owner>/<repo> (PR URL 에서 추출).
+          # area 키(prs.<area>, 모듈명)와는 별개 — repo명≠모듈명이어도 분리 동작.
+          AREA_REPO=$(printf '%s' "$PR_URL" | sed -E 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+$#\1#')
+          echo "area-repo=${AREA_REPO}" >> "$GITHUB_OUTPUT"
+          STATE_FILE=""
+          AREA=""
+          if [ -d "$REVIEWS_DIR" ]; then
+            # 디렉토리 mtime 보다 새로 갱신된 .json 중 가장 최근 1개
+            STATE_FILE=$(find "$REVIEWS_DIR" -maxdepth 1 -name '*.json' -newer "$REVIEWS_DIR" \
+              -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1 || true)
+            # newer 후보가 없으면(디렉토리가 더 최신) 가장 최근 .json 으로 폴백
+            if [ -z "${STATE_FILE:-}" ]; then
+              STATE_FILE=$(find "$REVIEWS_DIR" -maxdepth 1 -name '*.json' \
+                -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1 || true)
+            fi
+          fi
+          if [ -n "${STATE_FILE:-}" ] && [ -f "$STATE_FILE" ]; then
+            # prs 객체의 첫 키 = area (단일 PR 리뷰라 1개)
+            AREA=$(jq -r '(.prs // {}) | keys | .[0] // empty' "$STATE_FILE" 2>/dev/null || true)
+            # 절대경로로 정규화(composite action 은 절대경로 권장)
+            STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+          fi
+          echo "state-file=${STATE_FILE:-}" >> "$GITHUB_OUTPUT"
+          echo "area=${AREA:-}" >> "$GITHUB_OUTPUT"
+          echo "추적 상태파일: ${STATE_FILE:-'(없음)'} / area: ${AREA:-'(없음)'}"
+
+      - name: finding 추적 (이슈 생성)
+        if: ${{ inputs.tracking-enabled }}
+        uses: ./.pipeline-action-checkout/actions/track-findings
+        with:
+          state-file-path: ${{ steps.track-resolve.outputs.state-file }}
+          finding-source: code-review
+          owner: ${{ inputs.owner }}
+          area: ${{ steps.track-resolve.outputs.area }}
+          area-repo: ${{ steps.track-resolve.outputs.area-repo }}
+          major-label: ${{ inputs.major-label }}
+          minor-label: ${{ inputs.minor-label }}
+          gh-token: ${{ steps.tracking-token.outputs.token }}
 
       - name: 에스컬레이션 (실패 시)
         if: failure()

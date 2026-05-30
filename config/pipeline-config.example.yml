@@ -110,3 +110,11 @@ claude-commands:
     iOS: ""
     Android: ""
     Design: ""
+
+tracking:
+  # finding(리뷰 지적) 추적 이슈 자동 생성 on/off (미설정 시 false)
+  # true 이면 install.sh 가 영역 레포 + parent 레포에 추적 라벨을 자동 등록한다.
+  enabled: false
+  # severity → 라벨명 (미설정 시 기본값: major-issue / minor-issue)
+  major-label: "major-issue"
+  minor-label: "minor-issue"

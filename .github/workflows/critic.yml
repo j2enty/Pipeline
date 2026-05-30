@@ -43,6 +43,21 @@ on:
         type: boolean
         required: false
         default: true
+      tracking-enabled:
+        description: "true: critic findings 를 track-findings 로 라벨 이슈 추적 / false: 머지만(기존 동작)"
+        type: boolean
+        required: false
+        default: false
+      major-label:
+        description: "major finding 이슈에 붙일 라벨 (tracking-enabled=true 시)"
+        type: string
+        required: false
+        default: 'major-issue'
+      minor-label:
+        description: "minor finding 이슈에 붙일 라벨 (tracking-enabled=true 시)"
+        type: string
+        required: false
+        default: 'minor-issue'
     secrets:
       AUTHOR_APP_ID:
         required: true
@@ -296,26 +311,47 @@ jobs:
           fi
           exit 1
 
-      - name: Major — 머지 + backlog 이슈 생성
+      - name: Concerns — 머지 + 상태파일 경로 식별
+        id: concerns-merge
         if: steps.verdict.outputs.critic_verdict == 'concerns'
         env:
           GH_TOKEN: ${{ steps.merge-token.outputs.token }}
           PR_REPO: ${{ inputs.pr-repo }}
           PR_NUMBER: ${{ inputs.pr-number }}
           PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
-          PARENT_REPO: ${{ inputs.parent-repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
         run: |
           set -euo pipefail
+          # 머지는 추적과 무관한 책임 — 항상 수행(기존 동작 보존)
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
-          PARENT_NUM=$(echo "$PARENT_URL" | grep -oE '[0-9]+$')
-          PARENT_TITLE=$(gh issue view "$PARENT_NUM" --repo "$PARENT_REPO" --json title --jq .title 2>/dev/null || echo "")
-          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
-          BODY=$(printf '## 배경\ncritic 리뷰에서 major findings 가 발견됐어요. 머지는 진행했지만 후속 처리가 필요합니다.\n\n**원본 parent**: %s\n**Actions 로그**: %s' "$PARENT_URL" "$RUN_URL")
-          gh issue create \
-            --repo "$PARENT_REPO" \
-            --title "critic fix: major findings — $PARENT_TITLE" \
-            --body "$BODY" || true
+
+          # 상태파일 경로 식별: critic 은 parent 모드라 <slug>.json.
+          # 상태파일 최상위 parent.url 에 parent URL 이 기록됨(review.md 8-c-bis) →
+          # parent URL 로 grep 해 해당 상태파일을 역조회. 못 찾으면 빈 값(track-findings 가 graceful 스킵).
+          STATE_FILE=""
+          if [ -d "$VERDICT_STATE_DIR" ]; then
+            STATE_FILE=$(grep -l -F "$PARENT_URL" "$VERDICT_STATE_DIR"/*.json 2>/dev/null | head -1 || true)
+          fi
+          if [ -n "$STATE_FILE" ]; then
+            # working-directory 기준 상대경로일 수 있어 절대경로로 정규화(action 은 다른 working-dir 에서 실행)
+            STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+            echo "concerns: 상태파일 식별 — $STATE_FILE"
+          else
+            echo "::warning::concerns: parent URL($PARENT_URL) 매칭 상태파일 없음 — 추적 스킵"
+          fi
+          echo "state-file=$STATE_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Concerns — critic findings 추적(라벨 이슈)
+        if: steps.verdict.outputs.critic_verdict == 'concerns' && inputs.tracking-enabled && steps.concerns-merge.outputs.state-file != ''
+        uses: ./actions/track-findings
+        with:
+          state-file-path: ${{ steps.concerns-merge.outputs.state-file }}
+          finding-source: critic
+          owner: ${{ inputs.owner }}
+          parent-repo: ${{ inputs.parent-repository }}
+          major-label: ${{ inputs.major-label }}
+          minor-label: ${{ inputs.minor-label }}
+          gh-token: ${{ steps.merge-token.outputs.token }}
 
       - name: Pass — 머지
         if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'unknown'

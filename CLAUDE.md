@@ -222,6 +222,9 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `strict-review-bot-check` | boolean | review·critic yml | `true`: 누구의 CHANGES_REQUESTED든 차단 / `false`: Reviewer 봇 것만 확인 |
 | `project-owner` | string | merge yml (옵션) | Project v2 소유자 (org/user 로그인). 미설정 시 머지 후 Status 전환 스킵 |
 | `project-number` | string | merge yml (옵션) | Project v2 번호. 미설정 시 머지 후 Status 전환 스킵 |
+| `tracking-enabled` | boolean | review·critic yml | finding 추적 이슈 생성 on/off |
+| `major-label` | string | review·critic yml | major finding 추적 라벨명 (기본 `major-issue`) |
+| `minor-label` | string | review·critic yml | minor finding 추적 라벨명 (기본 `minor-issue`) |
 
 ### 5. 표준 secret 카탈로그
 
@@ -287,6 +290,9 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `PIPELINE_VERDICT_DIR` | `verdict-state-dir` | critic verdict 상태 파일 디렉토리 |
 | `PIPELINE_PROJECT_OWNER` | `project-owner` | Project v2 소유자 (머지 후 Status=Done 전환용) |
 | `PIPELINE_PROJECT_NUMBER` | `project-number` | Project v2 번호 (머지 후 Status=Done 전환용) |
+| `PIPELINE_TRACKING_ENABLED` | `tracking-enabled` | finding 추적 on/off |
+| `PIPELINE_TRACKING_MAJOR_LABEL` | `major-label` | major 추적 라벨명 |
+| `PIPELINE_TRACKING_MINOR_LABEL` | `minor-label` | minor 추적 라벨명 |
 
 ### App 환경변수
 
