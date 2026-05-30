@@ -7,10 +7,14 @@
 #   - `gh auth status`                       → 인증 OK 로 통과 (exit 0)
 #   - `gh api ... --jq .sha` 류              → 빈 문자열 반환 (신규 파일 경로)
 #   - `gh variable list --repo <repo> --json name,value`
-#       → 환경변수 GH_STUB_VARLIST_<REPO_SLUG> 에서 JSON 반환.
-#         REPO_SLUG = 레포 경로의 '/'·'-' 를 '_' 로 치환하고 대문자화.
+#       → 환경변수 GH_STUB_VARLIST_<SLUG> 에서 JSON 반환.
+#         SLUG = 레포 경로의 '/'·'-' 를 '_' 로 치환하고 대문자화.
 #         예) test-org/ModuleA → GH_STUB_VARLIST_TEST_ORG_MODULEA
 #         미설정이면 빈 배열 '[]' 반환.
+#
+# 실패 시뮬레이션:
+#   GH_STUB_VARLIST_FAIL_<SLUG>=1   → variable list exit 1 (gh 명령 실패)
+#   GH_STUB_VARLIST_BROKEN_<SLUG>=1 → variable list 깨진 JSON 출력 (파싱 오류)
 #
 # 로그 포맷: 인자들을 공백으로 join 한 한 줄. 테스트는 grep/카운트로 단언.
 
@@ -27,7 +31,6 @@ fi
 # 기존 variable 값 조회 시 테스트가 주입한 JSON 반환
 if [ "${1:-}" = "variable" ] && [ "${2:-}" = "list" ]; then
   repo=""
-  # 나머지 인자에서 --repo 값 추출 (shift 로 순회)
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -35,15 +38,28 @@ if [ "${1:-}" = "variable" ] && [ "${2:-}" = "list" ]; then
       *)      shift ;;
     esac
   done
-  if [ -n "$repo" ]; then
-    # 레포 경로를 환경변수 키로 변환: '/' '-' → '_', 대문자
-    slug="$(printf '%s' "$repo" | tr '/-' '_' | tr '[:lower:]' '[:upper:]')"
-    env_key="GH_STUB_VARLIST_${slug}"
-    eval "json=\${${env_key}:-}"
-    printf '%s\n' "${json:-[]}"
-  else
-    printf '[]\n'
+  slug="$(printf '%s' "${repo:-}" | tr '/-' '_' | tr '[:lower:]' '[:upper:]')"
+
+  # eval 로 동적 환경변수를 읽는다. shellcheck 가 동적 변수명을 추적하지 못해
+  # SC2154 를 발생시키므로 python3 로 우회(os.environ 직접 조회 — eval 제거).
+
+  # 실패 시뮬레이션 — GH_STUB_VARLIST_FAIL_<SLUG>=1 (gh 권한·네트워크 오류)
+  fail_flag="$(python3 -c "import os,sys; print(os.environ.get('GH_STUB_VARLIST_FAIL_'+sys.argv[1],'0'))" "$slug")"
+  if [ "$fail_flag" = "1" ]; then
+    printf 'Error: HTTP 403 Forbidden\n' >&2
+    exit 1
   fi
+
+  # 깨진 JSON 시뮬레이션 — GH_STUB_VARLIST_BROKEN_<SLUG>=1 (stdout 에 비JSON 출력)
+  broken_flag="$(python3 -c "import os,sys; print(os.environ.get('GH_STUB_VARLIST_BROKEN_'+sys.argv[1],'0'))" "$slug")"
+  if [ "$broken_flag" = "1" ]; then
+    printf 'not-valid-json\n'
+    exit 0
+  fi
+
+  # 정상 — 주입된 JSON 반환 (미설정이면 빈 배열)
+  json="$(python3 -c "import os,sys; print(os.environ.get('GH_STUB_VARLIST_'+sys.argv[1],'[]'))" "$slug")"
+  printf '%s\n' "$json"
   exit 0
 fi
 
