@@ -397,6 +397,54 @@ resolve_webhook_secret() {
   info "Webhook Secret 자동 생성"
 }
 
+# ── 레포의 기존 GitHub variable 값 조회 ──────────────────────
+# `gh variable list --json name,value` 로 기존 variable 값을 읽어 반환.
+# 없거나 빈 값이면 빈 문자열. reapply 모드에서 config 에서 파생 불가능한
+# secret-time 입력값(PIPELINE_REVIEWER_BOT_LOGIN 등)을 보존할 때 사용.
+read_existing_repo_variable() {
+  local repo="$1" var_name="$2"
+  local raw
+  # python3 로 json 파싱 — jq 의존 없이 이식 가능
+  raw="$(gh variable list --repo "$repo" --json name,value 2>/dev/null || true)"
+  [ -n "$raw" ] || { printf '%s' ""; return 0; }
+  printf '%s' "$raw" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+name = sys.argv[1]
+for item in data:
+    if item.get('name') == name:
+        print(item.get('value', ''), end='')
+        sys.exit(0)
+" "$var_name" 2>/dev/null || true
+}
+
+# ── reapply 모드 전용: REVIEWER_BOT_LOGIN 보존 결정 ──────────────
+# config 에서 파생 불가능한 secret-time 입력값이므로, reapply 에서는
+# 기존 레포 variable 값을 읽어 보존한다. 우선순위:
+#   ① 환경변수 REVIEWER_BOT_LOGIN 이 명시 제공된 경우 → 그 값 사용
+#   ② 해당 레포의 기존 PIPELINE_REVIEWER_BOT_LOGIN 이 있으면 → 보존
+#   ③ 둘 다 없거나 빈 값 → REVIEWER_BOT_LOGIN 을 "_SKIP_" 로 표시
+#      (register_variables 내부 가드가 skip 처리 — 빈 값 덮어쓰기 방지)
+# 전역 REVIEWER_BOT_LOGIN 에 결과를 채운다.
+resolve_reviewer_bot_login_for_reapply() {
+  local repo="$1"
+  # ① 환경변수 명시 제공
+  if [ -n "${REVIEWER_BOT_LOGIN:-}" ]; then
+    return 0
+  fi
+  # ② 기존 레포 variable 읽기
+  local existing
+  existing="$(read_existing_repo_variable "$repo" "PIPELINE_REVIEWER_BOT_LOGIN")"
+  if [ -n "$existing" ]; then
+    REVIEWER_BOT_LOGIN="$existing"
+    info "PIPELINE_REVIEWER_BOT_LOGIN — 기존 레포 값 보존 ($repo)"
+    return 0
+  fi
+  # ③ 둘 다 없음 — skip 표시
+  REVIEWER_BOT_LOGIN="_SKIP_"
+  warn "PIPELINE_REVIEWER_BOT_LOGIN 값 없음 — 이 레포 등록 스킵 ($repo)"
+}
+
 # ── 비대화형 모드 — 환경변수에서 App 자격 로드 ─────────────────
 # 필수 env 누락 시 어느 변수가 빠졌는지 명시하고 exit 1
 load_credentials_from_env() {
@@ -472,7 +520,12 @@ register_variables() {
   gh variable set PIPELINE_PARENT_REPOSITORY        --repo "$repo" --body "$PARENT_REPO"
   gh variable set PIPELINE_MODULES_IGNORE           --repo "$repo" --body "$MODULES_IGNORE_JSON"
   gh variable set PIPELINE_WORKING_DIRECTORY        --repo "$repo" --body "$WORKING_DIR"
-  gh variable set PIPELINE_REVIEWER_BOT_LOGIN       --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
+  # REVIEWER_BOT_LOGIN 이 "_SKIP_"(reapply 보존 불가 표시) 또는 빈 값이면 등록 스킵.
+  # - 풀 install: 항상 값이 채워져 있으므로 이 분기에 진입 안 함 (동작 불변).
+  # - reapply: 환경변수·기존값 어디서도 값을 못 얻은 경우만 스킵.
+  if [ "${REVIEWER_BOT_LOGIN:-}" != "_SKIP_" ] && [ -n "${REVIEWER_BOT_LOGIN:-}" ]; then
+    gh variable set PIPELINE_REVIEWER_BOT_LOGIN     --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
+  fi
   gh variable set PIPELINE_VERDICT_DIR              --repo "$repo" --body "$VERDICT_DIR"
   gh variable set PIPELINE_STRICT_REVIEW_BOT_CHECK  --repo "$repo" --body "$strict"
   [ -n "$ci_name" ] && \
@@ -744,12 +797,12 @@ main() {
   # app/.env(WEBHOOK_SECRET 포함) 를 일절 건드리지 않아 운영 App 파손 위험 0.
   if [ "$REAPPLY" = "true" ]; then
     VERDICT_DIR=".omc/state/reviews"
-    # register_variables 는 PIPELINE_REVIEWER_BOT_LOGIN 도 등록한다. reapply 는
-    # secrets 입력을 스킵하므로 이 값이 unbound 다. 환경변수로 명시 제공 시 사용,
-    # 아니면 빈 값(기존 등록값 유지가 목적이 아니라 variables 멱등 재적용이 목적).
-    REVIEWER_BOT_LOGIN="${REVIEWER_BOT_LOGIN:-}"
     section "부분 재적용 (--reapply)"
     warn "secrets/.env/커맨드/npm 스킵 — variables·라벨·호출자 yml 만 재적용"
+    # 환경변수 REVIEWER_BOT_LOGIN 원본을 보존.
+    # 미제공(빈 값)이면 레포마다 기존 variable 을 읽어 결정(보존 or skip).
+    # 제공된 경우는 모든 레포에 동일 값 사용.
+    _REAPPLY_REVIEWER_ENV="${REVIEWER_BOT_LOGIN:-}"
     for i in $(seq 0 $((MODULE_COUNT - 1))); do
       local_name_var="MODULE_${i}_NAME"
       local_ci_var="MODULE_${i}_CI"
@@ -760,6 +813,9 @@ main() {
       REPO="$OWNER/$MOD_NAME"
       echo ""
       echo -e "${CYAN}▶ $REPO${NC}"
+      # 매 레포마다 환경변수 원본으로 리셋 후 결정 — 이전 레포의 기존값이 오염 안 되도록.
+      REVIEWER_BOT_LOGIN="$_REAPPLY_REVIEWER_ENV"
+      resolve_reviewer_bot_login_for_reapply "$REPO"
       register_variables "$REPO" "$MOD_CI" "$STRICT"
       install_caller_ymls "$REPO" "$MOD_CI"
       register_labels "$REPO"
