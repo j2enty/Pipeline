@@ -363,9 +363,12 @@ read_existing_webhook_secret() {
   [ -n "$line" ] || { printf '%s' ""; return 0; }
   # = 이후를 값으로 추출
   value="${line#*=}"
-  # 선행 공백 제거
+  # ① 선행 공백 제거
   value="${value#"${value%%[! ]*}"}"
-  # 짝맞는 큰따옴표 제거
+  # ② 후행 CR 제거 (CRLF 파일 대응) — CR이 닫는 따옴표 뒤에 붙어 따옴표 매칭을 깨뜨리므로
+  #    반드시 CR을 먼저 털고 나서 따옴표를 벗겨야 한다.
+  value="${value%$'\r'}"
+  # ③ 짝맞는 큰따옴표 제거
   if [ "${value#\"}" != "$value" ]; then
     value="${value#\"}"
     value="${value%\"}"
@@ -374,8 +377,6 @@ read_existing_webhook_secret() {
     value="${value#\'}"
     value="${value%\'}"
   fi
-  # 후행 CR 제거 (CRLF 파일 대응)
-  value="${value%$'\r'}"
   if [ -z "$value" ]; then
     warn "기존 .env 의 WEBHOOK_SECRET 값이 비어있음 — 새로 생성합니다 ($ENV_FILE)" >&2
     printf '%s' ""
@@ -403,8 +404,7 @@ resolve_webhook_secret() {
   if [ -n "$existing" ]; then
     # 환경변수도 제공됐고 .env 값과 다르면 warn — 보존 우선이지만 조용한 무시는 위험
     if [ -n "${WEBHOOK_SECRET:-}" ] && [ "${WEBHOOK_SECRET:-}" != "$existing" ]; then
-      warn "환경변수 WEBHOOK_SECRET 이 제공됐으나 기존 .env 값을 보존합니다 ($ENV_FILE)."
-      warn "회전하려면 --rotate-webhook-secret 을 사용하세요."
+      warn "환경변수 WEBHOOK_SECRET 이 제공됐으나 기존 .env 값을 보존합니다. 회전하려면 --rotate-webhook-secret 을 사용하세요."
     fi
     WEBHOOK_SECRET="$existing"
     info "Webhook Secret — 기존 .env 값 보존 ($ENV_FILE)"
@@ -872,7 +872,13 @@ main() {
       echo -e "${CYAN}▶ $REPO${NC}"
       # 매 레포마다 환경변수 원본으로 리셋 후 결정 — 이전 레포의 기존값이 오염 안 되도록.
       REVIEWER_BOT_LOGIN="$_REAPPLY_REVIEWER_ENV"
-      resolve_reviewer_bot_login_for_reapply "$REPO" || exit 1
+      # reviewer.enabled=true 일 때만 기존 레포 variable 조회(fail-closed).
+      # false 면 reviewer bot login 은 불필요 — 조회 자체를 건너뛰고 _SKIP_ 처리.
+      if [ "$REVIEWER_ENABLED" = "true" ]; then
+        resolve_reviewer_bot_login_for_reapply "$REPO" || exit 1
+      else
+        REVIEWER_BOT_LOGIN="_SKIP_"
+      fi
       register_variables "$REPO" "$MOD_CI" "$STRICT" "true"
       install_caller_ymls "$REPO" "$MOD_CI"
       register_labels "$REPO"
