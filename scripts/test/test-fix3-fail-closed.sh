@@ -74,3 +74,41 @@ it "F3-6 reapply 중 깨진 JSON 응답 → 스크립트 exit 1"
     --env-file "$(mktemp -u)" >/dev/null 2>&1 || code=$?
   assert_eq "1" "$code" "깨진 JSON 시 reapply exit 1 아님" && pass
 )
+
+# ── Fix2: reviewer.enabled=false 시 조회 스킵 ───────────────────────────────
+
+# F3-7 — reviewer.enabled=false + gh 실패 시뮬 + reapply → 중단 안 하고 정상 진행
+# (reviewer 비활성이면 PIPELINE_REVIEWER_BOT_LOGIN 조회 자체를 건너뜀)
+it "F3-7 reviewer.enabled=false + gh 실패 → reapply 정상 진행(reviewer variable만 스킵)"
+(
+  export PATH="$STUBS_DIR:$PATH"
+  GH_LOG="$(mktemp)"; export GH_LOG
+  # ModuleA variable list 실패 시뮬 — reviewer.enabled=false 면 이 실패가 무시돼야 함
+  export GH_STUB_VARLIST_FAIL_TEST_ORG_MODULEA=1
+  unset REVIEWER_BOT_LOGIN
+  code=0
+  # config-no-tracking.yml: reviewer.enabled=false
+  bash "$INSTALL_SH" "$FIXTURES_DIR/config-no-tracking.yml" --reapply --non-interactive \
+    --env-file "$(mktemp -u)" >/dev/null 2>&1 || code=$?
+  assert_eq "0" "$code" "reviewer=false 인데 gh 실패로 exit 1 (reviewer 조회 스킵 안 됨)" || return
+  # PIPELINE_REVIEWER_BOT_LOGIN 은 등록 안 됨(_SKIP_ 처리)
+  log="$(cat "$GH_LOG")"
+  assert_not_contains "$log" "PIPELINE_REVIEWER_BOT_LOGIN" \
+    "reviewer=false 인데 PIPELINE_REVIEWER_BOT_LOGIN 등록됨" || return
+  # 나머지 variables 는 정상 등록
+  assert_contains "$log" "PIPELINE_OWNER" "PIPELINE_OWNER 등록 안 됨" && pass
+)
+
+# F3-8 — reviewer.enabled=true + gh 실패 + reapply → 기존대로 fail-closed exit 1
+it "F3-8 reviewer.enabled=true + gh 실패 → reapply fail-closed exit 1 유지"
+(
+  export PATH="$STUBS_DIR:$PATH"
+  GH_LOG="$(mktemp)"; export GH_LOG
+  export GH_STUB_VARLIST_FAIL_TEST_ORG_MODULEA=1
+  unset REVIEWER_BOT_LOGIN
+  code=0
+  # config-basic.yml: reviewer.enabled=true
+  bash "$INSTALL_SH" "$FIXTURES_DIR/config-basic.yml" --reapply --non-interactive \
+    --env-file "$(mktemp -u)" >/dev/null 2>&1 || code=$?
+  assert_eq "1" "$code" "reviewer=true + gh 실패인데 exit 1 아님" && pass
+)

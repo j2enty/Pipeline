@@ -95,3 +95,21 @@ it "F1-11 export WEBHOOK_SECRET=\"value\" 조합 파싱"
   val="$(_read_from_env 'export WEBHOOK_SECRET="combo_secret"'$'\n')"
   assert_eq "combo_secret" "$val" "export+따옴표 조합 실패" && pass
 )
+
+# ── 조합 케이스 (Fix1 정규화 순서 버그 재현용) ───────────────────────────
+# CR이 닫는 따옴표 뒤에 붙어 있으면 따옴표 먼저 벗기면 CR이 잔존한다.
+# 정규화 순서: 선행공백 → CR제거 → 따옴표 벗기기 로 수정 후에만 통과.
+
+# F1-12 — 큰따옴표 + CRLF 조합
+it "F1-12 큰따옴표 + CRLF 조합 — 정확히 value 추출"
+(
+  val="$(_read_from_env "$(printf 'WEBHOOK_SECRET="crlf_quoted"\r\n')")"
+  assert_eq "crlf_quoted" "$val" "큰따옴표+CRLF 조합 파싱 실패(CR or 따옴표 잔존)" && pass
+)
+
+# F1-13 — 작은따옴표 + CRLF 조합
+it "F1-13 작은따옴표 + CRLF 조합 — 정확히 value 추출"
+(
+  val="$(_read_from_env "$(printf "WEBHOOK_SECRET='crlf_single'\r\n")")"
+  assert_eq "crlf_single" "$val" "작은따옴표+CRLF 조합 파싱 실패(CR or 따옴표 잔존)" && pass
+)
