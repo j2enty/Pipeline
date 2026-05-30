@@ -133,9 +133,13 @@ runs:
         minor_label = os.environ["MINOR_LABEL"]
 
         def normalize(title):
-            # lowercase → 영숫자·공백만 → 공백 1칸 정규화 → 앞 60자
+            # lowercase → 유니코드 문자/숫자/공백 보존(한글 포함), 구두점만 공백화
+            #            → 공백 1칸 정규화 → 앞 60자
+            # 주의: [^a-z0-9\s] 로 하면 한글 등 비-ASCII 가 전부 제거되어
+            #       한국어 title 이 빈 문자열로 뭉개지고 fingerprint 가 충돌한다.
+            #       \w + re.UNICODE 로 한글/숫자/문자를 보존한다.
             t = (title or "").lower()
-            t = re.sub(r"[^a-z0-9\s]", " ", t)
+            t = re.sub(r"[^\w\s]", " ", t, flags=re.UNICODE)
             t = re.sub(r"\s+", " ", t).strip()
             return t[:60]
 
@@ -144,6 +148,11 @@ runs:
         description = (finding.get("description") or "").strip()
         suggestion = (finding.get("suggestion") or "").strip()
         norm_title = normalize(title)
+        # 안전장치: 정규화 결과가 비면(순수 구두점/이모지 title 등) 서로 다른 title 이
+        #          같은 빈 문자열로 뭉개져 fingerprint 가 충돌한다.
+        #          원본 title 의 sha256 일부를 basis 에 섞어 충돌을 회피한다.
+        if not norm_title and title:
+            norm_title = "h:" + hashlib.sha256(title.encode("utf-8")).hexdigest()[:12]
 
         if source == "code-review":
             file_path = (finding.get("file") or "").strip()
@@ -187,7 +196,16 @@ runs:
         lines.append(f"<!-- finding-fp: {fp} -->")
         body = "\n".join(lines)
 
-        issue_title = f"[{severity}] {title}" if title else f"[{severity}] finding {fp}"
+        # 제목 끝에 fingerprint 토큰을 결정적으로 박는다.
+        # 이유(버그 #7): gh search 는 인덱싱 지연이 있어 본문 마커만으론
+        #   cross-run 중복 검색이 부정확할 수 있다. 제목에 ` [fp:<fp>]` 를 고정 포함하면
+        #   `gh issue list --search "<fp> in:title"` 로 더 정확하게 기존 이슈를 찾을 수 있다.
+        base_title = f"[{severity}] {title}" if title else f"[{severity}] finding {fp}"
+        # base_title 이 매우 길면(300자+) GitHub 가 제목을 자르면서 끝의 [fp:...] 가
+        # 먼저 잘려 cross-run dedup 이 깨진다. fp suffix 가 항상 보존되도록 base 를 200자로 제한.
+        # (fp suffix 포함해도 GitHub 제목 한계 1024 대비 충분히 여유)
+        base_title = base_title[:200]
+        issue_title = f"{base_title} [fp:{fp}]"
         body_b64 = base64.b64encode(body.encode("utf-8")).decode("ascii")
 
         # fp \t 제목 \t 라벨 \t 본문(base64) — 제목에 탭/개행 정규화
@@ -203,6 +221,18 @@ runs:
           MAJOR_LABEL="$MAJOR_LABEL" MINOR_LABEL="$MINOR_LABEL" \
           python3 -c "$PY_HELPER" "$1"
         }
+
+        # ── 4.5. 라벨 멱등 생성 (버그 #5: 라벨 미존재 시 gh issue create 가 실패 →
+        #         이슈 0건 침묵 실패) ──
+        #    대상 레포에 major/minor 라벨이 없으면 --label 붙은 생성이 통째로 실패한다.
+        #    루프 진입 전에 라벨을 멱등 생성 시도해서 "조용한 죽음"을 예방한다.
+        #    이미 있으면 에러나지만 무시(|| true) — 멱등.
+        for L in "$MAJOR_LABEL" "$MINOR_LABEL"; do
+          [ -z "$L" ] && continue
+          if gh label create "$L" --repo "$TARGET_REPO" >/dev/null 2>&1; then
+            echo "track-findings: 라벨 생성 — $L"
+          fi
+        done
 
         # ── 5. 각 finding 처리: intra-run + cross-run dedup → 이슈 생성 ──
         SEEN_FPS=""   # intra-run 누적 set (공백 구분 ' <fp> ' 패턴으로 검사)
@@ -232,17 +262,24 @@ runs:
           esac
           SEEN_FPS="$SEEN_FPS $FP"
 
-          # cross-run 중복 차단 (gh search — 인덱싱 지연 가능 → intra-run set 과 이중 방어)
-          EXISTING=$(gh search issues "$FP" --repo "$TARGET_REPO" --state open --json number \
-            --jq 'length' 2>/dev/null || echo "0")
+          # cross-run 중복 차단 — 제목에 박힌 [fp:<fp>] 토큰으로 정확 검색.
+          # `gh issue list --search "<fp> in:title"` 는 같은 레포 한정이라
+          # `gh search issues` 보다 인덱싱이 빠르고 정확하다.
+          # 주의(버그 #7): 그래도 검색 인덱싱 지연·동시 실행 시 드물게 중복 이슈가
+          #   생길 수 있다. 코드로 완전 해결 불가 — 드물게 발생하면 수동 정리한다.
+          EXISTING=$(gh issue list --repo "$TARGET_REPO" --state open \
+            --search "$FP in:title" --json number --jq 'length' 2>/dev/null || echo "0")
           if [ "${EXISTING:-0}" != "0" ]; then
             echo "track-findings: [$FP] 이미 오픈 이슈 존재 — 스킵"
             SKIPPED=$((SKIPPED + 1))
             continue
           fi
 
-          # 이슈 생성 (개별 실패는 || true 로 흡수 — 나머지를 막지 않음)
-          BODY=$(printf '%s' "$BODY_B64" | base64 --decode)
+          # 이슈 생성 (개별 실패는 흡수 — 나머지를 막지 않음, graceful)
+          # base64 decode 실패도 흡수: set -euo pipefail 아래서 그냥 두면 step 이 죽어
+          # "모든 실패 흡수" 원칙과 어긋난다 → continue 로 이 finding 만 스킵.
+          BODY=$(printf '%s' "$BODY_B64" | base64 --decode) \
+            || { echo "::warning::track-findings: [$FP] 본문 디코드 실패 — 이 finding 스킵"; continue; }
           if gh issue create --repo "$TARGET_REPO" \
               --title "$ISSUE_TITLE" \
               --body "$BODY" \
@@ -250,7 +287,17 @@ runs:
             echo "track-findings: [$FP] 이슈 생성 ($ISSUE_LABEL): $ISSUE_TITLE"
             CREATED=$((CREATED + 1))
           else
-            echo "::warning::track-findings: [$FP] 이슈 생성 실패 — 흡수하고 계속"
+            # 버그 #5 폴백: 라벨 미존재 등으로 --label 생성이 실패하면
+            #   라벨 없이 1회 재시도해서 이슈는 만들고 라벨만 포기한다.
+            #   "조용한 죽음"(이슈 0건)을 막고, 진단 가능한 명확한 경고를 1회 남긴다.
+            if gh issue create --repo "$TARGET_REPO" \
+                --title "$ISSUE_TITLE" \
+                --body "$BODY" >/dev/null 2>&1; then
+              echo "::warning::track-findings: [$FP] 라벨($ISSUE_LABEL) 없이 이슈 생성 — 라벨 미존재 추정, install.sh register_labels 확인"
+              CREATED=$((CREATED + 1))
+            else
+              echo "::warning::track-findings: [$FP] 이슈 생성 실패(라벨 무관) — 흡수하고 계속"
+            fi
           fi
         done <<< "$FINDINGS_NDJSON"
 

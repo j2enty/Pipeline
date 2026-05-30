@@ -261,6 +261,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # track-findings composite action 은 Pipeline 레포(reusable workflow 정의 레포)에
+      # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
+      # 체크아웃해야 한다. working-directory(self-hosted 실제 작업 경로)·위 영역 레포
+      # 체크아웃을 덮어쓰지 않도록 path 로 별도 디렉토리에 체크아웃한다(review.yml 과 동일 패턴).
+      - name: Pipeline 체크아웃 (추적 action 용)
+        if: ${{ inputs.tracking-enabled }}
+        uses: actions/checkout@v4
+        with:
+          path: .pipeline-action-checkout
+
       - name: /review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
@@ -320,30 +330,41 @@ jobs:
           PR_NUMBER: ${{ inputs.pr-number }}
           PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
           VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
+          TRACKING_ENABLED: ${{ inputs.tracking-enabled }}
         run: |
           set -euo pipefail
-          # 머지는 추적과 무관한 책임 — 항상 수행(기존 동작 보존)
+          # 머지는 추적과 무관한 책임 — 항상 수행(기존 동작 보존, tracking 게이트 밖)
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
 
-          # 상태파일 경로 식별: critic 은 parent 모드라 <slug>.json.
-          # 상태파일 최상위 parent.url 에 parent URL 이 기록됨(review.md 8-c-bis) →
-          # parent URL 로 grep 해 해당 상태파일을 역조회. 못 찾으면 빈 값(track-findings 가 graceful 스킵).
+          # 상태파일 경로 식별은 추적(track-findings)용이므로 tracking-enabled 일 때만 수행.
+          # tracking-enabled=false 인데 verdict=concerns 면 아래 탐색 루프가 불필요하게 돌고
+          # "매칭 상태파일 없음" warning 노이즈가 났던 것을 차단한다(머지는 위에서 이미 됨).
           STATE_FILE=""
-          if [ -d "$VERDICT_STATE_DIR" ]; then
-            STATE_FILE=$(grep -l -F "$PARENT_URL" "$VERDICT_STATE_DIR"/*.json 2>/dev/null | head -1 || true)
-          fi
-          if [ -n "$STATE_FILE" ]; then
-            # working-directory 기준 상대경로일 수 있어 절대경로로 정규화(action 은 다른 working-dir 에서 실행)
-            STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
-            echo "concerns: 상태파일 식별 — $STATE_FILE"
-          else
-            echo "::warning::concerns: parent URL($PARENT_URL) 매칭 상태파일 없음 — 추적 스킵"
+          if [ "$TRACKING_ENABLED" = "true" ]; then
+            # 상태파일 경로 식별: critic 은 parent 모드라 <slug>.json.
+            # 상태파일 최상위 parent.url 에 parent URL 이 기록됨(review.md 상태 스키마 .parent.url) →
+            # parent URL 로 역조회. jq 로 .parent.url 을 정확히 비교한다(grep 부분매칭 금지 —
+            # issues/3 이 issues/30·issues/35 까지 잡는 버그가 있었음).
+            # 못 찾으면 빈 값(track-findings 가 graceful 스킵).
+            if [ -d "$VERDICT_STATE_DIR" ]; then
+              for f in "$VERDICT_STATE_DIR"/*.json; do
+                [ -f "$f" ] || continue
+                [ "$(jq -r '.parent.url // empty' "$f" 2>/dev/null)" = "$PARENT_URL" ] && { STATE_FILE="$f"; break; }
+              done
+            fi
+            if [ -n "$STATE_FILE" ]; then
+              # working-directory 기준 상대경로일 수 있어 절대경로로 정규화(action 은 다른 working-dir 에서 실행)
+              STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+              echo "concerns: 상태파일 식별 — $STATE_FILE"
+            else
+              echo "::warning::concerns: parent URL($PARENT_URL) 매칭 상태파일 없음 — 추적 스킵"
+            fi
           fi
           echo "state-file=$STATE_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Concerns — critic findings 추적(라벨 이슈)
         if: steps.verdict.outputs.critic_verdict == 'concerns' && inputs.tracking-enabled && steps.concerns-merge.outputs.state-file != ''
-        uses: ./actions/track-findings
+        uses: ./.pipeline-action-checkout/actions/track-findings
         with:
           state-file-path: ${{ steps.concerns-merge.outputs.state-file }}
           finding-source: critic

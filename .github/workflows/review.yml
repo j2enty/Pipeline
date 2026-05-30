@@ -149,13 +149,14 @@ jobs:
           private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      # 상태파일 경로 + area 키 해석.
-      # /review 가 단일 PR 리뷰 시 .omc/state/reviews/ 아래에 상태파일을 쓴다
-      #   (단일 수동: pr-<repo>-<number>.json / parent 추적: <slug>.json).
-      # review.yml 은 정확한 파일명 규칙을 알 필요 없이, critic.yml 과 동일하게
-      # "이 리뷰 실행으로 갱신된 가장 최신 .json"을 짚는다(단일 PR 리뷰라 1개).
-      # area 는 PR URL repo 명에 의존하지 않고, 상태파일 prs 객체의 실제 키를 읽어 쓴다
-      #   (prs.<area> 스키마와 정확히 일치 — repo명≠모듈명이어도 안전).
+      # 상태파일 경로 + area 키 해석 — PR 로 결정론적 선택(교차 오염 방지).
+      # /review 가 단일 PR 리뷰 시 .omc/state/reviews/pr-<repo>-<number>.json 을 쓴다
+      #   (review.md 상수표: 단일 수동 PR = pr-<repo>-<number>.json, <repo>=레포명만·org 생략).
+      # review.yml 은 단일 pr-url 만 받으므로, 그 PR URL 에서 repo·number 를 파싱해
+      #   상태파일명을 직접 구성한다("가장 최근 .json" 휴리스틱 폐기 — working-directory 가
+      #   모든 영역 공통 단일 경로라 동시 리뷰 시 다른 영역 파일을 잡는 버그가 있었음).
+      # area 는 상태파일 prs.<area> 중 repo 필드가 area-repo 와 일치하는 키를 고른다
+      #   (첫 키 아님 — repo명≠모듈명이어도, 동일 파일에 여러 PR 이 있어도 정확히 매칭).
       - name: 추적 상태파일 해석
         id: track-resolve
         if: ${{ inputs.tracking-enabled }}
@@ -168,30 +169,36 @@ jobs:
           # area 키(prs.<area>, 모듈명)와는 별개 — repo명≠모듈명이어도 분리 동작.
           AREA_REPO=$(printf '%s' "$PR_URL" | sed -E 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+$#\1#')
           echo "area-repo=${AREA_REPO}" >> "$GITHUB_OUTPUT"
+          # 레포명(org 제외) + PR 번호 추출 → 상태파일명 pr-<repo>-<number>.json 직접 구성.
+          PR_REPO_NAME=$(printf '%s' "$AREA_REPO" | cut -d/ -f2)
+          PR_NUMBER=$(printf '%s' "$PR_URL" | sed -E 's#^.*/pull/([0-9]+)$#\1#')
           STATE_FILE=""
           AREA=""
-          if [ -d "$REVIEWS_DIR" ]; then
-            # 디렉토리 mtime 보다 새로 갱신된 .json 중 가장 최근 1개
-            STATE_FILE=$(find "$REVIEWS_DIR" -maxdepth 1 -name '*.json' -newer "$REVIEWS_DIR" \
-              -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1 || true)
-            # newer 후보가 없으면(디렉토리가 더 최신) 가장 최근 .json 으로 폴백
-            if [ -z "${STATE_FILE:-}" ]; then
-              STATE_FILE=$(find "$REVIEWS_DIR" -maxdepth 1 -name '*.json' \
-                -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1 || true)
+          CANDIDATE="$REVIEWS_DIR/pr-${PR_REPO_NAME}-${PR_NUMBER}.json"
+          if [ -f "$CANDIDATE" ]; then
+            STATE_FILE="$CANDIDATE"
+            # prs.<area> 중 repo 필드가 area-repo 와 일치하는 키 선택(첫 키 아님 — 안전 매칭).
+            # $repo 는 jq 변수 — single quote 안 미확장 의도적.
+            # shellcheck disable=SC2016
+            AREA=$(jq -r --arg repo "$AREA_REPO" \
+              '(.prs // {}) | to_entries[] | select(.value.repo == $repo) | .key' \
+              "$STATE_FILE" 2>/dev/null | head -1 || true)
+            # repo 매칭 실패 시(스키마 누락 등) 단일 PR 파일이라 첫 키로 폴백.
+            if [ -z "${AREA:-}" ]; then
+              AREA=$(jq -r '(.prs // {}) | keys | .[0] // empty' "$STATE_FILE" 2>/dev/null || true)
             fi
-          fi
-          if [ -n "${STATE_FILE:-}" ] && [ -f "$STATE_FILE" ]; then
-            # prs 객체의 첫 키 = area (단일 PR 리뷰라 1개)
-            AREA=$(jq -r '(.prs // {}) | keys | .[0] // empty' "$STATE_FILE" 2>/dev/null || true)
-            # 절대경로로 정규화(composite action 은 절대경로 권장)
+            # 절대경로로 정규화(composite action 은 절대경로 권장).
             STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+          else
+            echo "::warning::추적 상태파일 없음($CANDIDATE) — 추적 스킵"
           fi
           echo "state-file=${STATE_FILE:-}" >> "$GITHUB_OUTPUT"
           echo "area=${AREA:-}" >> "$GITHUB_OUTPUT"
           echo "추적 상태파일: ${STATE_FILE:-'(없음)'} / area: ${AREA:-'(없음)'}"
 
+      # 상태파일이 없으면(부재·파싱 실패) state-file 이 빈 값 → 추적 스킵(graceful).
       - name: finding 추적 (이슈 생성)
-        if: ${{ inputs.tracking-enabled }}
+        if: ${{ inputs.tracking-enabled && steps.track-resolve.outputs.state-file != '' }}
         uses: ./.pipeline-action-checkout/actions/track-findings
         with:
           state-file-path: ${{ steps.track-resolve.outputs.state-file }}
