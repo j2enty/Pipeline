@@ -46,6 +46,17 @@ AI 에이전트(Claude Code 등)와 GitHub Actions·GitHub App을 연결해서 �
 이 체크리스트는 모든 큰 결정에서 **명시적으로 평가**되어야 하며, CLAUDE.md의 다른 어떤 룰보다 우선한다.
 
 
+## 작업 프로토콜 (강제)
+
+Pipeline은 자동화 인프라라 버그 1건의 파급이 크다(잘못된 레포에 이슈, 잘못된 PR 머지 등). **보수적으로** 접근한다. 다음 3원칙을 모든 Pipeline 작업에 적용한다.
+
+1. **플랜 우선** — 어떤 과제든 먼저 플랜을 잡고 진행한다. (단 진짜 사소해서 플랜이 오버인 경우만 스킵 가능)
+2. **단계별 테스트 게이트** — 플랜의 각 Phase/Step마다 안전한 테스트케이스를 만들고, **그 통과를 다음 단계로 넘어가는 조건**으로 삼는다. "구현했다"가 아니라 "테스트가 통과했다"가 단계 종료 기준이다. 라이브로만 드러나는 것(GHA checkout 컨텍스트, self-hosted 동시성, 상태파일 경합 등)도 "나중에 확인"으로 미루지 말고 가능한 테스트 게이트를 만든다.
+3. **Claude + Codex 이중 코드리뷰** — 코드량이 적어도, 하나의 플랜이 끝나고 **PR 이후에는 반드시 Claude와 Codex 둘 다** 코드리뷰를 돌린다(`omc ask codex`로 교차검증). 정합성 검증(verifier)만으론 부족하며, 적대적 코드리뷰 + 모델 교차가 필수다.
+
+> 근거: 정합성 검증만 한 Claude 리뷰가 "통과"라 한 코드를 Codex 교차검증이 치명 버그까지 잡아낸 사례가 있다(2026-05-30 Phase 3). 단일 모델 리뷰는 과신이다.
+
+
 ## 핵심 원칙
 
 ### 1. 프로젝트 종속성 제로
@@ -222,6 +233,9 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `strict-review-bot-check` | boolean | review·critic yml | `true`: 누구의 CHANGES_REQUESTED든 차단 / `false`: Reviewer 봇 것만 확인 |
 | `project-owner` | string | merge yml (옵션) | Project v2 소유자 (org/user 로그인). 미설정 시 머지 후 Status 전환 스킵 |
 | `project-number` | string | merge yml (옵션) | Project v2 번호. 미설정 시 머지 후 Status 전환 스킵 |
+| `tracking-enabled` | boolean | review·critic yml | finding 추적 이슈 생성 on/off |
+| `major-label` | string | review·critic yml | major finding 추적 라벨명 (기본 `major-issue`) |
+| `minor-label` | string | review·critic yml | minor finding 추적 라벨명 (기본 `minor-issue`) |
 
 ### 5. 표준 secret 카탈로그
 
@@ -287,6 +301,9 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `PIPELINE_VERDICT_DIR` | `verdict-state-dir` | critic verdict 상태 파일 디렉토리 |
 | `PIPELINE_PROJECT_OWNER` | `project-owner` | Project v2 소유자 (머지 후 Status=Done 전환용) |
 | `PIPELINE_PROJECT_NUMBER` | `project-number` | Project v2 번호 (머지 후 Status=Done 전환용) |
+| `PIPELINE_TRACKING_ENABLED` | `tracking-enabled` | finding 추적 on/off |
+| `PIPELINE_TRACKING_MAJOR_LABEL` | `major-label` | major 추적 라벨명 |
+| `PIPELINE_TRACKING_MINOR_LABEL` | `minor-label` | minor 추적 라벨명 |
 
 ### App 환경변수
 

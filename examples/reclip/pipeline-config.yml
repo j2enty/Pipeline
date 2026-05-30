@@ -62,3 +62,9 @@ claude-commands:
     iOS: 2f0a7bda
     Android: 7394b300
     Design: 56405937
+
+tracking:
+  # finding(리뷰 지적) 추적 이슈 자동 생성 on/off
+  enabled: true
+  major-label: "major-issue"
+  minor-label: "minor-issue"

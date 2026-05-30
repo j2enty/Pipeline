@@ -32,6 +32,13 @@ jobs:
       parent-repository: ${{ vars.PIPELINE_PARENT_REPOSITORY }}
       modules-ignore: ${{ vars.PIPELINE_MODULES_IGNORE || '[]' }}
       strict-review-bot-check: ${{ vars.PIPELINE_STRICT_REVIEW_BOT_CHECK == 'true' }}
+      tracking-enabled: ${{ vars.PIPELINE_TRACKING_ENABLED == 'true' }}
+      major-label: ${{ vars.PIPELINE_TRACKING_MAJOR_LABEL || 'major-issue' }}
+      minor-label: ${{ vars.PIPELINE_TRACKING_MINOR_LABEL || 'minor-issue' }}
+      # 추적 action(track-findings) 체크아웃 대상 — reusable workflow 가 caller(영역) 레포가
+      # 아닌 Pipeline 레포를 정확히 체크아웃하도록 repo/ref 명시(install.sh 가 placeholder 치환).
+      pipeline-repo: __PIPELINE_REPO__
+      pipeline-ref: __PIPELINE_REF__
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}

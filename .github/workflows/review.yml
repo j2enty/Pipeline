@@ -29,6 +29,38 @@ on:
         type: number
         required: false
         default: 3
+      tracking-enabled:
+        description: "리뷰 finding 추적(이슈 생성) 활성화 여부. false 면 추적 step 스킵"
+        type: boolean
+        required: false
+        default: false
+      pipeline-repo:
+        description: "Pipeline 레포 (owner/repo) — 추적 action 체크아웃 대상. tracking-enabled=true 시 필수"
+        type: string
+        required: false
+        default: ''
+      pipeline-ref:
+        description: "Pipeline 레포 ref — 추적 action 체크아웃 시 사용. 미설정 시 기본 브랜치"
+        type: string
+        required: false
+        default: ''
+      major-label:
+        description: "major finding 이슈에 붙일 라벨 (tracking-enabled=true 일 때만)"
+        type: string
+        required: false
+        default: 'major-issue'
+      minor-label:
+        description: "minor finding 이슈에 붙일 라벨 (tracking-enabled=true 일 때만)"
+        type: string
+        required: false
+        default: 'minor-issue'
+    secrets:
+      # 추적 step 이 이슈 생성을 위해 Author App 토큰을 발급할 때만 필요.
+      # tracking-enabled=false 면 토큰 발급 step 자체가 스킵되므로 미설정이어도 무방.
+      AUTHOR_APP_ID:
+        required: false
+      AUTHOR_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -105,6 +137,98 @@ jobs:
             echo "Fix loop 한도 초과 ($MAX_ATTEMPTS 회)." >&2
             exit 1
           fi
+
+      # ── finding 추적 (tracking-enabled=true 일 때만) ──
+      # 리뷰가 APPROVED 로 정상 완료된 경우에만 도달(위 step 실패 시 job 중단).
+      # track-findings composite action 은 Pipeline 레포(reusable workflow 정의 레포)에
+      # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
+      # 체크아웃해야 한다. working-directory(self-hosted 실제 작업 경로)를 덮어쓰지
+      # 않도록 path 로 별도 디렉토리에 체크아웃한다.
+      # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
+      # 대상은 caller(영역) 레포다. 그 레포엔 actions/track-findings 가 없어 아래 상대경로
+      # uses 가 action not found 로 실패한다. 따라서 Pipeline 레포(repository/ref)를 명시해
+      # 정확히 체크아웃한다(종속성 제로 — 식별자는 input 으로 주입).
+      # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
+      # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
+      # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
+      # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
+      - name: Pipeline 체크아웃 (추적 action 용)
+        if: ${{ inputs.tracking-enabled }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline-repo }}
+          ref: ${{ inputs.pipeline-ref }}
+          path: .pipeline-action-checkout
+
+      - name: 추적용 App 토큰 발급
+        id: tracking-token
+        if: ${{ inputs.tracking-enabled }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTHOR_APP_ID }}
+          private-key: ${{ secrets.AUTHOR_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      # 상태파일 경로 + area 키 해석 — PR 로 결정론적 선택(교차 오염 방지).
+      # /review 가 단일 PR 리뷰 시 .omc/state/reviews/pr-<repo>-<number>.json 을 쓴다
+      #   (review.md 상수표: 단일 수동 PR = pr-<repo>-<number>.json, <repo>=레포명만·org 생략).
+      # review.yml 은 단일 pr-url 만 받으므로, 그 PR URL 에서 repo·number 를 파싱해
+      #   상태파일명을 직접 구성한다("가장 최근 .json" 휴리스틱 폐기 — working-directory 가
+      #   모든 영역 공통 단일 경로라 동시 리뷰 시 다른 영역 파일을 잡는 버그가 있었음).
+      # area 는 상태파일 prs.<area> 중 repo 필드가 area-repo 와 일치하는 키를 고른다
+      #   (첫 키 아님 — repo명≠모듈명이어도, 동일 파일에 여러 PR 이 있어도 정확히 매칭).
+      - name: 추적 상태파일 해석
+        id: track-resolve
+        if: ${{ inputs.tracking-enabled }}
+        env:
+          REVIEWS_DIR: .omc/state/reviews
+          PR_URL: ${{ inputs.pr-url }}
+        run: |
+          set -euo pipefail
+          # area-repo = 실제 PR 이 있는 <owner>/<repo> (PR URL 에서 추출).
+          # area 키(prs.<area>, 모듈명)와는 별개 — repo명≠모듈명이어도 분리 동작.
+          AREA_REPO=$(printf '%s' "$PR_URL" | sed -E 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+$#\1#')
+          echo "area-repo=${AREA_REPO}" >> "$GITHUB_OUTPUT"
+          # 레포명(org 제외) + PR 번호 추출 → 상태파일명 pr-<repo>-<number>.json 직접 구성.
+          PR_REPO_NAME=$(printf '%s' "$AREA_REPO" | cut -d/ -f2)
+          PR_NUMBER=$(printf '%s' "$PR_URL" | sed -E 's#^.*/pull/([0-9]+)$#\1#')
+          STATE_FILE=""
+          AREA=""
+          CANDIDATE="$REVIEWS_DIR/pr-${PR_REPO_NAME}-${PR_NUMBER}.json"
+          if [ -f "$CANDIDATE" ]; then
+            STATE_FILE="$CANDIDATE"
+            # prs.<area> 중 repo 필드가 area-repo 와 일치하는 키 선택(첫 키 아님 — 안전 매칭).
+            # $repo 는 jq 변수 — single quote 안 미확장 의도적.
+            # shellcheck disable=SC2016
+            AREA=$(jq -r --arg repo "$AREA_REPO" \
+              '(.prs // {}) | to_entries[] | select(.value.repo == $repo) | .key' \
+              "$STATE_FILE" 2>/dev/null | head -1 || true)
+            # repo 매칭 실패 시(스키마 누락 등) 단일 PR 파일이라 첫 키로 폴백.
+            if [ -z "${AREA:-}" ]; then
+              AREA=$(jq -r '(.prs // {}) | keys | .[0] // empty' "$STATE_FILE" 2>/dev/null || true)
+            fi
+            # 절대경로로 정규화(composite action 은 절대경로 권장).
+            STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+          else
+            echo "::warning::추적 상태파일 없음($CANDIDATE) — 추적 스킵"
+          fi
+          echo "state-file=${STATE_FILE:-}" >> "$GITHUB_OUTPUT"
+          echo "area=${AREA:-}" >> "$GITHUB_OUTPUT"
+          echo "추적 상태파일: ${STATE_FILE:-'(없음)'} / area: ${AREA:-'(없음)'}"
+
+      # 상태파일이 없으면(부재·파싱 실패) state-file 이 빈 값 → 추적 스킵(graceful).
+      - name: finding 추적 (이슈 생성)
+        if: ${{ inputs.tracking-enabled && steps.track-resolve.outputs.state-file != '' }}
+        uses: ./.pipeline-action-checkout/actions/track-findings
+        with:
+          state-file-path: ${{ steps.track-resolve.outputs.state-file }}
+          finding-source: code-review
+          owner: ${{ inputs.owner }}
+          area: ${{ steps.track-resolve.outputs.area }}
+          area-repo: ${{ steps.track-resolve.outputs.area-repo }}
+          major-label: ${{ inputs.major-label }}
+          minor-label: ${{ inputs.minor-label }}
+          gh-token: ${{ steps.tracking-token.outputs.token }}
 
       - name: 에스컬레이션 (실패 시)
         if: failure()
