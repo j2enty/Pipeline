@@ -13,6 +13,10 @@
 #                        운영 컨테이너와 포트 충돌을 피할 때 사용
 #   --non-interactive    프롬프트·체크리스트 스킵, App 자격을 환경변수에서 읽음
 #                        (off 가 기본 — 플래그 없으면 기존 대화형 동작 유지)
+#   --update-commands-only
+#                        secrets/variables/caller-yml/env 전부 스킵하고
+#                        config 파싱 + Claude 슬래시커맨드 배포만 실행 후 종료
+#                        (커맨드 템플릿 수정 후 빠른 로컬 재배포용)
 #
 # 비대화형 모드(--non-interactive)에서 읽는 환경변수:
 #   AUTHOR_APP_ID, AUTHOR_PEM(=PEM 파일 경로), AUTHOR_INSTALLATION_ID  — 필수
@@ -47,6 +51,7 @@ CONFIG_FILE=""              # 위치인자로 받음 (미지정 시 아래에서
 ENV_FILE=""                 # --env-file (미지정 시 아래에서 app/.env)
 PORT_VALUE="3000"           # --port
 NON_INTERACTIVE=false       # --non-interactive
+UPDATE_COMMANDS_ONLY=false  # --update-commands-only
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -62,6 +67,8 @@ while [ $# -gt 0 ]; do
       PORT_VALUE="$2"; shift 2 ;;
     --non-interactive)
       NON_INTERACTIVE=true; shift ;;
+    --update-commands-only)
+      UPDATE_COMMANDS_ONLY=true; shift ;;
     -*)
       echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
     *)
@@ -131,8 +138,15 @@ with open(path) as f:
     content = f.read()
 
 def get_scalar(key, default=''):
-    m = re.search(rf'^\s+{re.escape(key)}:\s*"?([^"#\n]+)"?\s*$', content, re.MULTILINE)
-    return m.group(1).strip().strip("'\"") if m else default
+    # 따옴표로 감싼 값 우선 매칭 — 내부 # 허용 (예: slack-channel: "#alerts")
+    mq = re.search(rf'^\s+{re.escape(key)}:\s*"([^"\n]*)"\s*$', content, re.MULTILINE)
+    if not mq:
+        mq = re.search(rf"^\s+{re.escape(key)}:\s*'([^'\n]*)'\s*$", content, re.MULTILINE)
+    if mq:
+        return mq.group(1).strip()
+    # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
+    m = re.search(rf'^\s+{re.escape(key)}:\s*([^"#\n]*)', content, re.MULTILINE)
+    return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 
 # 스칼라 값
 print(f"OWNER='{get_scalar('owner')}'")
@@ -148,8 +162,15 @@ print(f"SLACK_CHANNEL='{get_scalar('slack-channel')}'")
 ps = re.search(r'^pipeline:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
 pipeline_block = ps.group(1) if ps else ''
 def get_scalar_in(block, key, default=''):
-    m = re.search(rf'^\s+{re.escape(key)}:\s*"?([^"#\n]+)"?\s*$', block, re.MULTILINE)
-    return m.group(1).strip().strip("'\"") if m else default
+    # 따옴표로 감싼 값 우선 매칭 — 내부 # 허용
+    mq = re.search(rf'^\s+{re.escape(key)}:\s*"([^"\n]*)"\s*$', block, re.MULTILINE)
+    if not mq:
+        mq = re.search(rf"^\s+{re.escape(key)}:\s*'([^'\n]*)'\s*$", block, re.MULTILINE)
+    if mq:
+        return mq.group(1).strip()
+    # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
+    m = re.search(rf'^\s+{re.escape(key)}:\s*([^"#\n]*)', block, re.MULTILINE)
+    return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 print(f"PIPELINE_REPO='{get_scalar_in(pipeline_block, 'repo')}'")
 print(f"PIPELINE_REF='{get_scalar_in(pipeline_block, 'ref', 'main')}'")
 
@@ -204,6 +225,43 @@ print(f"MODULE_COUNT={len(names)}")
 
 # 영역 모듈 이름들을 JSON 배열로 (App 폴러 환경변수 MODULES 용)
 print(f"MODULES_JSON='{json.dumps(names, separators=(',', ':'))}'")
+
+# ── claude-commands 섹션 — Claude 슬래시커맨드 로컬 배포용 ────────────
+# claude-commands: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
+# (다른 섹션의 동명 키와 충돌 방지)
+cc = re.search(r'^claude-commands:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
+cc_block = cc.group(1) if cc else ''
+
+# enabled — 미지정 시 기본 false
+cc_en = re.search(r'^\s+enabled:\s*(\w+)', cc_block, re.MULTILINE)
+cc_enabled = cc_en.group(1).strip().lower() if cc_en else 'false'
+if cc_enabled not in ('true', 'false'):
+    cc_enabled = 'false'
+print(f"CMD_ENABLED={cc_enabled}")
+
+# 스칼라 항목들 — claude-commands 블록 내부에서만 탐색
+# (CLAUDE.md 설정 중복 방지 원칙: owner/project-number/slack-channel/parent-repo-name 은
+#  여기서 새로 만들지 않고 기존 값에서 셸 측에서 파생)
+print(f"CMD_PROJECT_NAME='{get_scalar_in(cc_block, 'project-name')}'")
+print(f"CMD_PROJECT_ID='{get_scalar_in(cc_block, 'project-id')}'")
+print(f"CMD_STATUS_FIELD_ID='{get_scalar_in(cc_block, 'status-field-id')}'")
+print(f"CMD_AREA_FIELD_ID='{get_scalar_in(cc_block, 'area-field-id')}'")
+print(f"CMD_REVIEWER_APP_ID='{get_scalar_in(cc_block, 'reviewer-app-id')}'")
+print(f"CMD_REVIEWER_BOT_SLUG='{get_scalar_in(cc_block, 'reviewer-bot-slug')}'")
+print(f"CMD_REVIEWER_TOKEN_KEY='{get_scalar_in(cc_block, 'reviewer-token-key')}'")
+print(f"CMD_SLACK_TOKEN_KEY='{get_scalar_in(cc_block, 'slack-token-key')}'")
+print(f"CMD_AUTHOR_LOGIN='{get_scalar_in(cc_block, 'author-login')}'")
+print(f"CMD_LOCAL_ACCOUNT='{get_scalar_in(cc_block, 'local-account')}'")
+print(f"CMD_DOCS_CONTEXT_DIR='{get_scalar_in(cc_block, 'docs-context-dir')}'")
+
+# area-ids 매핑 (영역명 → 해시) — area-ids: 하위의 `<name>: <hash>` 들을 추출
+# CMD_AREA_ID_<UPPER> 형태로 emit (예: Backend → CMD_AREA_ID_BACKEND)
+ai = re.search(r'^\s+area-ids:\s*\n((?:\s+\S+:\s*.+\n?)*)', cc_block, re.MULTILINE)
+area_ids_block = ai.group(1) if ai else ''
+for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_block, re.MULTILINE):
+    area_name = am.group(1).strip()
+    area_hash = am.group(2).strip().strip("'\"")
+    print(f"CMD_AREA_ID_{area_name.upper()}='{area_hash}'")
 
 PYEOF
 }
@@ -428,6 +486,119 @@ generate_package_lock() {
   fi
 }
 
+# ── Claude 슬래시커맨드 로컬 배포 ─────────────────────────────
+# templates/claude-commands/*.md.tmpl 을 config 값으로 치환해
+# 워크스페이스 루트($WORKING_DIR)의 .claude/commands/ 에 로컬 파일로 배포한다.
+#
+# caller-yml(install_caller_ymls)과의 차이:
+#   caller-yml = gh api PUT 으로 "원격 레포"에 커밋
+#   command    = 로컬 워크스페이스 파일 → 단순 로컬 write
+#
+# 원자성: 임시 디렉토리에 3개 전부 생성·검증 성공 후에야 대상 디렉토리로 이동
+#         (부분 실패로 일부만 갱신되는 상황 방지)
+install_claude_commands() {
+  # enabled=false 면 스킵 (로그만)
+  if [ "${CMD_ENABLED:-false}" != "true" ]; then
+    info "claude-commands.enabled=false — 슬래시커맨드 배포 스킵"
+    return 0
+  fi
+
+  local src="$REPO_ROOT/templates/claude-commands"
+  if [ ! -d "$src" ]; then
+    error "템플릿 디렉토리 없음: $src"
+    return 1
+  fi
+
+  # 배포 대상 — working-directory 재사용 (별도 dir 항목 안 만듦)
+  if [ -z "${WORKING_DIR:-}" ]; then
+    error "claude-commands 배포 실패 — working-directory 가 비어있습니다 (배포 경로 산출 불가)"
+    return 1
+  fi
+  local dest_dir="$WORKING_DIR/.claude/commands"
+
+  # ── 기존 재사용 값에서 파생 (설정 중복 방지) ──────────────────
+  # __ORG__            ← OWNER
+  # __PARENT_REPO_NAME__ ← PARENT_REPO(<owner>/<repo>)의 repo 부분
+  # __PROJECT_NUMBER__ ← PROJECT_NUMBERS_JSON 의 첫 요소
+  # __SLACK_CHANNEL__  ← SLACK_CHANNEL
+  local org="$OWNER"
+  local parent_repo_name="${PARENT_REPO##*/}"   # 'a/b' → 'b'
+  local project_number
+  project_number=$(printf '%s' "${PROJECT_NUMBERS_JSON:-[]}" | python3 -c "import sys,json; a=json.load(sys.stdin); print(a[0] if a else '')")
+  local slack_channel="${SLACK_CHANNEL:-}"
+
+  echo "  Claude 슬래시커맨드 배포 중... (→ $dest_dir)"
+
+  # 임시 작업 디렉토리 — 원자적 배포용
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  # 함수 종료 시 임시 디렉토리 정리 (성공/실패 무관)
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  # sed 치환 인자 배열 — 모든 placeholder 1:1 매핑
+  #   값에 '/'(예: Docs/claude/context)·'&' 가 들어갈 수 있으므로 sed 구분자는 '|' 사용.
+  #   치환값 내부의 '|'·'&'·'\' 는 이스케이프 (sed 메타문자 안전).
+  #   placeholder 가 '__' 로 끝나고 결합형 suffix 는 '_' 로 시작하므로
+  #   (__REVIEWER_TOKEN_KEY___PRIVATE_KEY) 경계가 정확히 보존된다.
+  esc() { printf '%s' "$1" | sed -e 's/[\|&\\]/\\&/g'; }
+
+  local sed_args=(
+    -e "s|__ORG__|$(esc "$org")|g"
+    -e "s|__PARENT_REPO_NAME__|$(esc "$parent_repo_name")|g"
+    -e "s|__PROJECT_NAME__|$(esc "$CMD_PROJECT_NAME")|g"
+    -e "s|__PROJECT_NUMBER__|$(esc "$project_number")|g"
+    -e "s|__PROJECT_ID__|$(esc "$CMD_PROJECT_ID")|g"
+    -e "s|__STATUS_FIELD_ID__|$(esc "$CMD_STATUS_FIELD_ID")|g"
+    -e "s|__AREA_FIELD_ID__|$(esc "$CMD_AREA_FIELD_ID")|g"
+    -e "s|__REVIEWER_APP_ID__|$(esc "$CMD_REVIEWER_APP_ID")|g"
+    -e "s|__REVIEWER_BOT_SLUG__|$(esc "$CMD_REVIEWER_BOT_SLUG")|g"
+    -e "s|__REVIEWER_TOKEN_KEY__|$(esc "$CMD_REVIEWER_TOKEN_KEY")|g"
+    -e "s|__SLACK_CHANNEL__|$(esc "$slack_channel")|g"
+    -e "s|__SLACK_TOKEN_KEY__|$(esc "$CMD_SLACK_TOKEN_KEY")|g"
+    -e "s|__AUTHOR_LOGIN__|$(esc "$CMD_AUTHOR_LOGIN")|g"
+    -e "s|__LOCAL_ACCOUNT__|$(esc "$CMD_LOCAL_ACCOUNT")|g"
+    -e "s|__DOCS_CONTEXT_DIR__|$(esc "$CMD_DOCS_CONTEXT_DIR")|g"
+    -e "s|__AREA_ID_BACKEND__|$(esc "${CMD_AREA_ID_BACKEND:-}")|g"
+    -e "s|__AREA_ID_ADMIN__|$(esc "${CMD_AREA_ID_ADMIN:-}")|g"
+    -e "s|__AREA_ID_FRONTEND__|$(esc "${CMD_AREA_ID_FRONTEND:-}")|g"
+    -e "s|__AREA_ID_IOS__|$(esc "${CMD_AREA_ID_IOS:-}")|g"
+    -e "s|__AREA_ID_ANDROID__|$(esc "${CMD_AREA_ID_ANDROID:-}")|g"
+    -e "s|__AREA_ID_DESIGN__|$(esc "${CMD_AREA_ID_DESIGN:-}")|g"
+  )
+
+  # 3개 템플릿 치환 → 임시 디렉토리에 생성
+  local tmpl base out
+  for tmpl in review.md.tmpl kickoff.md.tmpl plan.md.tmpl; do
+    if [ ! -f "$src/$tmpl" ]; then
+      error "템플릿 파일 없음: $src/$tmpl"
+      return 1
+    fi
+    base="${tmpl%.tmpl}"   # review.md.tmpl → review.md
+    out="$tmp_dir/$base"
+    sed "${sed_args[@]}" "$src/$tmpl" > "$out"
+  done
+
+  # self-check — 미치환 placeholder 잔존 검사 (배포 전 차단)
+  local leftover
+  leftover=$(grep -rl '__[A-Z_]*__' "$tmp_dir" 2>/dev/null || true)
+  if [ -n "$leftover" ]; then
+    error "치환 누락 — 배포본에 placeholder 잔존:"
+    grep -rohn '__[A-Z_]*__' "$tmp_dir" | sort -u >&2
+    error "config 의 claude-commands 항목을 확인하세요. 배포 중단."
+    return 1
+  fi
+
+  # 원자적 이동 — 검증 통과한 임시본을 대상 디렉토리로 일괄 배치
+  mkdir -p "$dest_dir"
+  for tmpl in review.md.tmpl kickoff.md.tmpl plan.md.tmpl; do
+    base="${tmpl%.tmpl}"
+    mv -f "$tmp_dir/$base" "$dest_dir/$base"
+    echo "    ✅ $base"
+  done
+
+  info "Claude 슬래시커맨드 배포 완료 ($dest_dir)"
+}
+
 # ── 메인 ─────────────────────────────────────────────────────
 main() {
   echo ""
@@ -452,6 +623,16 @@ main() {
   eval "$(parse_config)"
   info "프로젝트: $OWNER (parent: $PARENT_REPO)"
   info "모듈 수: $MODULE_COUNT"
+
+  # ── --update-commands-only — 커맨드만 빠른 재배포 후 종료 ──────────
+  # secrets/variables/caller-yml/env 전부 스킵 (config 파싱은 이미 수행됨)
+  if [ "$UPDATE_COMMANDS_ONLY" = "true" ]; then
+    section "Claude 슬래시커맨드 배포 (전용 모드)"
+    install_claude_commands
+    echo ""
+    info "커맨드 재배포 완료 — 다른 단계는 스킵됨 (--update-commands-only)"
+    exit 0
+  fi
 
   # pipeline.repo 필수 — 호출자 yml 의 uses: 경로에 들어감
   if [ -z "$PIPELINE_REPO" ]; then
@@ -521,6 +702,10 @@ main() {
   # App .env 생성
   section "App 환경변수 생성"
   generate_env
+
+  # Claude 슬래시커맨드 배포 — 워크스페이스 1개라 모듈 루프 밖 1회 호출
+  section "Claude 슬래시커맨드 배포"
+  install_claude_commands
 
   # package-lock.json 생성
   section "npm install"

@@ -1,0 +1,772 @@
+---
+description: parent 이슈의 영역별 sub-issue를 병렬 executor로 실행해 테스트 그린 PR까지 제출
+argument-hint: <parent-issue-url-or-number> [--agent|--team|--serial] [--restart] [--bot]
+allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Skill, AskUserQuestion
+---
+
+<!-- 이 파일은 Pipeline install.sh가 배포하는 자동 생성본입니다. 직접 편집하지 마세요.
+     수정은 Pipeline 레포 templates/claude-commands/kickoff.md.tmpl 에서 하고,
+     install.sh --update-commands-only 로 재배포하세요. -->
+
+# /kickoff — __PROJECT_NAME__ 영역별 코드 작업 파이프라인
+
+`/plan`이 만든 영역별 sub-issue를 입력으로 받아 영역별 executor를 지정 런타임으로 실행해요. 각 영역이 자체 테스트 그린을 증빙한 PR을 **Bot Review** 상태로 제출하고, 모든 영역이 PR을 낸 직후 **`/review` 파이프라인을 자동 체이닝**해요. Claude 리뷰를 통과한 영역은 **In Review**로 올려 사용자 hands-on 검증으로 넘겨요.
+
+## 사용법
+
+```
+/kickoff <parent-issue-url-or-number>                   # 런타임 자동 추천
+/kickoff <parent-issue-url-or-number> --agent           # Agent 병렬 강제
+/kickoff <parent-issue-url-or-number> --team            # OMC team (tmux)
+/kickoff <parent-issue-url-or-number> --serial          # Agent 순차
+/kickoff <parent-issue-url-or-number> --restart         # 상태 파일 무시, 처음부터
+/kickoff <parent-issue-url-or-number> --bot             # GHA 봇 실행 모드 (AskUserQuestion 스킵)
+```
+
+예:
+- `/kickoff https://github.com/__ORG__/__PARENT_REPO_NAME__/issues/2`
+- `/kickoff 2 --serial`
+- `/kickoff 2 --restart`
+- `/kickoff 2 --bot`
+
+## 사전 조건
+
+- Parent 이슈에 **`/plan` 이미 실행 완료** (본문에 "📋 Plan 산출물" 섹션 존재)
+- 처리 대상 sub-issue가 **Prep Project에서 `Status=In Progress`**로 이동되어 있어야 함 (G1)
+- Backend sub-issue가 존재하면 Backend도 `In Progress`여야 함 (G1-a)
+- 로컬 `gh auth status` 통과, `__LOCAL_ACCOUNT__` PAT 활성 (M1)
+- Docs 레포가 `Docs/` 하위에 클론되어 있어야 함
+
+<!-- PROJECT-CONFIG-START -->
+<!-- 이 섹션(상수 + Area ID 참조표)은 __PROJECT_NAME__ 프로젝트 고유 설정이다. Pipeline 자산화(Phase 2) 시
+     이 블록 내부의 식별자가 placeholder 치환 대상이 된다. 섹션 내용·외부 동작은 현재 불변. -->
+## 상수
+
+| 이름 | 값 |
+|---|---|
+| Org | `__ORG__` |
+| 대표 레포 | `__PARENT_REPO_NAME__` |
+| Project 번호 | `__PROJECT_NUMBER__` (Prep) |
+| Project ID | `__PROJECT_ID__` |
+| Status 필드 ID | `__STATUS_FIELD_ID__` (Backlog/Planning/Ready/**In Progress**/**Bot Review**/**In Review**/Done) |
+| Area 필드 ID | `__AREA_FIELD_ID__` |
+| 스펙 | `.omc/specs/deep-interview-kickoff-design.md` (본문 C1~C7 + **Addendum G1~G8 — 본문과 상충 시 Addendum 우선**) |
+| 상태 파일 | `.omc/state/sessions/<slug>.json` |
+| 컨텍스트 문서 | `__DOCS_CONTEXT_DIR__/<slug>-status.md` |
+
+## Area ID 참조표 (Prep Project Area 필드)
+
+- Backend: `__AREA_ID_BACKEND__`
+- Admin: `__AREA_ID_ADMIN__`
+- Frontend: `__AREA_ID_FRONTEND__`
+- iOS: `__AREA_ID_IOS__`
+- Android: `__AREA_ID_ANDROID__`
+- Design: `__AREA_ID_DESIGN__` (`/kickoff` 대상 제외)
+<!-- PROJECT-CONFIG-END -->
+
+## 런타임 추천 룰 (G: 영역 수 = In Progress + Design 제외)
+
+| G | 추천 플래그 | 호출 방식 |
+|---|---|---|
+| 1 | `--serial` | `Agent(subagent_type="oh-my-claudecode:executor")` 순차 |
+| 2~3 | `--agent` | `Agent()` 병렬 (한 메시지에 N개) |
+| 4 | `--team` | `Skill("oh-my-claudecode:team")` (tmux 분리로 parent context 압박 완화) |
+| 5 | `--ultra` | `Skill("oh-my-claudecode:ultrawork")` (태스크 풀 — 단일 기능에 5영역 동시 의존 시 활성화) |
+
+> __PROJECT_NAME__ 대상 영역은 최대 5개(Backend/Admin/Frontend/iOS/Android — Design 제외). 2026-04-30 Frontend 분리(Admin 신규)로 4→5 로 확장. G≥6 은 구조적으로 발생 불가. 단일 기능이 5영역 모두 건드리는 케이스는 드물지만 (예: 인증·딥링크처럼 풀스택 변경 동반), 발생 시 `--ultra` 활성화.
+
+## 수행 순서
+
+### 1. 입력 파싱
+
+- `$ARGUMENTS`에서 parent URL 또는 번호 추출
+- 런타임 플래그 중 하나 추출 (`--agent|--team|--serial`), 없으면 `RUNTIME_FLAG=null`
+- `--restart` 플래그 추출
+- `--bot` 플래그 추출 → `BOT_MODE=true` (GHA 자동화 실행 컨텍스트)
+- 번호만 주어지면 `__PARENT_REPO_NAME__` 레포 기준으로 해석
+- 두 개 이상의 런타임 플래그가 함께 오면 fail-fast (사용자 실수 방지)
+
+**`--bot` 플래그 동작**:
+- 모든 `AskUserQuestion` 호출 스킵 → 추천값/첫 번째 옵션 자동 선택
+- 상태 파일 감지 시 자동 `[재개]` 선택
+- 상태 파일 초기화 시 `"triggeredBy": "bot"` 기록
+- 에스컬 코멘트에 "🤖 봇 자동 실행 중 발생" 명시
+
+### 2. Parent 이슈 조회 및 plan 산출물 확인
+
+```bash
+gh issue view <parent-N> --repo __ORG__/__PARENT_REPO_NAME__ --json number,title,body,url,state
+```
+
+- `state != "OPEN"` → 중단 ("parent 이슈가 닫혀 있음")
+- 본문에 **"📋 Plan 산출물"** 섹션이 없으면 중단 + 안내:
+  > 이 parent에 `/plan` 산출물이 없음. `/plan <parent-url>` 먼저 실행 필요.
+- 본문에서 `Slug:` 추출 (또는 "Plan 산출물" 섹션의 `**Slug:**` 라인 파싱)
+- `SLUG` 저장
+
+### 3. Sub-issue 발견 및 영역 매핑
+
+```bash
+# GitHub 네이티브 sub-issues API
+gh api /repos/__ORG__/__PARENT_REPO_NAME__/issues/<parent-N>/sub_issues
+```
+
+각 sub-issue에 대해:
+- `repository.name`으로 영역 판별 (`Backend`/`Admin`/`Frontend`/`iOS`/`Android`/`Design`)
+- **Design sub-issue는 즉시 대상에서 분리** (카운트·실행·리포트 모두 제외) — C6
+- Prep Project의 Status·Area 필드 값 조회
+
+```bash
+# Project item + Status · Area 필드 조회
+gh api graphql -f query='
+query($owner: String!, $number: Int!, $issueId: ID!) {
+  organization(login: $owner) {
+    projectV2(number: $number) {
+      items(first: 100) {
+        nodes {
+          id
+          content { ... on Issue { id } }
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}' -f owner=__ORG__ -F number=__PROJECT_NUMBER__ -f issueId=<sub-issue-node-id>
+```
+
+- 각 sub-issue별로 `{ area, repo, number, nodeId, status, assignees, branch:"feature/#<N>-<SLUG>" }` 구조체로 정리
+
+### 4. Status 필터링 (G1)
+
+영역별 sub-issue 상태를 다음 분류로 나눔:
+
+- **대상**: `Status=In Progress`
+- **스킵(리포트 표기)**: `Status=Ready`, `Status=Backlog`, sub-issue closed, `Status=Bot Review`·`In Review`·`Done` (이미 처리됨 — `/review` 사이클 또는 사용자 검증 단계)
+
+**G1-b 가드**: 대상이 0건이면 **중단 + 안내**:
+
+> 처리할 In Progress sub-issue 없음. Prep Project에서 대상 카드를 In Progress로 이동 후 재실행.
+
+### 5. Backend 게이트 체크 (G1-a)
+
+- Backend sub-issue 존재 + `Status=Ready` + 다른 영역 중 `In Progress` 존재 → **중단 + 안내**:
+
+  > Backend sub-issue(__ORG__/Backend#<N>)가 Ready 상태. 인터페이스 계약 문제 방지 위해 Backend도 In Progress로 올리고 재실행 권장. 의도적 우회는 향후 `--skip-backend-gate` 플래그로 지원 예정(M3+).
+
+- Backend sub-issue 자체가 없음 → 게이트 생략, 모든 In Progress 영역 동시 시작 (스펙 C1)
+- Backend `In Progress` → Backend를 **선행 영역**으로 표시 (8단계에서 먼저 실행)
+
+### 6. 상태 파일 감지 + 재개 분기 (G4)
+
+```bash
+STATE_FILE=".omc/state/sessions/${SLUG}.json"
+```
+
+**분기 A. `--restart` 플래그 있음**
+→ "처음부터" 경로로 직행 (아래 분기 C 동작)
+
+**분기 B. `STATE_FILE` 존재 + `--restart` 없음**
+→ `--bot` 플래그 있으면 자동 `[재개]` 선택 (AskUserQuestion 스킵)
+→ `--bot` 없으면 `AskUserQuestion`: "이전 실행 상태 감지됨 — 어떻게 할까요?"
+   - `[재개]` → 기존 `STATE_FILE` 로드, 영역별 재개 매트릭스(G4) 적용:
+
+     | 이전 상태 | 동작 |
+     |---|---|
+     | PR 있음 + `Status=Bot Review` | 스킵 (PR 생성 완료 — `/review` 사이클에서 처리) |
+     | PR 있음 + `Status=In Review` | 스킵 (사용자 hands-on 검증 단계) |
+     | PR 있음 + 머지 (Done) | 스킵 |
+     | PR 없음 + 브랜치 있음 + `blocked` 라벨 | 라벨 제거 → 브랜치 체크아웃 → 자동 rebase → executor 이어서 (G4-b) |
+     | PR 없음 + 브랜치 있음 + 라벨 없음 | 세션 크래시 간주. 브랜치 체크아웃 + 자동 rebase → executor 이어서 |
+     | PR 없음 + 브랜치 없음 | 처음부터 (브랜치 생성부터) |
+     | `Status=Ready/Backlog` · 이슈 close | 스킵 (사용자 의사 존중) |
+
+   - `[처음부터]` → 분기 C 진입
+   - `[취소]` → 종료
+
+**분기 C. "처음부터" 또는 `--restart`**
+→ `AskUserQuestion`: "기존 산출물을 어떻게 할까요?" (G4-c)
+   - `[정리]` → 영역별 원격·로컬 브랜치 삭제 + 열린 PR close (코멘트: "`/kickoff --restart` 선택으로 재생성됨")
+   - `[유지]` → 기존 브랜치·PR 유지하고 새 브랜치로 진행 (이름 충돌 시 `-v2`, `-v3` suffix 자동)
+   - `[취소]` → 분기 B의 이전 AskUserQuestion으로 복귀 (또는 종료)
+
+`--restart`가 명시된 경우: 분기 C에서 기본 `[정리]`로 자동 선택(no-op).
+
+**분기 D. `STATE_FILE` 없음**
+→ 바로 처음부터 실행 (AskUserQuestion 없음)
+
+**G4-b. 자동 rebase**
+재개 경로에서 브랜치 체크아웃 후 `git fetch origin && git rebase origin/develop`. 충돌 발생 시 실패 유형 `즉시 에스컬 / 머지 충돌`로 분류하고 에스컬 플로우 발동.
+
+### 7. 런타임 결정 및 사용자 승인
+
+- **영역 수 `G`** = In Progress 대상 수 (Design 제외, Backend 포함)
+- 플래그가 있으면 그걸 사용 (override)
+- 플래그가 없으면 위 런타임 추천 룰로 `RECOMMENDED` 계산
+- `--bot` 플래그 있으면 `RECOMMENDED` 런타임으로 자동 진행 (AskUserQuestion 스킵)
+- `--bot` 없으면 `AskUserQuestion`:
+  > `{G}개 영역 → {RECOMMENDED} 런타임 추천. 진행할까요?`
+  > `[진행]` `[다른 런타임 선택]` `[취소]`
+- "다른 런타임 선택" 시 options `[--agent, --team, --serial]`로 재질문
+
+**G12 주의**: Backend 선행 + 병렬 전환 시점에도 런타임 모드는 변경하지 않음 (시작 시 결정된 모드 유지). Backend 단독 기간엔 단일 실행, Backend PR 생성 후 나머지 N-1개를 같은 모드로 병렬 실행.
+
+### 8. Executor 오케스트레이션 (G8 하이브리드)
+
+#### 8-a. 상태 파일 초기화 / 갱신
+
+```json
+{
+  "schemaVersion": "1.0",
+  "slug": "<SLUG>",
+  "parent": {"url": "...", "repo": "__ORG__/__PARENT_REPO_NAME__", "number": <N>, "title": "..."},
+  "runtime": {"mode": "agent", "flagOverride": null, "decidedAt": "...", "triggeredBy": "user" | "bot"},
+  "areas": {
+    "<area>": {
+      "subIssue": {"repo": "...", "number": 0, "nodeId": "..."},
+      "branch": "feature/#<N>-<SLUG>",
+      "status": "pending",
+      "pr": null,
+      "retry": {"fixing": {"count":0,"limit":5}, "transient": {"count":0,"limit":3}},
+      "lastError": null, "escalation": null,
+      "startedAt": null, "completedAt": null
+    }
+  },
+  "lastCommand": "/kickoff ...",
+  "createdAt": "...", "updatedAt": "...",
+  "events": [{"ts":"...","type":"run_start","runtime":"agent"}]
+}
+```
+
+파일 쓰기는 원자적 (temp + `mv`). 매 상태 전이·retry 증가·에스컬·SIGINT 시 갱신.
+
+#### 8-b. 실행 단계 (영역별)
+
+**Backend 선행 (있을 때)**:
+1. Backend executor 1회 실행 (아래 `8-c` 영역 단위 실행 블록)
+2. Backend 상태가 `pr_created`가 되면 → 나머지 In Progress 영역 병렬 기동
+3. Backend가 `escalated`로 끝나면 → Backend만 에스컬 발송, **나머지 영역은 실행 안 함**
+   (Backend 계약 없이 FE/iOS/Android 진행하면 G1-a 근거가 깨짐)
+
+**Backend 없음**:
+- In Progress 영역 모두 런타임 플래그에 따라 병렬/직렬 실행
+
+**런타임별 호출 형태**:
+
+```python
+# --serial
+for area in in_progress_areas:
+    run_area(area)  # 순차
+
+# --agent
+# 한 메시지에서 Agent() N개 병렬 호출
+# [Agent(area=FE, ...), Agent(area=iOS, ...), Agent(area=Android, ...)]
+
+# --team
+Skill("oh-my-claudecode:team", task_list=[...], worker_count=N)
+```
+
+#### 8-c. 영역 단위 실행 블록 (`run_area`)
+
+```
+1. executor 호출
+   Agent(
+     description="<area> 구현",
+     subagent_type="oh-my-claudecode:executor",
+     prompt=EXECUTOR_PROMPT  # 아래 템플릿
+   )
+
+2. 반환 파싱 → { status, branch, testSummary, commits[], errorSummary? }
+
+3. status == "ready_for_pr":
+   → verifier 호출
+     Agent(
+       description="<area> verifier",
+       subagent_type="oh-my-claudecode:verifier",
+       prompt=VERIFIER_PROMPT
+     )
+   → verdict == "pass":
+       → PR 생성 (G6 템플릿)
+       → Status=Bot Review 전환 (GraphQL mutation — `/review` 대기)
+       → blocked 라벨 제거 (있었다면)
+       → 상태 파일: areas[area].status="pr_created", pr={...}
+   → verdict == "fail":
+       → fixing 카운트 +1
+       → fixing < 5 → executor 재호출 (verifier reasons를 추가 입력)
+       → fixing ≥ 5 → G2 에스컬 (category="fixing")
+
+4. status == "escalated":
+   → G2 에스컬 플로우 (9단계)
+```
+
+#### 8-d. Executor 프롬프트 템플릿 (`EXECUTOR_PROMPT`)
+
+> 공통 규칙(`git -C <영역>` 호출, 커밋 스타일)은 __PROJECT_NAME__ 루트 `CLAUDE.md` 에, 영역별 테스트 전략은 각 영역 `CLAUDE.md` 에 위임. 프롬프트에는 이 문서들이 "이미 로드됨"을 전제로 작업 지시만 남김.
+
+```
+당신은 __PROJECT_NAME__ <영역> 영역 executor입니다.
+
+## 입력
+- Sub-issue: __ORG__/<영역>#<sub-N>
+- 플랜: Docs/claude/plans/<slug>-<영역>.md (먼저 읽기)
+- 브랜치: feature/#<sub-N>-<slug>
+
+## 절차
+1. 브랜치 체크아웃(없으면 생성) + rebase origin/develop
+2. 플랜대로 구현 → 커밋 → push
+3. 테스트 실행 (영역 CLAUDE.md 테스트 섹션 참고)
+4. 테스트 실패 시: 자체 수정(fixing) → 일시 장애면 짧게 재시도(transient) → 해결 불가면 errorSummary.category 분류(fixing/transient/immediate) 후 JSON 반환
+
+## 반환 (JSON only, 중간 상태 텍스트 금지)
+{
+  "status": "ready_for_pr" | "escalated",
+  "branch": "feature/#<sub-N>-<slug>",
+  "testSummary": {"passed": N, "failed": N, "skipped": N, "command": "..."},
+  "commits": ["<sha>: <msg>"],
+  "errorSummary": null | {"category": "fixing|transient|immediate", "message": "...", "rawTail": "..."}
+}
+
+## 금지: 플랜 밖 수정
+```
+
+**재시도 정책은 오케스트레이터 소유** — executor는 category 라벨만 달아 반환하고, 상한(fixing 5회 / transient 3회 + 2s→4s→8s 백오프 / immediate 즉시) 적용은 8-c 루프가 수행.
+
+#### 8-e. Verifier 프롬프트 템플릿 (`VERIFIER_PROMPT`)
+
+```
+당신은 __PROJECT_NAME__ <영역> 영역의 독립 verifier입니다. executor가 스스로 통과했다고 주장한 결과를 재검증합니다.
+
+## 입력
+- 브랜치: <branch>  ( diff: git diff origin/develop...HEAD )
+- Executor testSummary: <JSON>
+- 플랜 문서: Docs/claude/plans/<slug>-<영역>.md
+- Parent 요구사항: Docs/claude/requirements/<slug>.md
+
+## 체크리스트
+1. diff가 플랜의 "구현 태스크 리스트"와 일치하는가?
+2. 플랜의 "인수 기준"을 diff가 충족하는가?
+3. testSummary.failed == 0인가? 테스트 실제로 돌렸는가? (테스트 파일 존재 확인)
+4. 플랜에 없는 범위 확장·부수 수정이 섞여 있지 않은가?
+5. 커밋 메시지가 해당 레포 스타일을 따르는가?
+
+## 반환 (JSON)
+{
+  "verdict": "pass" | "fail",
+  "reasons": ["<실패 사유 또는 통과 시 빈 배열>"]
+}
+```
+
+#### 8-f. 원격 동기화 가드 (G15) — PR 생성 직전 필수
+
+executor가 내부적으로 push에 실패했는데도 `status=ready_for_pr` 로 반환하는 경우가 있음 (2026-04-20 Android 사례). 오케스트레이터가 PR 생성 직전에 로컬-원격 동기화를 직접 확인:
+
+```bash
+# 로컬 브랜치가 원격보다 앞서 있는 커밋 수
+AHEAD=$(git -C <영역> rev-list origin/<branch>..<branch> --count 2>/dev/null || echo "err")
+
+if [ "$AHEAD" = "err" ]; then
+  # 원격 브랜치가 아예 없음 → 최초 push
+  git -C <영역> push -u origin <branch> || {
+    # push 실패 → immediate 에스컬
+    ESCAL_CATEGORY="immediate"
+    ESCAL_SUBCATEGORY="원격 동기화 실패"
+    goto_escalation
+  }
+elif [ "$AHEAD" -gt 0 ]; then
+  # 미푸시 커밋 존재 → 보정 push
+  git -C <영역> push origin <branch> || {
+    ESCAL_CATEGORY="immediate"
+    ESCAL_SUBCATEGORY="원격 동기화 실패"
+    goto_escalation
+  }
+  # 재확인
+  AHEAD=$(git -C <영역> rev-list origin/<branch>..<branch> --count)
+  if [ "$AHEAD" -gt 0 ]; then
+    ESCAL_CATEGORY="immediate"
+    ESCAL_SUBCATEGORY="원격 동기화 실패"
+    goto_escalation
+  fi
+fi
+# AHEAD == 0 → PR 생성으로 진입
+```
+
+이유: executor의 `status=ready_for_pr` 자체 주장만 믿고 PR 생성하면, 불완전 diff로 PR이 만들어져 리뷰어가 잘못된 변경분을 보게 됨. 가드 비용은 `rev-list` 1회 + 조건부 push 1회로 미미.
+
+#### 8-g. PR 생성 (verdict=pass 시 + 8-f 동기화 확인 후)
+
+간소화된 템플릿(G16)으로 PR 본문 구성 → `gh pr create` → 반환 URL 저장:
+
+**톤 가이드**: 개요는 친근한 존댓말("~ 추가했어요 / ~ 적용했어요") 기본. 기술 세부는 **변경** 섹션의 bullet으로 분리. 영역 간 문체 편차 방지.
+
+```bash
+gh pr create \
+  --repo __ORG__/<영역> \
+  --base develop \
+  --head feature/#<sub-N>-<slug> \
+  --title "<parent-title> — <영역>" \
+  --body "$(cat <<'EOF'
+## 📌 개요
+<2~3줄, "~ 추가했어요/적용했어요" 톤. 기술 세부는 변경 섹션으로>
+
+Closes __ORG__/<영역>#<sub-N>
+Parent: __ORG__/__PARENT_REPO_NAME__#<parent-N>
+
+## 📋 변경
+- <bullet 3~5개 — 구현 가치 기준>
+
+## ✅ 테스트
+| 항목 | 결과 |
+|---|---|
+<표>
+
+\`<실제 실행된 command>\` → **N passed, N failed, N skipped**
+
+<필요시 주석 (예: "Compose UI 테스트는 에뮬레이터 미실행")>
+
+## 🔗 참고
+- 플랜: \`Docs/claude/plans/<slug>-<영역>.md\`
+- 세션: \`.omc/state/sessions/<slug>.json\`
+EOF
+)"
+```
+
+**템플릿 축약 근거** (파일럿 3 PR 실측 기반):
+- `<details>` 로그 블록 — 3 PR 모두 executor 자발적 생략. 제거
+- `🤖 자동 생성` 푸터 — 리뷰어에 무가치(kickoff 최종 리포트로 이관). 제거
+- `📋 변경 내용` → `📋 변경` — 간결화
+- 개요 톤 가이드 추가 — Frontend/iOS 1줄 빈약함 방지
+- "실제 실행된 command" 강조 — iOS `id=...` placeholder 잔존 bug 재발 방지
+
+PR 생성 후 **Sub-issue AC 체크박스 체크** (G17):
+
+`/plan`이 sub-issue 본문에 넣은 `## AC` 섹션의 체크박스(`- [ ]`)를 전부 `- [x]`로 치환. verifier=pass 확정 상태이므로 모든 AC가 구현됐다고 간주. 다른 섹션(`## 요약`, `## 참고` 등)은 건드리지 않음. 이미 체크된 박스는 그대로 — idempotent.
+
+```bash
+BODY=$(gh issue view <sub-N> --repo __ORG__/<영역> --json body --jq .body)
+NEW_BODY=$(printf '%s\n' "$BODY" | awk '
+/^## AC([[:space:]]|$)/ { in_ac=1; print; next }
+/^## / && in_ac { in_ac=0 }
+in_ac { gsub(/- \[ \]/, "- [x]") }
+{ print }
+')
+gh issue edit <sub-N> --repo __ORG__/<영역> --body "$NEW_BODY"
+```
+
+**실패 시**: 에스컬 아님. 경고 로그만 남기고 Status 전환은 계속 진행 (체크박스는 편의 기능이라 실패가 PR 품질 게이트를 막지 않음).
+
+PR 생성 후 **Status=Bot Review 전환** (Claude `/review` 대기 단계):
+
+```bash
+# Status option ID 동적 조회
+BOT_REVIEW_ID=$(gh project field-list __PROJECT_NUMBER__ --owner __ORG__ --format json \
+  | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="Bot Review") | .id')
+
+# item id는 3단계에서 이미 보관됨
+gh api graphql -f query='
+mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+  updateProjectV2ItemFieldValue(input: {
+    projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+    value: { singleSelectOptionId: $optionId }
+  }) { projectV2Item { id } }
+}' -f projectId="__PROJECT_ID__" \
+  -f itemId="<ITEM_ID>" \
+  -f fieldId="__STATUS_FIELD_ID__" \
+  -f optionId="$BOT_REVIEW_ID"
+```
+
+> `In Review` 전환은 `/review` 가 APPROVE 판정한 뒤에만 발생 (review.md 7-h 참고). `/kickoff` 는 `Bot Review`까지만 책임.
+
+### 9. 에스컬 플로우 (G2 + G3-b)
+
+executor가 `status=escalated`로 반환했거나, fixing/transient 상한을 초과한 경우:
+
+#### 9-a. `blocked` 라벨 보장 + 부착
+
+```bash
+gh label create blocked \
+  --repo __ORG__/<영역> \
+  --color "d73a4a" \
+  --description "/kickoff 에스컬 발생 — 사용자 대응 필요" \
+  2>/dev/null || true
+
+gh issue edit <sub-N> --repo __ORG__/<영역> --add-label blocked
+```
+
+#### 9-b. 에스컬 코멘트 발송 (G2-b 템플릿)
+
+```bash
+# sub-issue의 assignees 조회
+ASSIGNEES=$(gh api /repos/__ORG__/<영역>/issues/<sub-N> \
+  --jq '[.assignees[].login | "@" + .] | join(" ")')
+
+COMMENT=$(cat <<EOF
+## 🚨 \`/kickoff\` 중단 — <영역>
+
+${ASSIGNEES:+${ASSIGNEES} 확인 요청.}
+
+**기능:** <slug>  (parent: __ORG__/__PARENT_REPO_NAME__#<parent-N>)
+**실패 유형:** \`<카테고리> / <subcategory>\` (<count>/<limit>)
+**에러 메시지:** <errorSummary.message 1~2줄>
+**상세 로그:** 상태 파일 \`rawTail\` 참조 — \`.omc/state/sessions/<slug>.json\`
+
+**실행 컨텍스트**
+- 브랜치: \`feature/#<sub-N>-<slug>\`
+- 재시도: <카테고리> <count>/<limit> ✖
+- 이전 PR 시도: <PR URL or "없음">
+
+**재개 방법**
+1. 위 에러 메시지·상세 로그로 원인 진단 후 수정 커밋
+2. \`/kickoff <parent-url>\` 재실행
+3. 상태 파일 감지 → AskUserQuestion [재개 / 처음부터 / 취소] — "재개" 시 실패 영역만 다시 실행
+
+**참고**
+- 플랜: Docs/claude/plans/<slug>-<영역>.md
+
+---
+*자동 발송됨.*
+EOF
+)
+
+COMMENT_URL=$(gh issue comment <sub-N> --repo __ORG__/<영역> --body "$COMMENT")
+
+# Slack __SLACK_CHANNEL__ 이중 발송 (보조 채널 — 발송 실패해도 파이프라인 차단 안 함)
+# 메시지는 짧게: 제목 + 컨텍스트 1~3줄 + GitHub 링크. 풀 내용은 위 GitHub 코멘트가 기록.
+SLACK_CONTEXT=$(printf '기능: %s\n실패 유형: %s %s/%s\n에러: %s' \
+  "<slug>" "<카테고리>" "<count>" "<limit>" "<errorSummary.message 1줄>")
+.omc/scripts/slack-notify.sh "/kickoff 중단 — <영역>" "$COMMENT_URL" "$SLACK_CONTEXT"
+```
+
+**진단 힌트**: executor의 `errorSummary.message` + `rawTail` 이 이미 구체적이므로 일반화 힌트 표 없음. 사용자는 에러 메시지로 검색·진단. 2026-04-20 파일럿 실측: 표 9항목 중 실제 에스컬(Android JDK 미설치) 매치 0건.
+
+**Slack 이중 발송 규칙**:
+- 메시지 형식: 제목 + 컨텍스트 (실패 유형·에러 요약) + GitHub 코멘트 링크. 풀 컨텍스트 중복 금지 (GitHub 이 영구 기록)
+- `__SLACK_TOKEN_KEY__` 미설정 시 헬퍼가 graceful skip → 파이프라인 차단 없음
+- Slack 발송 실패도 차단 없음 (보조 채널)
+- GitHub 코멘트 발송이 1차, Slack 은 항상 그 뒤 호출 (순서 고정 — Slack 먼저 가면 사용자가 빈 링크 클릭 위험)
+
+#### 9-c. 상태 파일 업데이트
+
+```json
+"areas": {
+  "<area>": {
+    "status": "escalated",
+    "escalation": {
+      "category": "fixing|transient|immediate",
+      "subcategory": "<한글>",
+      "commentUrl": "<이슈 코멘트 URL>",
+      "commentedAt": "...",
+      "blockedLabelAdded": true
+    },
+    "lastError": "<stderr 말미 20줄>"
+  }
+},
+"events": [..., {"ts":"...", "type":"escalation", "area":"<area>", "category":"..."}]
+```
+
+#### 9-d. 영역별 독립 원칙 (G3)
+
+- 한 영역 에스컬 시 **나머지 영역은 계속 실행**
+- 단 Backend 선행 영역이 에스컬되면 나머지 영역은 실행하지 않음 (8-b 참조)
+- 최종 리포트에 혼합 상태 그대로 표기
+
+### 10. `/review` 자동 체이닝 (G18)
+
+모든 영역 `run_area` 루프가 끝난 직후 (성공·혼합·에스컬 전부 포함) 조건을 만족하면 `/review` 파이프라인을 같은 컨텍스트에서 이어서 실행해요. 의도: 사용자가 `/kickoff` 한 번 실행으로 "개발 → 자동 리뷰 → 사용자 검증 대기(`In Review`)" 까지 논스톱 진입.
+
+#### 10-a. 체이닝 조건
+
+다음을 **모두** 만족할 때만 `/review` 자동 호출:
+
+1. 최소 1개 영역이 `status=pr_created` (리뷰할 PR 존재)
+2. Parent 모드 (단일 sub-issue만 처리한 경우에도 parent-url이 있으면 parent 모드로 chain)
+3. 사용자가 `--no-review` 플래그를 주지 않았음 (향후 옵션 — 현재는 무조건 체이닝)
+4. **`--bot` 플래그가 없음** — `--bot` 실행 시 체이닝 스킵. GHA `auto-review.yml` 이 Bot Review 상태 감지 후 독립적으로 `/review` 를 트리거함
+
+아래 경우에는 **체이닝 생략**하고 이유 로그 + 최종 리포트에 안내:
+
+- 모든 영역이 `escalated` 또는 `skipped` → 리뷰 대상 PR 없음
+- Backend 선행이 `escalated` → 8-b에 따라 나머지 영역 실행 안 됐고 Backend만 에스컬. 리뷰할 PR 0~1개지만 cross-area critic 무의미. 단일 Backend PR만 있는 경우엔 체이닝 진행 (1-a 조건 충족)
+
+#### 10-b. Skill 호출
+
+```
+Skill(
+  skill="review",
+  args="<parent-issue-url>"
+)
+```
+
+- `parent-issue-url` 은 1단계에서 파싱한 값 그대로 사용 (번호→URL 변환 필요 시 `https://github.com/__ORG__/__PARENT_REPO_NAME__/issues/<N>`)
+- `/review` 는 자체 상태 파일(`.omc/state/reviews/<slug>.json`)을 만들고, `/kickoff` 세션 파일은 건드리지 않음 (review.md C8, G1)
+- `/review` 가 실패해도 `/kickoff` 는 이미 PR 생성까지 책임 완료 상태 — 최종 리포트에만 "리뷰 체이닝 실패" 로 표기
+
+#### 10-c. 체이닝 실패 처리
+
+`/review` Skill 호출 자체가 실패 (권한·네트워크·Skill not found 등) 하면:
+
+- `events` 에 `{"type": "review_chain_failed", "reason": "..."}` 추가
+- 최종 리포트에 "⚠️ `/review` 자동 체이닝 실패 — 수동 `/review <parent-url>` 실행 필요" 문구 포함
+- `/kickoff` 자체는 성공 종료 (PR 생성은 이미 완료)
+
+#### 10-d. 체이닝 결과 통합
+
+`/review` 가 종료되면 `/review` 가 남긴 상태 파일을 읽어서 `/kickoff` 최종 리포트(12단계)에 영역별 리뷰 판정을 같이 표시해요:
+
+```bash
+REVIEW_STATE=".omc/state/reviews/${SLUG}.json"
+if [ -f "$REVIEW_STATE" ]; then
+  REVIEW_VERDICTS=$(jq -r '.prs | to_entries[] | "\(.key): \(.value.verdict)"' "$REVIEW_STATE")
+fi
+```
+
+리뷰 판정이 `approved` 인 영역은 `/review` 가 직접 `Status=In Review` 로 전환 (review.md 7-h 참고). `/kickoff` 는 여기서 Status 를 다시 건드리지 않아요.
+
+### 11. Context md 생성 (G7)
+
+세션 종료 직전(성공·혼합·에스컬·SIGINT 모두 포함) **항상** 로컬에서 생성:
+
+```
+__DOCS_CONTEXT_DIR__/<slug>-status.md
+```
+
+템플릿:
+
+```markdown
+# [status] <slug> — <parent 이슈 제목>
+
+**최종 업데이트**: <ISO-8601 UTC>
+**Parent**: https://github.com/__ORG__/__PARENT_REPO_NAME__/issues/<parent-N>
+**실행 런타임**: <agent|team|serial>
+
+## WHY
+<parent 본문 요약 + requirements 기반 1~2 단락>
+
+## 의사 결정
+- <plan 문서에서 추출한 주요 결정>
+
+## 영역별 진행 상태
+| 영역 | Status | PR | 비고 |
+|---|---|---|---|
+| Backend | `Bot Review` | #12 | PR 생성 완료 · `/review` 대기/진행 중 |
+| Frontend | `In Progress` (blocked) | — | 플레이키 3회 · <코멘트 URL> |
+
+> `Bot Review → In Review` 전환은 `/review` APPROVE 시 자동. REQUEST_CHANGES는 `Bot Review` 유지.
+
+## 남은 작업
+- [ ] <영역> <원인> 해결 후 `/kickoff` 재실행
+
+## 블로커
+- <영역>: <원인 요약>
+
+## 참고
+- 상태 파일: `.omc/state/sessions/<slug>.json`
+- 플랜: Docs/claude/plans/<slug>-*.md
+```
+
+**Docs 커밋 트리거 (G7-c)**: 다음 중 하나 이상 충족 시만 Docs 레포에 커밋·push:
+
+- (a) 한 영역 이상 `status=escalated`
+- (b) SIGINT 캡처로 중단
+- (c) 혼합 상태 (pr_created + escalated 또는 pr_created + skipped 동시 존재)
+
+커밋 방식:
+
+```bash
+# 브랜치 존재 시 재사용, 없으면 생성. `cd` 금지 — `git -C Docs` 통일.
+git -C Docs checkout context/<slug> 2>/dev/null || git -C Docs checkout -b context/<slug>
+git -C Docs add claude/context/<slug>-status.md
+git -C Docs commit -m "[context] <parent-title> 상태 업데이트 (#<parent-N>)"
+git -C Docs push -u origin context/<slug>
+```
+
+PR 생성 없음 — 브랜치 직접 push. 클린 성공(전부 pr_created, 스킵·에스컬 0건)은 Docs 커밋 생략.
+
+### 12. 최종 리포트
+
+사용자에게 요약 출력 (`/review` 자동 체이닝 결과 포함):
+
+```
+/kickoff 완료 — <parent-title>
+
+Slug: <slug>
+런타임: <mode>
+세션: .omc/state/sessions/<slug>.json
+
+영역별 상태 (/kickoff):
+  ✅ Frontend   PR #12 생성         [feature/#1-<slug>]  Status=Bot Review
+  ✅ iOS        PR #13 생성         [feature/#1-<slug>]  Status=Bot Review
+  🔴 Android    escalated (빌드 오류)  [feature/#1-<slug>]  → <코멘트 URL>
+  ⏳ Backend    스킵 (Status=Ready)
+
+/review 자동 체이닝: 실행됨 (.omc/state/reviews/<slug>.json)
+
+영역별 리뷰 판정:
+  ✅ Frontend   APPROVE          Status=In Review (사용자 검증 대기)
+  ❌ iOS        REQUEST_CHANGES  Status=Bot Review 유지 · review-blocked 라벨
+
+종합 리뷰 (critic): concerns
+  - [major] FE/iOS 버전 표시 위치 불일치
+  parent 코멘트: <URL>
+
+경고 (해당 시):
+  - Android 에스컬 — 리뷰 대상에서 제외됨. 수정 후 /kickoff 재실행.
+  - iOS REQUEST_CHANGES — 코드 수정 후 /review <pr-url> 재실행 필요.
+
+Context 문서:
+  - __DOCS_CONTEXT_DIR__/<slug>-status.md  (Docs 커밋: 예/생략)
+
+▶ 다음:
+  - In Review PR (Frontend): 사용자 hands-on 검증 → 머지
+  - Bot Review + REQUEST_CHANGES (iOS): 수정 후 /review <pr-url> 재실행
+  - escalated (Android): 코멘트 안내 따라 조치 후 /kickoff <parent-url>
+```
+
+`/review` 체이닝이 실패했거나 조건 미충족으로 건너뛴 경우 위 `/review 자동 체이닝` 블록을 다음 문구로 대체:
+
+```
+/review 자동 체이닝: 생략 (<이유>)
+  → 수동 실행: /review <parent-url>
+```
+
+## 원칙 (지켜야 할 것)
+
+- **Status In Progress만 처리** (G1) — Ready·Backlog는 스킵. 자동 전환 안 함
+- **Status `In Progress → Bot Review`는 PR 생성 직후 자동 전환** (G1) — `/kickoff` 가 담당. `Bot Review → In Review` 전환은 `/review` APPROVE 후 `/review` 가 담당
+- **Sub-issue AC 체크박스 자동 체크** (G17) — verifier=pass + PR 생성 확정 후 `## AC` 섹션의 `- [ ]`를 전부 `- [x]`로 갱신. 다른 섹션 영향 없음. 실패해도 Status 전환은 계속
+- **Backend 게이트는 계약 문제** (G1-a) — Ready Backend + In Progress 타 영역이면 중단
+- **영역별 독립 실패** (G3) — 한 영역 에스컬돼도 다른 영역은 계속 (Backend 선행 제외)
+- **실패 시 자동 복구 금지 (C7)** — 중간 단계 실패 시 즉시 중단 + 상태 저장 + 에스컬
+- **재시도 3분류 고정** (C3) — 수정 5회 / 일시 3회+백오프 / 즉시 에스컬. 사용자 override 없음
+- **PR 생성 ≠ 머지** — `/kickoff`는 "PR 생성 + `Bot Review` 전환 + `/review` 체이닝까지"가 책임. 머지는 사용자 hands-on 검증 후 (G4-a, G18)
+- **`/review` 자동 체이닝** (G18) — 모든 영역 `run_area` 종료 후 리뷰 가능한 PR이 1개 이상이면 `/review <parent-url>` 자동 호출. 체이닝 실패는 `/kickoff` 자체 실패로 취급하지 않음
+- **Design 영역은 항상 제외** (C6) — 카운트·실행·리포트 모두
+- **Parent Status는 건드리지 않음** — 사용자 소유 (plan.md와 일관)
+- **상태 파일 원자적 쓰기** — temp + `mv`, partial write 방지
+
+## 자주 하는 실수 (주의!)
+
+- `Agent()` 병렬 호출 시 같은 메시지 내에 여러 tool_use 블록을 넣어야 실제 병렬. 순차 메시지는 직렬 실행됨
+- Status option ID는 레포·프로젝트마다 다를 수 있음 → **동적 조회** (`gh project field-list`). 하드코딩 금지
+- sub-issue 조회 시 `gh api ... /sub_issues` 응답의 `id`는 **database id** (integer). `node_id`와 구분
+- 모든 git 명령은 `git -C <영역>` 형태로 호출 (compound `cd <영역> && git ...` 금지). 권한 샌드박스가 `Bash(git -C <영역> *)` 와일드카드만 허용
+- PR 생성 후 Status 전환이 실패하면 PR은 남고 Status만 In Progress — **재실행 시 G4 매트릭스**에 따라 "PR 있음 + Status≠Bot Review·In Review"는 스킵 안 될 수도 있으므로, Status 전환 실패는 에스컬(`immediate`)로 처리 권장
+- `Bot Review` 와 `In Review` 소유권 혼동 금지 — `Bot Review` 전환은 `/kickoff` (PR 생성 직후), `In Review` 전환은 `/review` (APPROVE 후). `/kickoff` 가 `In Review` 로 직접 전환하지 않음
+- `/review` 자동 체이닝 시 Skill 호출은 `Skill(skill="review", args="<parent-url>")` 형태. `skill="oh-my-claudecode:review"` 는 OMC 플러그인의 다른 skill (혼동 금지)
+- `--agent|--team|--serial` 두 개 이상 동시 지정 시 fail-fast (조용히 무시 금지)
+- executor 반환이 JSON 아닌 경우(모델 환각) → 재시도 1회 + 그래도 실패 시 `immediate / 반환 포맷 오류` 에스컬
+
+## Minor 격차 (M1 구현 중 발견 시 결정)
+
+아래 항목은 스펙에서 명시적으로 확정되지 않았고, 구현 중 실제 케이스가 나타나면 그때 처리:
+
+- **G9** 브랜치 이름 충돌 (상태파일 없고 브랜치만 있는 경우 — 현재는 executor가 rebase 시도 후 충돌이면 `immediate` 에스컬)
+- **G10** 플래그와 영역 수 불일치 (예: 5영역에 `--serial`) — 현재는 사용자 선택 존중, 경고만
+- **G11** `--restart` 시 기존 산출물 정리 범위 확장 — G4-c의 3옵션으로 시작, 필요 시 세분화
+- **G12** Backend 선행 후 런타임 재계산 — 현재는 초기 결정 모드 고정. 재계산 원하면 `--restart` 후 다시
+- **G13** executor 무한루프 타임아웃 — 현재는 없음. OMC Agent() 기본 타임아웃에 의존. 필요 시 추후 추가

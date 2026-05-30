@@ -58,3 +58,55 @@ pipeline:
   repo: <owner>/Pipeline
   # 핀할 ref (브랜치 또는 태그, 안정화 후 v1.0 등으로 핀 권장)
   ref: main
+
+claude-commands:
+  # Claude 슬래시커맨드(/review, /kickoff, /plan)를 워크스페이스 루트의
+  # .claude/commands/ 에 로컬 파일로 배포할지 여부.
+  # install.sh가 templates/claude-commands/*.md.tmpl 을 아래 값으로 치환해 배포한다.
+  # 배포 대상 디렉토리 = project.working-directory + "/.claude/commands"
+  # (별도 경로 항목 없음 — working-directory 재사용)
+  #
+  # 아래 일부 값(__ORG__/__PARENT_REPO_NAME__/__PROJECT_NUMBER__/__SLACK_CHANNEL__)은
+  # project 섹션에서 자동 파생되므로 여기 다시 적지 않는다 (설정 중복 방지).
+  enabled: false
+
+  # 프로젝트 표시 이름 (커맨드 본문에서 프로젝트명으로 사용)
+  project-name: ""
+
+  # GitHub Project v2 노드 ID (PVT_... 형식)
+  project-id: ""
+  # Project v2 의 Status 필드 ID (PVTSSF_... 형식)
+  status-field-id: ""
+  # Project v2 의 Area(영역) 필드 ID (PVTSSF_... 형식)
+  area-field-id: ""
+
+  # Reviewer 봇 App ID (숫자)
+  reviewer-app-id: ""
+  # Reviewer 봇 slug (예: my-review-bot — '[bot]' 접미사 없는 순수 slug)
+  reviewer-bot-slug: ""
+  # Reviewer 봇 토큰 키 prefix — 환경변수/secret 이름의 공통 접두어
+  #   예: MY_REVIEW_BOT → MY_REVIEW_BOT_APP_ID, MY_REVIEW_BOT_PRIVATE_KEY 등
+  reviewer-token-key: ""
+
+  # Slack webhook 토큰 키 (환경변수/secret 이름)
+  slack-token-key: ""
+
+  # PR 작성 봇(Author)의 GitHub 로그인 이름 (slug, '[bot]' 없이)
+  author-login: ""
+  # 로컬 머신에서 git push 할 때 쓰는 개인 GitHub 계정
+  local-account: ""
+  # 프로젝트 컨텍스트 문서 디렉토리 (워크스페이스 루트 기준 상대 경로)
+  #   예: Docs/claude/context
+  docs-context-dir: ""
+
+  # 영역(모듈)명 → Project v2 Area 옵션 ID(해시) 매핑.
+  # 커맨드가 sub-issue 의 Area 필드를 세팅할 때 사용.
+  # 키 이름은 모듈명과 동일하게 — install.sh가 대문자로 바꿔 placeholder 와 매칭
+  #   (예: Backend → __AREA_ID_BACKEND__).
+  area-ids:
+    Backend: ""
+    Admin: ""
+    Frontend: ""
+    iOS: ""
+    Android: ""
+    Design: ""
