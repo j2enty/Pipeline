@@ -125,8 +125,8 @@ it "RS-6 single 폴백 → 파일명 구성"
   rm -rf "$dir"; pass
 )
 
-# RS-7 — single 모드 sentinel 유효 → 채택 (parent.url 교차검증 없음)
-it "RS-7 single sentinel 유효 → 채택"
+# RS-7 — single 모드 sentinel basename 일치 → 채택 (수정 3: basename 교차검증)
+it "RS-7 single sentinel basename 일치 → 채택"
 (
   dir="$(mktemp -d)"
   write_state_json "$dir/pr-Backend-42.json" ""
@@ -135,8 +135,25 @@ it "RS-7 single sentinel 유효 → 채택"
   rc=0
   out="$(MODE=single VERDICT_STATE_DIR="$dir" PR_REPO="org/Backend" PR_NUMBER="42" REVIEW_STATE_SENTINEL="$sentinel" \
     bash "$RESOLVE_SH" single 2>/dev/null)" || rc=$?
-  assert_eq "0" "$rc" "single sentinel exit 0 아님" || { rm -rf "$dir"; return; }
+  assert_eq "0" "$rc" "single sentinel(basename 일치) exit 0 아님" || { rm -rf "$dir"; return; }
   assert_eq "$dir/pr-Backend-42.json" "$out" "single sentinel 채택 실패" || { rm -rf "$dir"; return; }
+  rm -rf "$dir"; pass
+)
+
+# RS-7b — single 모드 sentinel 이 다른 PR 파일을 가리킴(basename 불일치) → indeterminate
+it "RS-7b single sentinel basename 불일치 → indeterminate"
+(
+  dir="$(mktemp -d)"
+  # sentinel 이 다른 PR(Frontend-99) 의 파일을 가리키는 오염 시나리오
+  write_state_json "$dir/pr-Frontend-99.json" ""
+  write_state_json "$dir/pr-Backend-42.json" ""
+  sentinel="$dir/.sentinel"
+  printf '%s\n' "$dir/pr-Frontend-99.json" > "$sentinel"
+  rc=0
+  out="$(MODE=single VERDICT_STATE_DIR="$dir" PR_REPO="org/Backend" PR_NUMBER="42" REVIEW_STATE_SENTINEL="$sentinel" \
+    bash "$RESOLVE_SH" single 2>/dev/null)" || rc=$?
+  assert_eq "1" "$rc" "오염 single sentinel 인데 indeterminate(exit 1) 아님" || { rm -rf "$dir"; return; }
+  assert_eq "" "$out" "오염 single sentinel 인데 경로 출력됨" || { rm -rf "$dir"; return; }
   rm -rf "$dir"; pass
 )
 

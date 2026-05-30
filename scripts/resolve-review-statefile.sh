@@ -51,9 +51,16 @@ set -uo pipefail
 
 MODE="${1:-}"
 
-# 절대경로 정규화 — 디렉토리/파일을 안전하게 절대경로화
+# 절대경로 정규화 — 디렉토리/파일을 안전하게 절대경로화.
+# [수정 5-b] realpath -m が있으면 '..'·심볼릭 정규화까지 수행한다.
+# 없는 환경(macOS 기본 BSD realpath 는 -m 미지원)에서는 기존 cd+pwd 방식으로 폴백.
+# 한계: cd+pwd 는 '..' 를 완전 정규화하지 못하는 경우가 있다 — realpath 권장 환경은
+# GNU coreutils(ubuntu-latest runner 포함)이므로 self-hosted macOS 에서만 기존 방식 사용.
 to_abs_path() {
   local p="$1"
+  if realpath -m "$p" 2>/dev/null; then
+    return
+  fi
   case "$p" in
     /*) printf '%s\n' "$p" ;;
     *)  printf '%s\n' "$(cd "$(dirname "$p")" 2>/dev/null && pwd)/$(basename "$p")" ;;
@@ -94,8 +101,11 @@ SENTINEL="${REVIEW_STATE_SENTINEL:-}"
 
 # ── ① sentinel 신뢰 경로 ─────────────────────────────────────
 if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ]; then
-  # sentinel 첫 줄 = /review 가 기록한 상태파일 절대경로
-  SENTINEL_TARGET="$(head -n 1 "$SENTINEL" 2>/dev/null || true)"
+  # sentinel 첫 줄 = /review 가 기록한 상태파일 절대경로.
+  # [수정 5-a] 후행 CR(\r)·공백 trim — CRLF 환경(Windows runner 등)에서 기록된
+  # sentinel 을 Linux runner 가 읽을 때 '\r' 이 경로에 붙어 파일 탐색에 조용히 실패하는
+  # 사고를 방지한다. tr 로 제거 후 xargs 로 양끝 공백도 제거.
+  SENTINEL_TARGET="$(head -n 1 "$SENTINEL" 2>/dev/null | tr -d '\r' | xargs 2>/dev/null || true)"
   if [ -n "$SENTINEL_TARGET" ] && [ -f "$SENTINEL_TARGET" ]; then
     case "$SENTINEL_TARGET" in
       *.json)
@@ -111,9 +121,19 @@ if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ]; then
           echo "resolve-review-statefile.sh: sentinel 의 .parent.url($SENTINEL_PARENT) 가 기대 PARENT_URL($PARENT_URL) 과 불일치 — 오염 의심, indeterminate" >&2
           exit 1
         else
-          # single 모드는 parent.url 이 없으므로(.parent=null) 경로 존재만으로 신뢰.
-          to_abs_path "$SENTINEL_TARGET"
-          exit 0
+          # [수정 3] single 모드 sentinel 교차검증 — basename 이 기대 파일명과 일치해야 채택.
+          # 기존: 경로 존재만으로 신뢰 → 오염 sentinel(다른 PR 의 파일을 가리킴)이 그대로 통과.
+          # 수정: sentinel 이 가리킨 파일의 basename 이 "pr-${REPO_NAME}-${PR_NUMBER}.json" 과
+          # 정확히 일치해야 채택한다. 불일치면 폴백하지 않고 indeterminate(fail-closed) — critic
+          # 모드 오염 처리와 동일 원칙.
+          expected_basename="pr-${PR_REPO##*/}-${PR_NUMBER}.json"
+          actual_basename="$(basename "$SENTINEL_TARGET")"
+          if [ "$actual_basename" = "$expected_basename" ]; then
+            to_abs_path "$SENTINEL_TARGET"
+            exit 0
+          fi
+          echo "resolve-review-statefile.sh: single sentinel basename(${actual_basename}) 이 기대값(${expected_basename}) 과 불일치 — 오염 의심, indeterminate" >&2
+          exit 1
         fi
         ;;
       *)
