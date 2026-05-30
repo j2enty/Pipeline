@@ -1,0 +1,34 @@
+# 테스트용 더미 config — 종속성 제로 (실제 프로젝트 식별자 없음)
+# install.sh 함수 단위 테스트에서만 사용. 어떤 실제 레포도 가리키지 않는다.
+
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+  slack-channel: "#test-alerts"
+
+modules:
+  - name: ModuleA
+    ci-workflow-name: ModuleA CI
+  - name: ModuleB
+    ci-workflow-name: ModuleB CI
+    strict-review-bot-check: false
+
+modules-ignore:
+  - ModuleIgnored
+
+reviewer:
+  enabled: true
+
+pipeline:
+  repo: test-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+
+tracking:
+  enabled: true
+  major-label: "test-major"
+  minor-label: "test-minor"
