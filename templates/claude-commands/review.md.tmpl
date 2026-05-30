@@ -902,6 +902,31 @@ Status 전환 실패가 있었다면 경고 블록을 추가:
   - Backend: Bot Review → In Review 실패 (<error>). 사용자가 수동 전환 필요.
 ```
 
+### 12. 상태파일 sentinel 기록 (세션 종료 직전 — 항상 실행)
+
+**모든 모드(단일 PR / parent / critic-only)에서, 위 작업이 끝나고 `STATE_FILE` 이 최종 확정된 직후 항상 실행한다.**
+
+GHA 자동화(특히 `critic.yml`)는 self-hosted 공유 디렉토리(`.omc/state/reviews/`)에서 "이번 `/review` 실행이 쓴 상태파일"을 직접 알 방법이 없어, 과거엔 `.parent.url` 매칭 + marker 로 **추측**했다. 이 추측을 없애기 위해, 환경변수 `REVIEW_STATE_SENTINEL` 에 sentinel 파일의 절대경로가 주입돼 있으면, 이번 실행이 최종적으로 쓴 `STATE_FILE` 의 **절대경로**를 그 sentinel 파일에 한 줄로 기록한다.
+
+```bash
+# 세션 종료 직전 — STATE_FILE 확정 후 항상.
+# REVIEW_STATE_SENTINEL 이 설정돼 있을 때만 기록(로컬 실행이면 미설정 → 스킵 → 하위호환).
+if [ -n "${REVIEW_STATE_SENTINEL:-}" ]; then
+  # STATE_FILE 은 working-directory 기준 상대경로일 수 있으므로 절대경로로 정규화.
+  # (소비자 critic.yml / track-findings action 은 다른 working-dir 에서 실행됨)
+  if [ -f "$STATE_FILE" ]; then
+    STATE_FILE_ABS=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+    printf '%s\n' "$STATE_FILE_ABS" > "$REVIEW_STATE_SENTINEL"
+  fi
+fi
+```
+
+규칙:
+- **항상 실행** — 성공·혼합·에스컬·SIGINT·critic-only 어느 종료 경로든, `STATE_FILE` 이 확정되면 기록한다. (단일 PR 모드의 `pr-<repo>-<number>.json`, parent/critic-only 모드의 `<slug>.json` 모두 포함.)
+- `REVIEW_STATE_SENTINEL` 미설정(로컬 수동 실행 등) → **스킵**. 환경변수 없으면 아무 것도 안 함 → 기존 동작 불변(하위호환).
+- `STATE_FILE` 이 아직 안 만들어졌으면(매우 이른 중단) sentinel 기록도 스킵 — 소비자는 sentinel 부재로 보고 추측매칭 폴백한다(fail-closed 보존).
+- sentinel 에는 **절대경로 한 줄만** 기록한다(소비자가 `head -n 1` 로 읽음).
+
 ## 원칙 (지켜야 할 것)
 
 - **판정 + Status 전환까지가 책임** (C10, R9) — `/review`는 머지·코드 수정은 안 하지만, APPROVE 판정 시 `Bot Review → In Review` Status 전환은 수행 (M2 스테이지 분리 이후)

@@ -312,8 +312,9 @@ jobs:
           # 낡은 pass 로 머지되던 치명 버그를 차단한다.
           # marker 경로는 같은 job(self-hosted) 내 다음 step 과 GITHUB_ENV 로 공유한다.
           # ($$/PID 는 step 마다 다른 셸이라 공유 불가 → GITHUB_ENV 로 명시 전달. run-id 로 동시 실행 충돌 회피.)
-          # 주의: 완벽한 해결은 /review 가 "이번 실행 상태파일 경로/run-id"를 명시 출력하는 것(review.md 변경, 범위 밖).
-          #       marker 는 그 전까지의 실용적 fail-closed 방어다.
+          # (이슈 #9 해결) 결정적 식별은 아래 REVIEW_STATE_SENTINEL 로 /review 가 자기가 쓴
+          # 상태파일 경로를 직접 기록하게 했다. marker(-nt)는 그 위에 남은 "이번 실행이 그 파일을
+          # 실제로 새로 썼는지" 확인하는 보조 fail-closed 방어다(둘은 직교 — 식별 vs 신선도).
           mkdir -p "$VERDICT_STATE_DIR"
           CRITIC_RUN_MARKER="$VERDICT_STATE_DIR/.critic-run-marker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           touch "$CRITIC_RUN_MARKER"
