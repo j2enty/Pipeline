@@ -4,11 +4,9 @@ argument-hint: <pr-url-or-parent-issue-url-or-number> [--restart] [--bot] [--cod
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, AskUserQuestion
 ---
 
-<!-- 이 파일은 Pipeline install.sh가 배포하는 템플릿입니다. 직접 편집 금지.
-     placeholder 목록: __ORG__, __PARENT_REPO_NAME__, __PROJECT_NAME__, __PROJECT_NUMBER__,
-       __PROJECT_ID__, __STATUS_FIELD_ID__, __REVIEWER_APP_ID__, __REVIEWER_BOT_SLUG__,
-       __REVIEWER_TOKEN_KEY__, __AUTHOR_LOGIN__, __DOCS_CONTEXT_DIR__, __SLACK_CHANNEL__, __SLACK_TOKEN_KEY__
-     install.sh의 install_claude_commands()가 pipeline-config.yml 값으로 치환합니다. -->
+<!-- 이 파일은 Pipeline install.sh가 배포하는 자동 생성본입니다. 직접 편집하지 마세요.
+     수정은 Pipeline 레포 templates/claude-commands/review.md.tmpl 에서 하고,
+     install.sh --update-commands-only 로 재배포하세요. -->
 
 # /review — __PROJECT_NAME__ PR 리뷰 파이프라인
 

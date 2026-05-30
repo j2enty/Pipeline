@@ -4,12 +4,9 @@ argument-hint: <parent-issue-url-or-number> [--agent|--team|--serial] [--restart
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Skill, AskUserQuestion
 ---
 
-<!-- 이 파일은 Pipeline install.sh가 배포하는 템플릿입니다. 직접 편집 금지.
-     placeholder 목록: __ORG__, __PARENT_REPO_NAME__, __PROJECT_NAME__, __PROJECT_NUMBER__,
-       __PROJECT_ID__, __STATUS_FIELD_ID__, __AREA_FIELD_ID__,
-       __AREA_ID_BACKEND__, __AREA_ID_ADMIN__, __AREA_ID_FRONTEND__, __AREA_ID_IOS__, __AREA_ID_ANDROID__, __AREA_ID_DESIGN__,
-       __LOCAL_ACCOUNT__, __DOCS_CONTEXT_DIR__, __SLACK_CHANNEL__, __SLACK_TOKEN_KEY__
-     install.sh의 install_claude_commands()가 pipeline-config.yml 값으로 치환합니다. -->
+<!-- 이 파일은 Pipeline install.sh가 배포하는 자동 생성본입니다. 직접 편집하지 마세요.
+     수정은 Pipeline 레포 templates/claude-commands/kickoff.md.tmpl 에서 하고,
+     install.sh --update-commands-only 로 재배포하세요. -->
 
 # /kickoff — __PROJECT_NAME__ 영역별 코드 작업 파이프라인
 
