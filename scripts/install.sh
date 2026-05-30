@@ -17,13 +17,20 @@
 #                        secrets/variables/caller-yml/env 전부 스킵하고
 #                        config 파싱 + Claude 슬래시커맨드 배포만 실행 후 종료
 #                        (커맨드 템플릿 수정 후 빠른 로컬 재배포용)
+#   --reapply            secrets/.env/커맨드/npm 전부 스킵하고
+#                        variables + 추적 라벨 + 호출자 yml 만 멱등 재적용 후 종료.
+#                        운영 App 가동 중 부분 재적용용 — app/.env(WEBHOOK_SECRET) 불변 보장.
+#   --rotate-webhook-secret
+#                        기존 .env 의 WEBHOOK_SECRET 을 보존하지 않고 새로 생성(의도적 회전).
+#                        풀 install 시에만 의미 있음(--reapply 는 .env 자체를 안 건드림).
+#                        회전 후 양쪽 GitHub App 의 webhook secret 재설정 필요.
 #
 # 비대화형 모드(--non-interactive)에서 읽는 환경변수:
 #   AUTHOR_APP_ID, AUTHOR_PEM(=PEM 파일 경로), AUTHOR_INSTALLATION_ID  — 필수
 #   REVIEWER_APP_ID, REVIEWER_PEM, REVIEWER_INSTALLATION_ID, REVIEWER_BOT_LOGIN
 #                        — reviewer.enabled=true 일 때만 필수
 #   SLACK_WEBHOOK_URL    — 옵션 (없으면 빈 값)
-#   WEBHOOK_SECRET       — 옵션 (없으면 자동 생성)
+#   WEBHOOK_SECRET       — 옵션 (기존 .env 값 보존 > 환경변수 > 자동 생성 순)
 #
 # 예시:
 #   ./scripts/install.sh my-config.yml
@@ -52,6 +59,8 @@ ENV_FILE=""                 # --env-file (미지정 시 아래에서 app/.env)
 PORT_VALUE="3000"           # --port
 NON_INTERACTIVE=false       # --non-interactive
 UPDATE_COMMANDS_ONLY=false  # --update-commands-only
+REAPPLY=false               # --reapply (variables+labels+caller-yml만 멱등 재적용)
+ROTATE_WEBHOOK_SECRET=false # --rotate-webhook-secret (WEBHOOK_SECRET 의도적 회전)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -69,6 +78,10 @@ while [ $# -gt 0 ]; do
       NON_INTERACTIVE=true; shift ;;
     --update-commands-only)
       UPDATE_COMMANDS_ONLY=true; shift ;;
+    --reapply)
+      REAPPLY=true; shift ;;
+    --rotate-webhook-secret)
+      ROTATE_WEBHOOK_SECRET=true; shift ;;
     -*)
       echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
     *)
@@ -334,6 +347,56 @@ resolve_pem_path() {
   return 1
 }
 
+# ── 기존 .env 의 WEBHOOK_SECRET 읽기 ──────────────────────────
+# ENV_FILE 이 존재하면 `WEBHOOK_SECRET=` 라인의 값을 추출(없으면 빈 문자열).
+# 운영 App 가동 중 재실행 시 webhook 서명 secret 이 회전되어 수신이 깨지는 것을 막기 위함.
+# 값이 비어있으면(키만 있고 값 없음) 경고 — resolve_webhook_secret 가 새로 생성하도록 빈 값 반환.
+read_existing_webhook_secret() {
+  [ -f "$ENV_FILE" ] || { printf '%s' ""; return 0; }
+  local line value
+  # `^WEBHOOK_SECRET=` 앵커 — 첫 매칭 라인만. 값은 '=' 이후 전체(공백·특수문자 포함 가능)
+  line="$(grep -m1 '^WEBHOOK_SECRET=' "$ENV_FILE" 2>/dev/null || true)"
+  [ -n "$line" ] || { printf '%s' ""; return 0; }
+  value="${line#WEBHOOK_SECRET=}"
+  if [ -z "$value" ]; then
+    warn "기존 .env 의 WEBHOOK_SECRET 값이 비어있음 — 새로 생성합니다 ($ENV_FILE)" >&2
+    printf '%s' ""
+    return 0
+  fi
+  printf '%s' "$value"
+}
+
+# ── WEBHOOK_SECRET 결정 (우선순위 통합) ──────────────────────────
+# 대화형·비대화형 양쪽이 공유하는 단일 결정 로직. 우선순위:
+#   ① --rotate-webhook-secret  → 항상 새로 생성 (의도적 회전)
+#   ② 기존 .env 에 값 있음      → 보존 (운영 App 파손 방지 — 안전 기본값)
+#   ③ 환경변수 WEBHOOK_SECRET   → 사용 (비대화형 하위호환)
+#   ④ 그 외                     → 새로 생성
+# 결과를 전역 WEBHOOK_SECRET 에 채운다.
+resolve_webhook_secret() {
+  local existing
+  if [ "${ROTATE_WEBHOOK_SECRET:-false}" = "true" ]; then
+    WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+    info "Webhook Secret — 회전(--rotate-webhook-secret) 새로 생성"
+    return 0
+  fi
+
+  existing="$(read_existing_webhook_secret)"
+  if [ -n "$existing" ]; then
+    WEBHOOK_SECRET="$existing"
+    info "Webhook Secret — 기존 .env 값 보존 ($ENV_FILE)"
+    return 0
+  fi
+
+  if [ -n "${WEBHOOK_SECRET:-}" ]; then
+    info "Webhook Secret — 환경변수 사용"
+    return 0
+  fi
+
+  WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+  info "Webhook Secret 자동 생성"
+}
+
 # ── 비대화형 모드 — 환경변수에서 App 자격 로드 ─────────────────
 # 필수 env 누락 시 어느 변수가 빠졌는지 명시하고 exit 1
 load_credentials_from_env() {
@@ -375,13 +438,8 @@ load_credentials_from_env() {
   # Slack — 옵션 (없으면 빈 값)
   SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 
-  # Webhook Secret — 옵션 (없으면 자동 생성)
-  if [ -n "${WEBHOOK_SECRET:-}" ]; then
-    info "Webhook Secret — 환경변수 사용"
-  else
-    WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    info "Webhook Secret 자동 생성"
-  fi
+  # Webhook Secret 결정은 main 에서 resolve_webhook_secret 로 통합 처리
+  # (기존 .env 보존 > 환경변수 > 새 생성 — 운영 App 파손 방지)
 
   info "App 자격 — 환경변수에서 로드 완료"
 }
@@ -680,6 +738,43 @@ main() {
   fi
   info "Pipeline 레포: $PIPELINE_REPO@$PIPELINE_REF"
 
+  # ── --reapply — 운영 중 부분 재적용 후 종료 ────────────────────────
+  # variables + 추적 라벨 + 호출자 yml 만 멱등 재적용.
+  # secrets / generate_env(.env) / 커맨드 / npm 전부 스킵 →
+  # app/.env(WEBHOOK_SECRET 포함) 를 일절 건드리지 않아 운영 App 파손 위험 0.
+  if [ "$REAPPLY" = "true" ]; then
+    VERDICT_DIR=".omc/state/reviews"
+    # register_variables 는 PIPELINE_REVIEWER_BOT_LOGIN 도 등록한다. reapply 는
+    # secrets 입력을 스킵하므로 이 값이 unbound 다. 환경변수로 명시 제공 시 사용,
+    # 아니면 빈 값(기존 등록값 유지가 목적이 아니라 variables 멱등 재적용이 목적).
+    REVIEWER_BOT_LOGIN="${REVIEWER_BOT_LOGIN:-}"
+    section "부분 재적용 (--reapply)"
+    warn "secrets/.env/커맨드/npm 스킵 — variables·라벨·호출자 yml 만 재적용"
+    for i in $(seq 0 $((MODULE_COUNT - 1))); do
+      local_name_var="MODULE_${i}_NAME"
+      local_ci_var="MODULE_${i}_CI"
+      local_strict_var="MODULE_${i}_STRICT"
+      MOD_NAME="${!local_name_var}"
+      MOD_CI="${!local_ci_var}"
+      STRICT="${!local_strict_var}"
+      REPO="$OWNER/$MOD_NAME"
+      echo ""
+      echo -e "${CYAN}▶ $REPO${NC}"
+      register_variables "$REPO" "$MOD_CI" "$STRICT"
+      install_caller_ymls "$REPO" "$MOD_CI"
+      register_labels "$REPO"
+    done
+    # parent 레포 추적 라벨 (tracking.enabled=false 면 register_labels 내부 스킵)
+    if [ -n "$PARENT_REPO" ]; then
+      echo ""
+      echo -e "${CYAN}▶ $PARENT_REPO (parent)${NC}"
+      register_labels "$PARENT_REPO"
+    fi
+    echo ""
+    info "부분 재적용 완료 — secrets/.env/커맨드/npm 스킵됨 (--reapply)"
+    exit 0
+  fi
+
   # Secrets 입력 — 비대화형은 환경변수에서, 대화형은 프롬프트로
   section "Secrets 입력"
   if [ "$NON_INTERACTIVE" = "true" ]; then
@@ -707,10 +802,10 @@ main() {
     fi
 
     read -rp "$(echo -e "${CYAN}?${NC} Slack Webhook URL (없으면 Enter): ")" SLACK_WEBHOOK_URL || SLACK_WEBHOOK_URL=""
-
-    WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    info "Webhook Secret 자동 생성"
   fi
+
+  # Webhook Secret 결정 — 대화형·비대화형 공통 (기존 .env 값 보존이 안전 기본값)
+  resolve_webhook_secret
 
   VERDICT_DIR=".omc/state/reviews"
 
@@ -777,4 +872,7 @@ main() {
   info "모두 완료되면 자동화 파이프라인이 작동합니다 🚀"
 }
 
-main "$@"
+# 직접 실행 시에만 main 실행. `source` 로 로드되면 함수만 등록(테스트 하니스용).
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  main "$@"
+fi
