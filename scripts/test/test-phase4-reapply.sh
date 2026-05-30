@@ -112,3 +112,58 @@ YML
   assert_eq "0" "$sec" "차단 전 secret set 발생" && pass
   rm -f "$bad_config"
 )
+
+# ── T10~T12: REVIEWER_BOT_LOGIN 보존 ────────────────────────────────────────
+
+# T10 — 환경변수 미제공 + 기존 variable 있음 → 기존 값으로 등록(보존)
+it "T10 --reapply: REVIEWER_BOT_LOGIN 미제공 시 기존 레포 variable 값 보존"
+(
+  export PATH="$STUBS_DIR:$PATH"
+  GH_LOG="$(mktemp)"; export GH_LOG
+  # 스텁: test-org/ModuleA 의 기존 PIPELINE_REVIEWER_BOT_LOGIN = "existing-bot[bot]"
+  # test-org/ModuleB 는 미설정(빈 배열)
+  slug_a="TEST_ORG_MODULEA"
+  export GH_STUB_VARLIST_${slug_a}='[{"name":"PIPELINE_REVIEWER_BOT_LOGIN","value":"existing-bot[bot]"}]'
+  unset REVIEWER_BOT_LOGIN
+  bash "$INSTALL_SH" "$FIXTURES_DIR/config-basic.yml" --reapply --non-interactive \
+    --env-file "$(mktemp -u)" >/dev/null 2>&1
+  log="$(cat "$GH_LOG")"
+  # ModuleA 에는 "existing-bot[bot]" 값으로 variable set 이 있어야 함
+  assert_contains "$log" "existing-bot[bot]" "기존 variable 값 미보존" && pass
+)
+
+# T11 — 환경변수 REVIEWER_BOT_LOGIN 명시 제공 → 그 값이 모든 레포에 우선
+it "T11 --reapply: 환경변수 REVIEWER_BOT_LOGIN 제공 시 그 값 우선"
+(
+  export PATH="$STUBS_DIR:$PATH"
+  GH_LOG="$(mktemp)"; export GH_LOG
+  # 스텁에도 기존 값 있지만 환경변수가 우선해야 함
+  export GH_STUB_VARLIST_TEST_ORG_MODULEA='[{"name":"PIPELINE_REVIEWER_BOT_LOGIN","value":"old-bot[bot]"}]'
+  export REVIEWER_BOT_LOGIN="env-provided-bot[bot]"
+  bash "$INSTALL_SH" "$FIXTURES_DIR/config-basic.yml" --reapply --non-interactive \
+    --env-file "$(mktemp -u)" >/dev/null 2>&1
+  log="$(cat "$GH_LOG")"
+  assert_contains "$log" "env-provided-bot[bot]" "환경변수 값 미사용" || return
+  assert_not_contains "$log" "old-bot[bot]" "환경변수인데 기존값 사용됨" && pass
+  unset REVIEWER_BOT_LOGIN
+)
+
+# T12 — 환경변수 없음 + 기존 variable 도 없음 → PIPELINE_REVIEWER_BOT_LOGIN 등록 스킵
+#        다른 variables(PIPELINE_OWNER 등)는 정상 등록
+it "T12 --reapply: REVIEWER_BOT_LOGIN 값 없음 → 해당 variable 등록 스킵, 나머지 정상"
+(
+  export PATH="$STUBS_DIR:$PATH"
+  GH_LOG="$(mktemp)"; export GH_LOG
+  # 스텁: 모든 레포 variable list = 빈 배열 (기존값 없음)
+  export GH_STUB_VARLIST_TEST_ORG_MODULEA='[]'
+  export GH_STUB_VARLIST_TEST_ORG_MODULEB='[]'
+  unset REVIEWER_BOT_LOGIN
+  bash "$INSTALL_SH" "$FIXTURES_DIR/config-basic.yml" --reapply --non-interactive \
+    --env-file "$(mktemp -u)" >/dev/null 2>&1
+  log="$(cat "$GH_LOG")"
+  # PIPELINE_REVIEWER_BOT_LOGIN 은 set 되면 안 됨
+  assert_not_contains "$log" "PIPELINE_REVIEWER_BOT_LOGIN" "빈 값인데 variable set 발생" || return
+  # 다른 variable 은 여전히 등록됨
+  assert_contains "$log" "PIPELINE_OWNER" "PIPELINE_OWNER 등록 안 됨" || return
+  assert_contains "$log" "PIPELINE_TRACKING_ENABLED" "PIPELINE_TRACKING_ENABLED 등록 안 됨" && pass
+)
