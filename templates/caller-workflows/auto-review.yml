@@ -34,6 +34,10 @@ jobs:
       tracking-enabled: ${{ vars.PIPELINE_TRACKING_ENABLED == 'true' }}
       major-label: ${{ vars.PIPELINE_TRACKING_MAJOR_LABEL || 'major-issue' }}
       minor-label: ${{ vars.PIPELINE_TRACKING_MINOR_LABEL || 'minor-issue' }}
+      # 추적 action(track-findings) 체크아웃 대상 — reusable workflow 가 caller(영역) 레포가
+      # 아닌 Pipeline 레포를 정확히 체크아웃하도록 repo/ref 명시(install.sh 가 placeholder 치환).
+      pipeline-repo: __PIPELINE_REPO__
+      pipeline-ref: __PIPELINE_REF__
     # 추적 finding 이슈 생성용 — tracking-enabled=true 일 때만 review.yml 이 토큰 발급에 사용.
     # review.yml 에서 optional 로 선언되어 미설정이어도 추적 비활성 시 무방.
     secrets:

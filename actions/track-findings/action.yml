@@ -154,14 +154,27 @@ runs:
         if not norm_title and title:
             norm_title = "h:" + hashlib.sha256(title.encode("utf-8")).hexdigest()[:12]
 
+        # ── fingerprint basis 구성 ──
+        # description 시그니처: 같은 파일·제목(혹은 같은 영역·제목)이라도 내용이 다른
+        #   별개 finding 이 intra-run dedup 으로 소실되는 것을 막는다(버그 #4).
+        #   line 은 머지 후 이동하므로 키에 쓰지 않고, 안정적인 description 해시 일부를 쓴다.
+        # 트레이드오프: 재리뷰마다 description 이 미세하게 바뀌면 같은 버그가 다른 fp 가 되어
+        #   중복 이슈가 생길 수 있다(과소 dedup). 하지만 finding 소실(과대 dedup)이 더 위험하므로
+        #   소실을 막는 이 방향을 택한다.
+        desc_sig = hashlib.sha256((description or "").encode("utf-8")).hexdigest()[:8]
         if source == "code-review":
             file_path = (finding.get("file") or "").strip()
             line = finding.get("line")
-            fp_basis = f"{file_path}|{severity}|{norm_title}"
+            fp_basis = f"{file_path}|{severity}|{norm_title}|{desc_sig}"
         else:  # critic — file 없음, area 기반
             file_path = ""
             line = None
-            fp_basis = f"{area}|{severity}|{norm_title}"
+            # 버그 #1: finding 자체의 area 를 우선 사용한다.
+            #   critic.yml 호출부는 area input 을 안 넘겨 env AREA 가 빈 문자열이라,
+            #   env AREA 만 쓰면 서로 다른 영역의 같은 제목 finding 이 같은 fingerprint 가 되어
+            #   intra-run dedup 으로 두 번째가 소실된다. finding.area 를 우선해 영역별로 구분한다.
+            finding_area = (finding.get("area") or area).strip()
+            fp_basis = f"{finding_area}|{severity}|{norm_title}|{desc_sig}"
 
         fp = hashlib.sha256(fp_basis.encode("utf-8")).hexdigest()[:12]
 
@@ -177,8 +190,9 @@ runs:
             lines.append(f"**위치**: {loc}")
         else:
             affected = finding.get("affected_prs") or []
-            if area:
-                lines.append(f"**영역**: {area}")
+            # 버그 #1: 본문도 finding.area(없으면 env area) 를 써서 영역이 누락되지 않게 한다.
+            if finding_area:
+                lines.append(f"**영역**: {finding_area}")
             if affected:
                 lines.append("**영향 PR**: " + ", ".join(str(p) for p in affected))
         if description:

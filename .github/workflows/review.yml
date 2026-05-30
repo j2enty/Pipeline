@@ -34,6 +34,16 @@ on:
         type: boolean
         required: false
         default: false
+      pipeline-repo:
+        description: "Pipeline 레포 (owner/repo) — 추적 action 체크아웃 대상. tracking-enabled=true 시 필수"
+        type: string
+        required: false
+        default: ''
+      pipeline-ref:
+        description: "Pipeline 레포 ref — 추적 action 체크아웃 시 사용. 미설정 시 기본 브랜치"
+        type: string
+        required: false
+        default: ''
       major-label:
         description: "major finding 이슈에 붙일 라벨 (tracking-enabled=true 일 때만)"
         type: string
@@ -134,10 +144,20 @@ jobs:
       # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
       # 체크아웃해야 한다. working-directory(self-hosted 실제 작업 경로)를 덮어쓰지
       # 않도록 path 로 별도 디렉토리에 체크아웃한다.
+      # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
+      # 대상은 caller(영역) 레포다. 그 레포엔 actions/track-findings 가 없어 아래 상대경로
+      # uses 가 action not found 로 실패한다. 따라서 Pipeline 레포(repository/ref)를 명시해
+      # 정확히 체크아웃한다(종속성 제로 — 식별자는 input 으로 주입).
+      # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
+      # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
+      # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
+      # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
       - name: Pipeline 체크아웃 (추적 action 용)
         if: ${{ inputs.tracking-enabled }}
         uses: actions/checkout@v4
         with:
+          repository: ${{ inputs.pipeline-repo }}
+          ref: ${{ inputs.pipeline-ref }}
           path: .pipeline-action-checkout
 
       - name: 추적용 App 토큰 발급

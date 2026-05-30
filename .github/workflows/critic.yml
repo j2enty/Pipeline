@@ -48,6 +48,16 @@ on:
         type: boolean
         required: false
         default: false
+      pipeline-repo:
+        description: "Pipeline 레포 (owner/repo) — 추적 action 체크아웃 대상. tracking-enabled=true 시 필수"
+        type: string
+        required: false
+        default: ''
+      pipeline-ref:
+        description: "Pipeline 레포 ref — 추적 action 체크아웃 시 사용. 미설정 시 기본 브랜치"
+        type: string
+        required: false
+        default: ''
       major-label:
         description: "major finding 이슈에 붙일 라벨 (tracking-enabled=true 시)"
         type: string
@@ -263,30 +273,121 @@ jobs:
 
       # track-findings composite action 은 Pipeline 레포(reusable workflow 정의 레포)에
       # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
-      # 체크아웃해야 한다. working-directory(self-hosted 실제 작업 경로)·위 영역 레포
-      # 체크아웃을 덮어쓰지 않도록 path 로 별도 디렉토리에 체크아웃한다(review.yml 과 동일 패턴).
+      # 체크아웃해야 한다. 이 reusable workflow 가 영역(caller) 레포에서 호출되면
+      # actions/checkout 의 기본 대상은 caller(영역) 레포라 track-findings 가 없어 실패한다.
+      # 따라서 Pipeline 레포(repository/ref)를 명시해 정확히 체크아웃한다(식별자는 input 주입).
+      # working-directory(self-hosted 실제 작업 경로)·위 영역 레포 체크아웃을 덮어쓰지
+      # 않도록 path 로 별도 디렉토리에 체크아웃한다(review.yml 과 동일 패턴).
+      # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
+      # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
+      # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
+      # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
       - name: Pipeline 체크아웃 (추적 action 용)
         if: ${{ inputs.tracking-enabled }}
         uses: actions/checkout@v4
         with:
+          repository: ${{ inputs.pipeline-repo }}
+          ref: ${{ inputs.pipeline-ref }}
           path: .pipeline-action-checkout
 
       - name: /review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
+          VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
         run: |
           set -euo pipefail
+          # [버그 #B 방어 — marker 방식 fail-closed]
+          # critic 실행 "직전"에 marker 파일을 만든다. 아래 verdict 파싱 step 은 매칭된
+          # 상태파일이 이 marker 보다 "새것"(-nt)인지 확인해 "이번 실행이 쓴 파일"임을 검증한다.
+          # 이전 critic 실행이 남긴 stale 상태파일(marker 보다 older)을 이번 결과로 오신뢰해
+          # 낡은 pass 로 머지되던 치명 버그를 차단한다.
+          # marker 경로는 같은 job(self-hosted) 내 다음 step 과 GITHUB_ENV 로 공유한다.
+          # ($$/PID 는 step 마다 다른 셸이라 공유 불가 → GITHUB_ENV 로 명시 전달. run-id 로 동시 실행 충돌 회피.)
+          # 주의: 완벽한 해결은 /review 가 "이번 실행 상태파일 경로/run-id"를 명시 출력하는 것(review.md 변경, 범위 밖).
+          #       marker 는 그 전까지의 실용적 fail-closed 방어다.
+          mkdir -p "$VERDICT_STATE_DIR"
+          CRITIC_RUN_MARKER="$VERDICT_STATE_DIR/.critic-run-marker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          touch "$CRITIC_RUN_MARKER"
+          echo "CRITIC_RUN_MARKER=$CRITIC_RUN_MARKER" >> "$GITHUB_ENV"
+
           claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
 
       - name: Critic verdict 파싱
         id: verdict
         env:
           VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
+          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
         run: |
           set -euo pipefail
-          CRITIC_VERDICT=$(find "$VERDICT_STATE_DIR" -name "*.json" -newer "$VERDICT_STATE_DIR" \
-            -exec jq -r '.aggregate.verdict // empty' {} \; 2>/dev/null | tail -1)
-          echo "critic_verdict=${CRITIC_VERDICT:-unknown}" >> "$GITHUB_OUTPUT"
+          # verdict 는 머지/blocker 분기를 결정하므로 "현재 parent" 상태파일을 정확히 읽어야 한다.
+          # 공유 디렉토리에서 "가장 최근 .json"(find -newer) 휴리스틱은 동시·직전 critic 실행의
+          # 다른 parent 상태파일을 잘못 잡아, 현재가 아닌 verdict 로 머지/차단하는 버그가 있었음.
+          # → 상태파일 최상위 .parent.url(review.md 상태 스키마)이 현재 PARENT_URL 과 일치하는
+          #   파일만 선택해 .aggregate.verdict 를 읽는다. jq 정확 비교(grep 부분매칭 금지 —
+          #   issues/3 이 issues/30·issues/35 까지 잡는 문제 회피).
+          #
+          # fail-closed 원칙: verdict 매칭은 "카운트 기반"이다. PARENT_URL 과 일치하는 상태파일이
+          # 정확히 1개일 때만 그 파일의 .aggregate.verdict 를 신뢰한다.
+          #  - 0개: 상태파일을 못 찾음(형식 차이/미생성) → 검증 불능
+          #  - 2개+: 어느 파일을 믿어야 할지 모호 → 검증 불능
+          # 0/복수는 "verdict 를 확인할 수 없는 상태"이므로 indeterminate 로 처리해 아래 머지
+          # 분기에서 머지가 절대 실행되지 않게 한다(과거: 마지막 매칭 덮어쓰기 + 0건이면 빈값→
+          # unknown→pass 와 함께 머지되던 치명 버그를 fail-closed 로 차단).
+          MATCH_COUNT=0
+          STATE_FILE=""
+          if [ -d "$VERDICT_STATE_DIR" ]; then
+            for f in "$VERDICT_STATE_DIR"/*.json; do
+              [ -f "$f" ] || continue
+              if [ "$(jq -r '.parent.url // empty' "$f" 2>/dev/null)" = "$PARENT_URL" ]; then
+                MATCH_COUNT=$((MATCH_COUNT + 1))
+                STATE_FILE="$f"
+              fi
+            done
+          fi
+
+          if [ "$MATCH_COUNT" -eq 1 ]; then
+            # 정확히 1개 매칭 — 정상 흐름 후보. 단, "이번 실행이 쓴 파일"인지 marker 로 검증한다.
+            #
+            # [버그 #B 방어 — stale 상태파일 오신뢰 차단, fail-closed]
+            # 매칭된 STATE_FILE 이 critic 실행 step 이 만든 marker 보다 "새것"(-nt)이어야
+            # "이번 실행이 새로 쓴 verdict"로 신뢰할 수 있다. marker 보다 older 면 이전 critic
+            # 실행이 남긴 stale 파일이고, 이번 실행이(버그/스키마 문제로) verdict 를 못 쓴 것이므로
+            # 낡은 pass 로 머지되지 않게 indeterminate 로 강등한다.
+            # marker 가 없으면(이론상 안 일어나지만 방어적으로) 검증 불능으로 처리한다.
+            if [ -z "${CRITIC_RUN_MARKER:-}" ] || [ ! -e "$CRITIC_RUN_MARKER" ]; then
+              echo "::error::critic verdict 검증 불능 — marker 파일 없음(critic 실행 step 미수행 의심). fail-closed 로 머지 차단."
+              CRITIC_VERDICT="indeterminate"
+            elif [ ! "$STATE_FILE" -nt "$CRITIC_RUN_MARKER" ]; then
+              echo "::error::critic verdict 검증 불능 — 매칭 상태파일($STATE_FILE)이 marker 보다 오래됨(stale). 이번 실행이 verdict 를 쓰지 않음. fail-closed 로 머지 차단."
+              CRITIC_VERDICT="indeterminate"
+            else
+              # 이번 실행이 쓴 파일 확정 — 그 파일의 verdict 를 읽는다.
+              CRITIC_VERDICT=$(jq -r '.aggregate.verdict // empty' "$STATE_FILE" 2>/dev/null || echo "")
+              # verdict 필드가 비어 있으면(스키마 손상 등) 검증 불능으로 강등 — fail-closed.
+              if [ -z "$CRITIC_VERDICT" ]; then
+                echo "::error::critic verdict 검증 불능 — 상태파일($STATE_FILE)에 .aggregate.verdict 없음/빈값"
+                CRITIC_VERDICT="indeterminate"
+              fi
+            fi
+          else
+            # 0개 또는 2개+ — 검증 불능(indeterminate). 어느 머지 step 의 if 에도 안 걸려 머지 안 됨.
+            echo "::error::critic verdict 검증 불능 — PARENT_URL($PARENT_URL) 매칭 상태파일 $MATCH_COUNT 개(0 또는 2개+). fail-closed 로 머지 차단."
+            CRITIC_VERDICT="indeterminate"
+          fi
+
+          # [버그 #A 방어 — verdict enum allowlist 정규화, GHA output 인젝션 차단]
+          # 비정상 multiline/임의 문자열이 GITHUB_OUTPUT(env-file 형식)을 깨거나 pass 로 오해석되지
+          # 않도록, GITHUB_OUTPUT 에 쓰기 "직전" allowlist 로 정규화한다. 화이트리스트 밖 값은
+          # 전부 indeterminate 로 흡수 → 출력은 항상 pass|concerns|blocker|indeterminate 중 하나.
+          # 비정상 값은 위 fail-closed 머지 차단 경로(if != pass/concerns/blocker)가 처리한다.
+          case "$CRITIC_VERDICT" in
+            pass|concerns|blocker) ;;
+            *) CRITIC_VERDICT="indeterminate" ;;
+          esac
+          echo "critic_verdict=$CRITIC_VERDICT" >> "$GITHUB_OUTPUT"
+
+          # marker 정리 — 남겨도 다음 실행이 새 run-id 로 touch 하므로 무방하나, 누적 방지로 제거.
+          rm -f "${CRITIC_RUN_MARKER:-}"
 
       - name: App 토큰 발급
         id: merge-token
@@ -375,7 +476,7 @@ jobs:
           gh-token: ${{ steps.merge-token.outputs.token }}
 
       - name: Pass — 머지
-        if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'unknown'
+        if: steps.verdict.outputs.critic_verdict == 'pass'
         env:
           GH_TOKEN: ${{ steps.merge-token.outputs.token }}
           PR_REPO: ${{ inputs.pr-repo }}
@@ -383,3 +484,34 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
+
+      # fail-closed 차단 경로: verdict 가 pass/concerns/blocker 중 어느 것도 아니면
+      # (indeterminate=0건/복수 매칭, unknown, 빈값 등) 검증 불능이므로 머지하지 않고
+      # blocker 와 동일하게 차단 + 에스컬레이션한다. 위 Pass/Concerns 머지 step 의 if 는
+      # 각각 'pass'/'concerns' 정확 일치라, indeterminate/unknown 은 어느 머지 step 에도
+      # 걸리지 않는다(=gh pr merge 미실행). 사람이 verdict 를 직접 확인한 뒤 진행해야 한다.
+      - name: 검증 불능 — Slack 에스컬레이션 + 머지 차단 (fail-closed)
+        if: steps.verdict.outputs.critic_verdict != 'pass' && steps.verdict.outputs.critic_verdict != 'concerns' && steps.verdict.outputs.critic_verdict != 'blocker'
+        env:
+          GH_TOKEN: ${{ steps.merge-token.outputs.token }}
+          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
+          CRITIC_VERDICT: ${{ steps.verdict.outputs.critic_verdict }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
+          BODY=$(printf '## ⚠️ critic verdict 검증 불능 — 머지 차단\n\ncritic verdict 를 확정할 수 없어 머지를 차단했어요(상태파일 매칭 0개 또는 복수, 혹은 verdict 빈값). verdict 값: %s. 사람이 확인 후 진행이 필요합니다.\n\n**Actions 로그**: %s' "$CRITIC_VERDICT" "$RUN_URL")
+          COMMENT_URL=$(gh issue comment "$PARENT_URL" \
+            --body "$BODY" \
+            --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
+
+          if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+            PAYLOAD=$(jq -n \
+              --arg title "critic verdict 검증 불능 — 머지 차단" \
+              --arg url "$COMMENT_URL" \
+              --arg context "parent: $PARENT_URL" \
+              '{text: "⚠️ *\($title)*\n\($context)\n👀 <\($url)|GitHub 코멘트 열기>"}')
+            curl -sS -X POST -H 'Content-type: application/json' \
+              --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
+          fi
+          exit 1
