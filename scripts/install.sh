@@ -354,10 +354,28 @@ resolve_pem_path() {
 read_existing_webhook_secret() {
   [ -f "$ENV_FILE" ] || { printf '%s' ""; return 0; }
   local line value
-  # `^WEBHOOK_SECRET=` 앵커 — 첫 매칭 라인만. 값은 '=' 이후 전체(공백·특수문자 포함 가능)
-  line="$(grep -m1 '^WEBHOOK_SECRET=' "$ENV_FILE" 2>/dev/null || true)"
+  # docker compose dotenv 호환 파싱:
+  #   - 선택적 `export ` 접두 허용
+  #   - 키와 `=` 사이/뒤 공백 허용
+  #   - 정확히 WEBHOOK_SECRET 키만 매칭 (유사키 OLD_WEBHOOK_SECRET·WEBHOOK_SECRET_BAK 제외)
+  #   앵커: 줄 시작 + (export + 공백)? + WEBHOOK_SECRET + 공백? + = + 공백? + 값
+  line="$(grep -m1 -E '^(export[[:space:]]+)?WEBHOOK_SECRET[[:space:]]*=' "$ENV_FILE" 2>/dev/null || true)"
   [ -n "$line" ] || { printf '%s' ""; return 0; }
-  value="${line#WEBHOOK_SECRET=}"
+  # = 이후를 값으로 추출
+  value="${line#*=}"
+  # 선행 공백 제거
+  value="${value#"${value%%[! ]*}"}"
+  # 짝맞는 큰따옴표 제거
+  if [ "${value#\"}" != "$value" ]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  # 짝맞는 작은따옴표 제거
+  elif [ "${value#\'}" != "$value" ]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  # 후행 CR 제거 (CRLF 파일 대응)
+  value="${value%$'\r'}"
   if [ -z "$value" ]; then
     warn "기존 .env 의 WEBHOOK_SECRET 값이 비어있음 — 새로 생성합니다 ($ENV_FILE)" >&2
     printf '%s' ""
@@ -383,6 +401,11 @@ resolve_webhook_secret() {
 
   existing="$(read_existing_webhook_secret)"
   if [ -n "$existing" ]; then
+    # 환경변수도 제공됐고 .env 값과 다르면 warn — 보존 우선이지만 조용한 무시는 위험
+    if [ -n "${WEBHOOK_SECRET:-}" ] && [ "${WEBHOOK_SECRET:-}" != "$existing" ]; then
+      warn "환경변수 WEBHOOK_SECRET 이 제공됐으나 기존 .env 값을 보존합니다 ($ENV_FILE)."
+      warn "회전하려면 --rotate-webhook-secret 을 사용하세요."
+    fi
     WEBHOOK_SECRET="$existing"
     info "Webhook Secret — 기존 .env 값 보존 ($ENV_FILE)"
     return 0
@@ -397,25 +420,37 @@ resolve_webhook_secret() {
   info "Webhook Secret 자동 생성"
 }
 
-# ── 레포의 기존 GitHub variable 값 조회 ──────────────────────
+# ── 레포의 기존 GitHub variable 값 조회 (fail-closed) ───────
 # `gh variable list --json name,value` 로 기존 variable 값을 읽어 반환.
-# 없거나 빈 값이면 빈 문자열. reapply 모드에서 config 에서 파생 불가능한
-# secret-time 입력값(PIPELINE_REVIEWER_BOT_LOGIN 등)을 보존할 때 사용.
+# 반환 규칙:
+#   - 성공 + 키 존재 → 값 출력 (exit 0)
+#   - 성공 + 키 부재 → 빈 문자열 출력 (exit 0)  ← "키 없음" 정상 케이스
+#   - gh 실패(exit≠0) / JSON 파싱 오류 → exit 1 (fail-closed — 호출자가 중단)
+# reapply 보존 경로가 운영 실패를 "값 없음"으로 위장하는 것을 방지.
 read_existing_repo_variable() {
   local repo="$1" var_name="$2"
-  local raw
-  # python3 로 json 파싱 — jq 의존 없이 이식 가능
-  raw="$(gh variable list --repo "$repo" --json name,value 2>/dev/null || true)"
-  [ -n "$raw" ] || { printf '%s' ""; return 0; }
+  local raw rc=0
+  # gh 실패는 즉시 캐치 — stderr 는 보존해 호출자/운영자가 원인 확인 가능
+  raw="$(gh variable list --repo "$repo" --json name,value 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    error "gh variable list 실패 (repo=$repo, exit=$rc): $raw" >&2
+    return 1
+  fi
+  # JSON 파싱 — python3 로 jq 의존 없이 처리. 파싱 실패 시 exit 1
   printf '%s' "$raw" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
+try:
+    data = json.load(sys.stdin)
+except (json.JSONDecodeError, ValueError) as e:
+    print('JSON 파싱 오류: ' + str(e), file=sys.stderr)
+    sys.exit(1)
 name = sys.argv[1]
 for item in data:
     if item.get('name') == name:
         print(item.get('value', ''), end='')
         sys.exit(0)
-" "$var_name" 2>/dev/null || true
+# 키 부재 — 빈 문자열 (정상 케이스)
+" "$var_name"
 }
 
 # ── reapply 모드 전용: REVIEWER_BOT_LOGIN 보존 결정 ──────────────
@@ -432,15 +467,19 @@ resolve_reviewer_bot_login_for_reapply() {
   if [ -n "${REVIEWER_BOT_LOGIN:-}" ]; then
     return 0
   fi
-  # ② 기존 레포 variable 읽기
+  # ② 기존 레포 variable 읽기 (fail-closed — gh 실패 시 exit 1 전파)
   local existing
-  existing="$(read_existing_repo_variable "$repo" "PIPELINE_REVIEWER_BOT_LOGIN")"
+  existing="$(read_existing_repo_variable "$repo" "PIPELINE_REVIEWER_BOT_LOGIN")" || {
+    error "PIPELINE_REVIEWER_BOT_LOGIN 조회 실패 ($repo) — reapply 중단." >&2
+    error "REVIEWER_BOT_LOGIN 환경변수를 명시 제공하거나 gh 권한을 확인하세요." >&2
+    return 1
+  }
   if [ -n "$existing" ]; then
     REVIEWER_BOT_LOGIN="$existing"
     info "PIPELINE_REVIEWER_BOT_LOGIN — 기존 레포 값 보존 ($repo)"
     return 0
   fi
-  # ③ 둘 다 없음 — skip 표시
+  # ③ 둘 다 없음 — skip 표시 (gh 성공·키 부재 케이스만 여기 도달)
   REVIEWER_BOT_LOGIN="_SKIP_"
   warn "PIPELINE_REVIEWER_BOT_LOGIN 값 없음 — 이 레포 등록 스킵 ($repo)"
 }
@@ -513,18 +552,21 @@ register_secrets() {
 }
 
 # ── Variables 등록 ───────────────────────────────────────────
+# $4=reapply — "true" 일 때만 REVIEWER_BOT_LOGIN 스킵 로직 적용.
+# 풀 install(기본 "false")에서는 이전과 동일하게 무조건 등록(빈 값 포함).
 register_variables() {
-  local repo="$1" ci_name="$2" strict="$3"
+  local repo="$1" ci_name="$2" strict="$3" is_reapply="${4:-false}"
   echo "  variables 등록 중..."
   gh variable set PIPELINE_OWNER                    --repo "$repo" --body "$OWNER"
   gh variable set PIPELINE_PARENT_REPOSITORY        --repo "$repo" --body "$PARENT_REPO"
   gh variable set PIPELINE_MODULES_IGNORE           --repo "$repo" --body "$MODULES_IGNORE_JSON"
   gh variable set PIPELINE_WORKING_DIRECTORY        --repo "$repo" --body "$WORKING_DIR"
-  # REVIEWER_BOT_LOGIN 이 "_SKIP_"(reapply 보존 불가 표시) 또는 빈 값이면 등록 스킵.
-  # - 풀 install: 항상 값이 채워져 있으므로 이 분기에 진입 안 함 (동작 불변).
-  # - reapply: 환경변수·기존값 어디서도 값을 못 얻은 경우만 스킵.
-  if [ "${REVIEWER_BOT_LOGIN:-}" != "_SKIP_" ] && [ -n "${REVIEWER_BOT_LOGIN:-}" ]; then
-    gh variable set PIPELINE_REVIEWER_BOT_LOGIN     --repo "$repo" --body "$REVIEWER_BOT_LOGIN"
+  # reapply 모드에서만 _SKIP_ / 빈 값 스킵. 풀 install 은 무조건 등록(기존 동작 보존).
+  if [ "$is_reapply" = "true" ] && \
+     { [ "${REVIEWER_BOT_LOGIN:-}" = "_SKIP_" ] || [ -z "${REVIEWER_BOT_LOGIN:-}" ]; }; then
+    : # 빈 값 덮어쓰기 방지 — 등록 스킵
+  else
+    gh variable set PIPELINE_REVIEWER_BOT_LOGIN     --repo "$repo" --body "${REVIEWER_BOT_LOGIN:-}"
   fi
   gh variable set PIPELINE_VERDICT_DIR              --repo "$repo" --body "$VERDICT_DIR"
   gh variable set PIPELINE_STRICT_REVIEW_BOT_CHECK  --repo "$repo" --body "$strict"
@@ -752,6 +794,21 @@ main() {
   echo -e "${CYAN}║   Pipeline install.sh            ║${NC}"
   echo -e "${CYAN}╚══════════════════════════════════╝${NC}"
 
+  # ── 상호배타 플래그 거부 ────────────────────────────────────────
+  # 두 부분 모드를 동시에 지정하면 어느 쪽이 실행될지 불명확 → 즉시 거부.
+  # --rotate-webhook-secret 은 reapply 가 .env 를 건드리지 않으므로 조용히 무시됨 → 거부.
+  if [ "$REAPPLY" = "true" ] && [ "$ROTATE_WEBHOOK_SECRET" = "true" ]; then
+    error "--reapply 와 --rotate-webhook-secret 은 함께 사용할 수 없습니다."
+    echo "  --reapply 는 .env 를 건드리지 않으므로 --rotate-webhook-secret 이 무시됩니다." >&2
+    echo "  secret 을 회전하려면 풀 install 에서 --rotate-webhook-secret 만 지정하세요." >&2
+    exit 1
+  fi
+  if [ "$REAPPLY" = "true" ] && [ "$UPDATE_COMMANDS_ONLY" = "true" ]; then
+    error "--reapply 와 --update-commands-only 는 함께 사용할 수 없습니다."
+    echo "  둘 다 부분 모드입니다. 원하는 동작 한 가지만 지정하세요." >&2
+    exit 1
+  fi
+
   # 체크리스트는 대화형 모드에서만 노출 (비대화형은 스킵)
   [ "$NON_INTERACTIVE" = "true" ] || show_checklist
   check_requirements
@@ -815,8 +872,8 @@ main() {
       echo -e "${CYAN}▶ $REPO${NC}"
       # 매 레포마다 환경변수 원본으로 리셋 후 결정 — 이전 레포의 기존값이 오염 안 되도록.
       REVIEWER_BOT_LOGIN="$_REAPPLY_REVIEWER_ENV"
-      resolve_reviewer_bot_login_for_reapply "$REPO"
-      register_variables "$REPO" "$MOD_CI" "$STRICT"
+      resolve_reviewer_bot_login_for_reapply "$REPO" || exit 1
+      register_variables "$REPO" "$MOD_CI" "$STRICT" "true"
       install_caller_ymls "$REPO" "$MOD_CI"
       register_labels "$REPO"
     done
