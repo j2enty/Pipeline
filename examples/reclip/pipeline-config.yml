@@ -33,3 +33,32 @@ reviewer:
 pipeline:
   repo: j2enty/Pipeline
   ref: main
+
+claude-commands:
+  # /review, /kickoff, /plan 슬래시커맨드를 워크스페이스 .claude/commands/ 에 배포
+  # __ORG__/__PARENT_REPO_NAME__/__PROJECT_NUMBER__/__SLACK_CHANNEL__ 은 project 섹션에서 자동 파생
+  enabled: true
+
+  project-name: Reclip
+
+  project-id: PVT_kwDOEH36Hs4BU4t1
+  status-field-id: PVTSSF_lADOEH36Hs4BU4t1zhIm_rs
+  area-field-id: PVTSSF_lADOEH36Hs4BU4t1zhIoXNU
+
+  reviewer-app-id: "3569774"
+  reviewer-bot-slug: reclip-review-bot
+  reviewer-token-key: RECLIP_REVIEW_BOT
+
+  slack-token-key: RECLIP_SLACK_WEBHOOK
+
+  author-login: mkfactory-app
+  local-account: j2enty
+  docs-context-dir: Docs/claude/context
+
+  area-ids:
+    Backend: 7a506b5e
+    Admin: 5a5a0f78
+    Frontend: 40db0ae8
+    iOS: 2f0a7bda
+    Android: 7394b300
+    Design: 56405937
