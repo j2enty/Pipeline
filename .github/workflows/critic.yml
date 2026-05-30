@@ -271,6 +271,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # [수정 1] tracking-enabled=true 인데 pipeline-repo 가 비어 있으면 즉시 실패.
+      # 이 조합에서는 Pipeline 체크아웃이 스킵되어 resolve-review-statefile.sh 가 없고,
+      # concerns 시 PR 머지는 완료되는데 추적이 조용히 스킵된다("켰는데 추적 없음"이
+      # 성공 처리). 침묵 오작동보다 명시적 fail-fast 가 낫다 — 설정 오류를 즉시 표면화.
+      - name: tracking 설정 검증 (fail-fast)
+        if: ${{ inputs.tracking-enabled && inputs.pipeline-repo == '' }}
+        run: |
+          echo "::error::tracking-enabled=true 로 설정됐지만 pipeline-repo 가 비어 있습니다. tracking-enabled=true 시 pipeline-repo(Pipeline 레포 경로, 예: org/Pipeline)는 필수 입력입니다. caller yml 에 pipeline-repo 를 추가하거나, tracking-enabled 를 false 로 설정하세요."
+          exit 1
+
       # Pipeline 레포(reusable workflow 정의 레포)를 별도 디렉토리에 체크아웃한다.
       # 두 가지 용도로 쓰인다:
       #   (1) track-findings composite action — 상대경로 uses(./actions/track-findings)
@@ -423,6 +433,12 @@ jobs:
           esac
           echo "critic_verdict=$CRITIC_VERDICT" >> "$GITHUB_OUTPUT"
 
+          # [수정 4] verdict 파싱 step 이 식별한 STATE_FILE 경로를 output 으로 내보낸다.
+          # concerns-merge step 이 재식별 없이 이 값을 재사용한다(TOCTOU 제거 + 일관성).
+          # indeterminate 경로(빈값)도 그대로 내보낸다 — concerns-merge step 은
+          # critic_verdict==concerns 일 때만 실행되므로 빈값이면 추적 스킵으로 안전 처리됨.
+          echo "resolved-state-file=$STATE_FILE" >> "$GITHUB_OUTPUT"
+
           # marker 정리 — 남겨도 다음 실행이 새 run-id 로 touch 하므로 무방하나, 누적 방지로 제거.
           rm -f "${CRITIC_RUN_MARKER:-}"
 
@@ -459,42 +475,33 @@ jobs:
           fi
           exit 1
 
-      - name: Concerns — 머지 + 상태파일 경로 식별
+      - name: Concerns — 머지 + 상태파일 경로 전달
         id: concerns-merge
         if: steps.verdict.outputs.critic_verdict == 'concerns'
         env:
           GH_TOKEN: ${{ steps.merge-token.outputs.token }}
           PR_REPO: ${{ inputs.pr-repo }}
           PR_NUMBER: ${{ inputs.pr-number }}
-          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
-          VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
           TRACKING_ENABLED: ${{ inputs.tracking-enabled }}
+          # [수정 4] verdict step 이 이미 식별한 STATE_FILE 경로를 재사용한다.
+          # concerns-merge 가 독립적으로 재식별하면 사이의 gh pr merge 로 인해
+          # 두 호출이 다른 결과를 낼 수 있는 TOCTOU 가 생긴다. verdict output 재사용으로
+          # 스크립트 호출 1회 절약 + 두 step 일관성 보장.
+          # tracking=false 면 STATE_FILE 이 빈값이어도 track-findings step 자체가 안 돌아 무방.
+          VERDICT_RESOLVED_STATE_FILE: ${{ steps.verdict.outputs.resolved-state-file }}
         run: |
           set -euo pipefail
           # 머지는 추적과 무관한 책임 — 항상 수행(기존 동작 보존, tracking 게이트 밖)
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
 
-          # 상태파일 경로 식별은 추적(track-findings)용이므로 tracking-enabled 일 때만 수행.
-          # tracking-enabled=false 인데 verdict=concerns 면 아래 식별이 불필요하게 돌고
-          # "매칭 상태파일 없음" warning 노이즈가 났던 것을 차단한다(머지는 위에서 이미 됨).
-          # tracking-enabled=true 면 Pipeline 레포가 체크아웃돼 있으므로(pipeline-repo 필수)
-          # verdict 파싱 step 과 동일하게 resolve-review-statefile.sh 로 결정적 식별한다(이슈 #9).
-          # 스크립트가 sentinel 신뢰 + 추측매칭 폴백 + 절대경로 정규화를 모두 담당.
-          # indeterminate(빈출력+exit 1)면 STATE_FILE 빈 값 → track-findings graceful 스킵.
-          STATE_FILE=""
+          # 상태파일 경로는 verdict step 이 이미 식별해 output 으로 넘겨줬다.
+          # tracking=true 이고 경로가 있으면 track-findings 에 전달, 없으면 추적 스킵.
+          STATE_FILE="${VERDICT_RESOLVED_STATE_FILE:-}"
           if [ "$TRACKING_ENABLED" = "true" ]; then
-            RESOLVE_SH=".pipeline-action-checkout/scripts/resolve-review-statefile.sh"
-            if [ -f "$GITHUB_WORKSPACE/$RESOLVE_SH" ]; then
-              rc=0
-              STATE_FILE="$(VERDICT_STATE_DIR="$VERDICT_STATE_DIR" PARENT_URL="$PARENT_URL" \
-                REVIEW_STATE_SENTINEL="${REVIEW_STATE_SENTINEL:-}" \
-                bash "$GITHUB_WORKSPACE/$RESOLVE_SH" critic)" || rc=$?
-              [ "$rc" -eq 0 ] || STATE_FILE=""
-            fi
             if [ -n "$STATE_FILE" ]; then
-              echo "concerns: 상태파일 식별 — $STATE_FILE"
+              echo "concerns: 상태파일 경로 재사용 — $STATE_FILE"
             else
-              echo "::warning::concerns: parent URL($PARENT_URL) 매칭 상태파일 없음 — 추적 스킵"
+              echo "::warning::concerns: 상태파일 경로 미식별(verdict step indeterminate) — 추적 스킵"
             fi
           fi
           echo "state-file=$STATE_FILE" >> "$GITHUB_OUTPUT"
