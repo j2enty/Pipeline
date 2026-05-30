@@ -271,19 +271,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # track-findings composite action 은 Pipeline 레포(reusable workflow 정의 레포)에
-      # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
-      # 체크아웃해야 한다. 이 reusable workflow 가 영역(caller) 레포에서 호출되면
-      # actions/checkout 의 기본 대상은 caller(영역) 레포라 track-findings 가 없어 실패한다.
-      # 따라서 Pipeline 레포(repository/ref)를 명시해 정확히 체크아웃한다(식별자는 input 주입).
+      # Pipeline 레포(reusable workflow 정의 레포)를 별도 디렉토리에 체크아웃한다.
+      # 두 가지 용도로 쓰인다:
+      #   (1) track-findings composite action — 상대경로 uses(./actions/track-findings)
+      #       (tracking-enabled=true 일 때만 실행)
+      #   (2) resolve-review-statefile.sh — verdict 파싱이 상태파일을 결정적으로
+      #       식별하는 스크립트. verdict 파싱은 tracking 과 무관하게 "항상" 돈다(이슈 #9).
+      # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
+      # 대상은 caller(영역) 레포라 위 자산들이 없어 실패한다. 따라서 Pipeline 레포
+      # (repository/ref)를 명시해 정확히 체크아웃한다(식별자는 input 주입).
       # working-directory(self-hosted 실제 작업 경로)·위 영역 레포 체크아웃을 덮어쓰지
       # 않도록 path 로 별도 디렉토리에 체크아웃한다(review.yml 과 동일 패턴).
+      #
+      # 조건: pipeline-repo 가 주어졌을 때만 체크아웃(tracking 무관). 이슈 #9 의 결정적
+      # 식별을 쓰려면 caller 가 pipeline-repo 를 넘겨야 한다. pipeline-repo 미설정인
+      # 기존 caller(예: tracking 미사용)는 체크아웃이 스킵되고 verdict 파싱이 인라인
+      # 폴백으로 동작한다 → 회귀 0(기존 추측매칭과 완전 동일).
       # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
       # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
       # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
       # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
-      - name: Pipeline 체크아웃 (추적 action 용)
-        if: ${{ inputs.tracking-enabled }}
+      - name: Pipeline 체크아웃 (추적 action + 상태파일 식별 스크립트용)
+        if: ${{ inputs.pipeline-repo != '' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.pipeline-repo }}
@@ -310,7 +319,19 @@ jobs:
           touch "$CRITIC_RUN_MARKER"
           echo "CRITIC_RUN_MARKER=$CRITIC_RUN_MARKER" >> "$GITHUB_ENV"
 
-          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
+          # [이슈 #9 — sentinel 결정적 식별]
+          # marker(-nt 추측)와 별개로, /review 가 "이번 실행이 최종적으로 쓴 STATE_FILE 의
+          # 절대경로"를 직접 기록할 sentinel 파일 경로를 준비한다(run-id+attempt 로 동시실행/
+          # 재시도 격리 — marker 와 동일 원리). 아래 verdict 파싱 step 이 이 sentinel 을 읽어
+          # 상태파일을 추측 없이 식별한다. /review 가 sentinel 을 안 쓰면(구버전/미기록)
+          # 식별 스크립트가 자동으로 기존 추측매칭으로 폴백한다(하위호환·fail-closed 보존).
+          REVIEW_STATE_SENTINEL="$VERDICT_STATE_DIR/.review-statefile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.path"
+          rm -f "$REVIEW_STATE_SENTINEL"
+          echo "REVIEW_STATE_SENTINEL=$REVIEW_STATE_SENTINEL" >> "$GITHUB_ENV"
+
+          # /review 가 종료 직전 자기가 쓴 상태파일 경로를 sentinel 에 기록하도록 env 주입.
+          REVIEW_STATE_SENTINEL="$REVIEW_STATE_SENTINEL" \
+            claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
 
       - name: Critic verdict 파싱
         id: verdict
@@ -320,29 +341,44 @@ jobs:
         run: |
           set -euo pipefail
           # verdict 는 머지/blocker 분기를 결정하므로 "현재 parent" 상태파일을 정확히 읽어야 한다.
-          # 공유 디렉토리에서 "가장 최근 .json"(find -newer) 휴리스틱은 동시·직전 critic 실행의
-          # 다른 parent 상태파일을 잘못 잡아, 현재가 아닌 verdict 로 머지/차단하는 버그가 있었음.
-          # → 상태파일 최상위 .parent.url(review.md 상태 스키마)이 현재 PARENT_URL 과 일치하는
-          #   파일만 선택해 .aggregate.verdict 를 읽는다. jq 정확 비교(grep 부분매칭 금지 —
-          #   issues/3 이 issues/30·issues/35 까지 잡는 문제 회피).
           #
-          # fail-closed 원칙: verdict 매칭은 "카운트 기반"이다. PARENT_URL 과 일치하는 상태파일이
-          # 정확히 1개일 때만 그 파일의 .aggregate.verdict 를 신뢰한다.
-          #  - 0개: 상태파일을 못 찾음(형식 차이/미생성) → 검증 불능
-          #  - 2개+: 어느 파일을 믿어야 할지 모호 → 검증 불능
-          # 0/복수는 "verdict 를 확인할 수 없는 상태"이므로 indeterminate 로 처리해 아래 머지
-          # 분기에서 머지가 절대 실행되지 않게 한다(과거: 마지막 매칭 덮어쓰기 + 0건이면 빈값→
-          # unknown→pass 와 함께 머지되던 치명 버그를 fail-closed 로 차단).
+          # [이슈 #9 — 결정적 식별 + 추측매칭 폴백]
+          # 1순위: Pipeline 레포가 체크아웃됐으면 resolve-review-statefile.sh 로 식별한다.
+          #   이 스크립트는 sentinel(이번 실행 /review 가 직접 기록한 절대경로)을 신뢰하고,
+          #   sentinel 이 없거나 무효이면 기존 추측매칭(.parent.url 정확매칭·단일강제)으로 폴백한다.
+          #   성공 시 STATE_FILE 절대경로를 stdout 1줄로 주고 exit 0, indeterminate 면 빈출력+exit 1.
+          # 2순위(폴백): Pipeline 미체크아웃(기존 caller — pipeline-repo 미설정)이면 스크립트가
+          #   없으므로 인라인 추측매칭으로 식별한다. → 회귀 0(스크립트 폴백과 동일 로직).
+          #
+          # 어느 경로든 결과는 "STATE_FILE(절대경로) + MATCH_COUNT(1=식별/0=indeterminate)"로 통일해
+          # 아래 marker(-nt) stale 검증 + verdict 읽기는 그대로 재사용한다.
+          # marker -nt 검증은 "어느 파일"과 별개의 방어(이번 실행이 그 파일을 새로 썼는지)라 계속 둔다.
+          RESOLVE_SH=".pipeline-action-checkout/scripts/resolve-review-statefile.sh"
           MATCH_COUNT=0
           STATE_FILE=""
-          if [ -d "$VERDICT_STATE_DIR" ]; then
-            for f in "$VERDICT_STATE_DIR"/*.json; do
-              [ -f "$f" ] || continue
-              if [ "$(jq -r '.parent.url // empty' "$f" 2>/dev/null)" = "$PARENT_URL" ]; then
-                MATCH_COUNT=$((MATCH_COUNT + 1))
-                STATE_FILE="$f"
-              fi
-            done
+          if [ -f "$GITHUB_WORKSPACE/$RESOLVE_SH" ]; then
+            rc=0
+            STATE_FILE="$(VERDICT_STATE_DIR="$VERDICT_STATE_DIR" PARENT_URL="$PARENT_URL" \
+              REVIEW_STATE_SENTINEL="${REVIEW_STATE_SENTINEL:-}" \
+              bash "$GITHUB_WORKSPACE/$RESOLVE_SH" critic)" || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$STATE_FILE" ]; then
+              MATCH_COUNT=1
+            else
+              MATCH_COUNT=0
+              STATE_FILE=""
+            fi
+          else
+            # 인라인 폴백 — .parent.url 정확매칭(jq) 단일강제. grep 부분매칭 금지
+            # (issues/3 이 issues/30·issues/35 까지 잡는 문제 회피).
+            if [ -d "$VERDICT_STATE_DIR" ]; then
+              for f in "$VERDICT_STATE_DIR"/*.json; do
+                [ -f "$f" ] || continue
+                if [ "$(jq -r '.parent.url // empty' "$f" 2>/dev/null)" = "$PARENT_URL" ]; then
+                  MATCH_COUNT=$((MATCH_COUNT + 1))
+                  STATE_FILE="$f"
+                fi
+              done
+            fi
           fi
 
           if [ "$MATCH_COUNT" -eq 1 ]; then
@@ -438,24 +474,23 @@ jobs:
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
 
           # 상태파일 경로 식별은 추적(track-findings)용이므로 tracking-enabled 일 때만 수행.
-          # tracking-enabled=false 인데 verdict=concerns 면 아래 탐색 루프가 불필요하게 돌고
+          # tracking-enabled=false 인데 verdict=concerns 면 아래 식별이 불필요하게 돌고
           # "매칭 상태파일 없음" warning 노이즈가 났던 것을 차단한다(머지는 위에서 이미 됨).
+          # tracking-enabled=true 면 Pipeline 레포가 체크아웃돼 있으므로(pipeline-repo 필수)
+          # verdict 파싱 step 과 동일하게 resolve-review-statefile.sh 로 결정적 식별한다(이슈 #9).
+          # 스크립트가 sentinel 신뢰 + 추측매칭 폴백 + 절대경로 정규화를 모두 담당.
+          # indeterminate(빈출력+exit 1)면 STATE_FILE 빈 값 → track-findings graceful 스킵.
           STATE_FILE=""
           if [ "$TRACKING_ENABLED" = "true" ]; then
-            # 상태파일 경로 식별: critic 은 parent 모드라 <slug>.json.
-            # 상태파일 최상위 parent.url 에 parent URL 이 기록됨(review.md 상태 스키마 .parent.url) →
-            # parent URL 로 역조회. jq 로 .parent.url 을 정확히 비교한다(grep 부분매칭 금지 —
-            # issues/3 이 issues/30·issues/35 까지 잡는 버그가 있었음).
-            # 못 찾으면 빈 값(track-findings 가 graceful 스킵).
-            if [ -d "$VERDICT_STATE_DIR" ]; then
-              for f in "$VERDICT_STATE_DIR"/*.json; do
-                [ -f "$f" ] || continue
-                [ "$(jq -r '.parent.url // empty' "$f" 2>/dev/null)" = "$PARENT_URL" ] && { STATE_FILE="$f"; break; }
-              done
+            RESOLVE_SH=".pipeline-action-checkout/scripts/resolve-review-statefile.sh"
+            if [ -f "$GITHUB_WORKSPACE/$RESOLVE_SH" ]; then
+              rc=0
+              STATE_FILE="$(VERDICT_STATE_DIR="$VERDICT_STATE_DIR" PARENT_URL="$PARENT_URL" \
+                REVIEW_STATE_SENTINEL="${REVIEW_STATE_SENTINEL:-}" \
+                bash "$GITHUB_WORKSPACE/$RESOLVE_SH" critic)" || rc=$?
+              [ "$rc" -eq 0 ] || STATE_FILE=""
             fi
             if [ -n "$STATE_FILE" ]; then
-              # working-directory 기준 상대경로일 수 있어 절대경로로 정규화(action 은 다른 working-dir 에서 실행)
-              STATE_FILE=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
               echo "concerns: 상태파일 식별 — $STATE_FILE"
             else
               echo "::warning::concerns: parent URL($PARENT_URL) 매칭 상태파일 없음 — 추적 스킵"
