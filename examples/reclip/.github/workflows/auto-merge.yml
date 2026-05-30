@@ -73,6 +73,8 @@ jobs:
       reviewer-bot-login: ${{ vars.PIPELINE_REVIEWER_BOT_LOGIN }}
       strict-review-bot-check: ${{ vars.PIPELINE_STRICT_REVIEW_BOT_CHECK == 'true' }}
       modules-ignore: ${{ vars.PIPELINE_MODULES_IGNORE || '[]' }}
+      project-owner: ${{ vars.PIPELINE_PROJECT_OWNER }}
+      project-number: ${{ vars.PIPELINE_PROJECT_NUMBER }}
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}
