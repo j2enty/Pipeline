@@ -30,6 +30,16 @@ on:
         type: string
         required: false
         default: '[]'
+      project-owner:
+        description: "Prep Project v2 소유자 (org/user 로그인). 미설정 시 Status=Done 전환 스킵 — vars.PIPELINE_PROJECT_OWNER"
+        type: string
+        required: false
+        default: ''
+      project-number:
+        description: "Prep Project v2 번호. 미설정 시 Status=Done 전환 스킵 — vars.PIPELINE_PROJECT_NUMBER"
+        type: string
+        required: false
+        default: ''
     secrets:
       AUTHOR_APP_ID:
         required: true
@@ -172,3 +182,123 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge "$PR_NUMBER" --squash --repo "$PR_REPO"
+
+      - name: linked sub-issue Status=Done 전환
+        # 머지 성공 직후 PR 이 닫는 linked issue 들의 Project Status 를 Done 으로 명시 전환.
+        # 재오픈→재닫기 시나리오에서 GitHub Projects built-in workflow 가 두 번째 발화를 안 해
+        # Status 가 In Review 에 멈추는 사례를 방지.
+        # project-owner / project-number 가 둘 다 비어 있으면 스킵 (Pipeline 본체 종속성 제로 원칙).
+        # 전환 실패가 머지 결과를 무효화하지 않도록 graceful (continue-on-error).
+        if: |
+          steps.check.outputs.should_merge == 'true' &&
+          inputs.project-owner != '' &&
+          inputs.project-number != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_REPO: ${{ inputs.pr-repo }}
+          PROJECT_OWNER: ${{ inputs.project-owner }}
+          PROJECT_NUMBER: ${{ inputs.project-number }}
+        run: |
+          set -euo pipefail
+          PR_OWNER=$(echo "$PR_REPO" | cut -d/ -f1)
+          PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
+
+          # 1) PR 의 closing issue node id 들 조회
+          # shellcheck disable=SC2016
+          LINKED_ISSUES=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $num: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $num) {
+                  closingIssuesReferences(first: 10) {
+                    nodes { id number repository { nameWithOwner } }
+                  }
+                }
+              }
+            }' -f owner="$PR_OWNER" -f repo="$PR_REPO_NAME" -F num="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[] | .id')
+
+          if [ -z "$LINKED_ISSUES" ]; then
+            echo "linked closing issue 없음 — Status 전환 스킵"
+            exit 0
+          fi
+
+          # 2) Prep Project 메타 (id, Status field id, Done option id) 동적 조회
+          #    organization / user 둘 다 지원 (한쪽이 null 이면 다른쪽으로 폴백).
+          # shellcheck disable=SC2016
+          PROJECT_META=$(gh api graphql -f query='
+            query($owner: String!, $number: Int!) {
+              organization(login: $owner) {
+                projectV2(number: $number) {
+                  id
+                  field(name: "Status") {
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      options { id name }
+                    }
+                  }
+                }
+              }
+              user(login: $owner) {
+                projectV2(number: $number) {
+                  id
+                  field(name: "Status") {
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      options { id name }
+                    }
+                  }
+                }
+              }
+            }' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
+            --jq '.data.organization.projectV2 // .data.user.projectV2')
+
+          if [ -z "$PROJECT_META" ] || [ "$PROJECT_META" = "null" ]; then
+            echo "Project 메타 조회 실패 (owner=$PROJECT_OWNER, number=$PROJECT_NUMBER) — Status 전환 스킵" >&2
+            exit 0
+          fi
+
+          PROJECT_ID=$(echo "$PROJECT_META" | jq -r '.id')
+          STATUS_FIELD_ID=$(echo "$PROJECT_META" | jq -r '.field.id')
+          DONE_OPTION_ID=$(echo "$PROJECT_META" | jq -r '.field.options[] | select(.name=="Done") | .id')
+
+          if [ -z "$PROJECT_ID" ] || [ -z "$STATUS_FIELD_ID" ] || [ -z "$DONE_OPTION_ID" ]; then
+            echo "Project/Status/Done id 일부 누락 — Status 전환 스킵" >&2
+            echo "  PROJECT_ID=$PROJECT_ID STATUS_FIELD_ID=$STATUS_FIELD_ID DONE_OPTION_ID=$DONE_OPTION_ID" >&2
+            exit 0
+          fi
+
+          # 3) 각 linked issue 의 Project item id 조회 후 Status=Done 전환
+          while IFS= read -r ISSUE_NODE_ID; do
+            [ -z "$ISSUE_NODE_ID" ] && continue
+            # shellcheck disable=SC2016
+            ITEM_ID=$(gh api graphql -f query='
+              query($issueId: ID!) {
+                node(id: $issueId) {
+                  ... on Issue {
+                    projectItems(first: 10) {
+                      nodes { id project { id } }
+                    }
+                  }
+                }
+              }' -f issueId="$ISSUE_NODE_ID" \
+              --jq ".data.node.projectItems.nodes[] | select(.project.id==\"$PROJECT_ID\") | .id")
+
+            if [ -z "$ITEM_ID" ]; then
+              echo "issue $ISSUE_NODE_ID 의 Prep Project item 없음 — 스킵"
+              continue
+            fi
+
+            # shellcheck disable=SC2016
+            gh api graphql -f query='
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+                  value: { singleSelectOptionId: $optionId }
+                }) { projectV2Item { id } }
+              }' -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
+              -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \
+              --jq '.data.updateProjectV2ItemFieldValue.projectV2Item.id'
+            echo "Status=Done 전환: item=$ITEM_ID"
+          done <<< "$LINKED_ISSUES"
