@@ -102,10 +102,22 @@ SENTINEL="${REVIEW_STATE_SENTINEL:-}"
 # ── ① sentinel 신뢰 경로 ─────────────────────────────────────
 if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ]; then
   # sentinel 첫 줄 = /review 가 기록한 상태파일 절대경로.
-  # [수정 5-a] 후행 CR(\r)·공백 trim — CRLF 환경(Windows runner 등)에서 기록된
-  # sentinel 을 Linux runner 가 읽을 때 '\r' 이 경로에 붙어 파일 탐색에 조용히 실패하는
-  # 사고를 방지한다. tr 로 제거 후 xargs 로 양끝 공백도 제거.
-  SENTINEL_TARGET="$(head -n 1 "$SENTINEL" 2>/dev/null | tr -d '\r' | xargs 2>/dev/null || true)"
+  # [수정 5-a / xargs 제거] CRLF 환경(Windows runner 등)에서 기록된 sentinel 을
+  # Linux runner 가 읽을 때 후행 '\r' 이 경로에 붙어 파일 탐색에 조용히 실패하는 사고 방지.
+  # IFS= read -r 로 단어분할·glob 없이 한 줄을 읽고, tr -d '\r' 로 CR 만 제거한다.
+  # 양끝 공백 제거에 xargs 를 쓰면 경로 중간 공백·quote·backslash 를 shell 토큰으로
+  # 해석해 경로가 변형되거나 빈 값이 된다 — 경로 내부 공백 보존을 위해 xargs 사용 금지.
+  # 양끝 공백은 셸 파라미터 확장으로 제거(경로 내부 공백 불변).
+  IFS= read -r SENTINEL_TARGET < "$SENTINEL" 2>/dev/null || SENTINEL_TARGET=""
+  SENTINEL_TARGET="$(printf '%s' "$SENTINEL_TARGET" | tr -d '\r')"
+  # 앞쪽 공백 제거
+  while [ "${SENTINEL_TARGET#[[:space:]]}" != "$SENTINEL_TARGET" ]; do
+    SENTINEL_TARGET="${SENTINEL_TARGET#[[:space:]]}"
+  done
+  # 뒤쪽 공백 제거
+  while [ "${SENTINEL_TARGET%[[:space:]]}" != "$SENTINEL_TARGET" ]; do
+    SENTINEL_TARGET="${SENTINEL_TARGET%[[:space:]]}"
+  done
   if [ -n "$SENTINEL_TARGET" ] && [ -f "$SENTINEL_TARGET" ]; then
     case "$SENTINEL_TARGET" in
       *.json)

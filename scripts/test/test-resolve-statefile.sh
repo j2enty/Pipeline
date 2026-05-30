@@ -200,3 +200,40 @@ it "RS-11 critic PARENT_URL 누락 → exit 2"
   VERDICT_STATE_DIR="/tmp" bash "$RESOLVE_SH" critic >/dev/null 2>&1 || rc=$?
   assert_eq "2" "$rc" "PARENT_URL 누락인데 exit 2 아님" && pass
 )
+
+# RS-12 — single 모드 sentinel 경로에 공백 포함 → 변형 없이 채택
+# xargs 를 쓰면 경로 중간 공백을 토큰 경계로 해석해 경로가 잘리거나 빈 값이 된다.
+# IFS= read -r + tr 방식에서는 경로 내부 공백이 보존돼야 한다.
+it "RS-12 single sentinel 경로 공백 포함 → 변형 없이 채택"
+(
+  dir="$(mktemp -d)"
+  # 공백이 포함된 하위 디렉토리 생성
+  spacedir="$dir/has space"
+  mkdir -p "$spacedir"
+  write_state_json "$spacedir/pr-Repo-1.json" ""
+  sentinel="$dir/.sentinel"
+  printf '%s\n' "$spacedir/pr-Repo-1.json" > "$sentinel"
+  rc=0
+  out="$(VERDICT_STATE_DIR="$dir" PR_REPO="org/Repo" PR_NUMBER="1" REVIEW_STATE_SENTINEL="$sentinel" \
+    bash "$RESOLVE_SH" single 2>/dev/null)" || rc=$?
+  assert_eq "0" "$rc" "공백 경로 sentinel exit 0 아님" || { rm -rf "$dir"; return; }
+  assert_eq "$spacedir/pr-Repo-1.json" "$out" "공백 경로가 변형됨" || { rm -rf "$dir"; return; }
+  rm -rf "$dir"; pass
+)
+
+# RS-13 — sentinel 파일이 CRLF(\r\n)로 기록됨 → \r 제거 후 정상 채택(critic)
+it "RS-13 sentinel CRLF 기록 → CR 제거 후 정상 채택"
+(
+  dir="$(mktemp -d)"
+  purl="https://github.com/org/Repo/issues/5"
+  write_state_json "$dir/slug.json" "$purl"
+  sentinel="$dir/.sentinel"
+  # printf 로 CRLF(\r\n) 강제 기록
+  printf '%s\r\n' "$dir/slug.json" > "$sentinel"
+  rc=0
+  out="$(VERDICT_STATE_DIR="$dir" PARENT_URL="$purl" REVIEW_STATE_SENTINEL="$sentinel" \
+    bash "$RESOLVE_SH" critic 2>/dev/null)" || rc=$?
+  assert_eq "0" "$rc" "CRLF sentinel exit 0 아님" || { rm -rf "$dir"; return; }
+  assert_eq "$dir/slug.json" "$out" "CRLF 후 경로 변형됨" || { rm -rf "$dir"; return; }
+  rm -rf "$dir"; pass
+)
