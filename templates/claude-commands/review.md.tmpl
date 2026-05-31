@@ -849,7 +849,32 @@ git -C Docs push -u origin context/<slug>
 
 클린 성공(전부 approved)은 Docs 커밋 생략.
 
-### 11. 최종 리포트
+### 11. 상태파일 sentinel 기록 (최종 리포트 직전 필수 pre-final step)
+
+**모든 모드(단일 PR / parent / critic-only)에서, `STATE_FILE` 이 확정된 직후·최종 리포트 출력 직전에 반드시 실행한다. 에스컬·SIGINT·조기종료 정리 경로에서도 동일하게 수행해야 sentinel 이 기록된다.**
+
+> **이전 배치 문제**: 섹션 12(최종 리포트 뒤)에 두었을 때 에스컬·SIGINT·조기종료 경로에서 리포트 출력 전에 종료되면 sentinel 기록이 누락됐다. 최종 리포트 "직전"으로 이동해 모든 종료 경로에서 STATE_FILE 이 확정된 시점에 실행되게 한다.
+
+```bash
+# 최종 리포트 출력 직전 — STATE_FILE 확정 후 항상 실행.
+# 에스컬/SIGINT 정리 핸들러에도 동일 블록을 포함시켜야 한다.
+# REVIEW_STATE_SENTINEL 이 설정돼 있을 때만 기록(로컬 실행이면 미설정 → 스킵 → 하위호환).
+if [ -n "${REVIEW_STATE_SENTINEL:-}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "$STATE_FILE" ]; then
+  # STATE_FILE 은 working-directory 기준 상대경로일 수 있으므로 절대경로로 정규화.
+  # (소비자 critic.yml / track-findings action 은 다른 working-dir 에서 실행됨)
+  STATE_FILE_ABS=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
+  printf '%s\n' "$STATE_FILE_ABS" > "$REVIEW_STATE_SENTINEL"
+fi
+```
+
+규칙:
+- **필수 pre-final step** — 성공·혼합·에스컬·SIGINT·critic-only 어느 종료 경로든, `STATE_FILE` 이 확정되면 최종 리포트 직전에 기록한다. (단일 PR 모드의 `pr-<repo>-<number>.json`, parent/critic-only 모드의 `<slug>.json` 모두 포함.)
+- **에스컬·SIGINT 정리 경로 포함** — trap 핸들러나 에스컬 후 종료 블록에도 동일 스니펫을 실행해야 한다. 조기 종료 시 STATE_FILE 이 아직 안 만들어졌으면(`[ -f "$STATE_FILE" ]` 실패) 자동 스킵 — 소비자는 sentinel 부재로 보고 추측매칭 폴백한다(fail-closed 보존).
+- **`set -u` 안전** — `${REVIEW_STATE_SENTINEL:-}`·`${STATE_FILE:-}` 형태로 미설정 변수도 안전하게 처리. `[ -f "$STATE_FILE" ]` 가드로 파일 미존재 시 스킵.
+- `REVIEW_STATE_SENTINEL` 미설정(로컬 수동 실행 등) → **스킵**. 환경변수 없으면 아무 것도 안 함 → 기존 동작 불변(하위호환).
+- sentinel 에는 **절대경로 한 줄만** 기록한다(소비자가 `head -n 1` 로 읽음).
+
+### 12. 최종 리포트
 
 ```
 /review 완료 — <parent-title or "단일 PR #<N>">
