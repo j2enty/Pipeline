@@ -12,9 +12,10 @@ it "F5-1 .env 값과 WEBHOOK_SECRET 환경변수 다를 때 warn 출력"
   printf 'WEBHOOK_SECRET=dotenv_value\n' > "$tmp_env"
   ROTATE_WEBHOOK_SECRET=false
   WEBHOOK_SECRET="envvar_value"   # 다른 값
-  # warn() 은 stdout 으로 쓴다. resolve_webhook_secret 는 직접 호출
+  # warn() 은 stderr 로 쓴다 — 아래 병합 캡처(>"$warn_log" 2>&1)로 확인.
+  # resolve_webhook_secret 는 직접 호출
   # (서브셸 금지 — WEBHOOK_SECRET 변경이 현재 셸에 반영돼야 함).
-  # stdout 을 임시 파일로 캡처하여 warn 메시지를 확인.
+  # stdout+stderr 를 임시 파일로 병합 캡처하여 warn 메시지를 확인.
   warn_log="$(mktemp)"
   resolve_webhook_secret >"$warn_log" 2>&1
   stderr_out="$(cat "$warn_log")"; rm -f "$warn_log"
