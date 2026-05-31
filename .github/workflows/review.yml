@@ -110,10 +110,16 @@ jobs:
           # [bot] suffix 제거 — startswith 검색용
           BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
 
+          # macOS(self-hosted)는 gtimeout(brew coreutils), Linux는 timeout — 이식성 확보 (#20)
+          TIMEOUT_CMD=$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null) || {
+            echo "::error::timeout/gtimeout 명령을 찾을 수 없습니다. macOS: brew install coreutils"
+            exit 1
+          }
+
           while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
             echo "=== Review attempt $((attempt + 1))/$MAX_ATTEMPTS ==="
             # 단일 review 실행 최대 30분 — hung 방지 (#20 버그 수정)
-            timeout 30m claude --dangerously-skip-permissions -p "/review $PR_URL --bot" || {
+            "$TIMEOUT_CMD" 30m claude --dangerously-skip-permissions -p "/review $PR_URL --bot" || {
               rc=$?
               if [ "$rc" -eq 124 ]; then
                 echo "::warning::review timeout (30분 초과) — 다음 attempt 로"
@@ -138,10 +144,14 @@ jobs:
             attempt=$((attempt + 1))
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
               echo "REQUEST_CHANGES — /kickoff --bot 실행..."
-              # kickoff 최대 15분 — hung 방지 (#20)
-              timeout 15m claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot" || {
+              # kickoff 최대 15분 — hung 방지 (#20); 실패 시 non-timeout 에러도 전파
+              "$TIMEOUT_CMD" 15m claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot" || {
                 rc=$?
-                [ "$rc" -eq 124 ] && echo "::warning::kickoff timeout (15분 초과)" || true
+                if [ "$rc" -eq 124 ]; then
+                  echo "::warning::kickoff timeout (15분 초과) — 다음 attempt 에서 재시도"
+                else
+                  exit "$rc"
+                fi
               }
             fi
           done
