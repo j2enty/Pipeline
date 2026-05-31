@@ -35,7 +35,7 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, AskUserQuestion
 - Parent 모드:
   - parent 이슈가 **OPEN** 상태
   - 해당 parent의 sub-issue에 연결된 PR이 1건 이상 존재 (open, non-draft)
-- Docs 레포가 `Docs/` 하위에 클론되어 있어야 함 (Context md 갱신용)
+- Docs 레포가 `Docs/` 하위에 있으면 플랜 materialize·Context md 갱신에 사용 (없으면 자동 스킵 — Docs 미사용 프로젝트도 지원)
 
 <!-- PROJECT-CONFIG-START -->
 <!-- 이 섹션(상수 + 영역↔레포 매핑)은 __PROJECT_NAME__ 프로젝트 고유 설정이다. Pipeline 자산화(Phase 2) 시
@@ -126,42 +126,57 @@ gh pr view <N> --repo __ORG__/<영역> --json number,url,state,isDraft,baseRefNa
 플랜은 Docs 레포의 **`plan/<SLUG>` 브랜치**에, 파일명은 **소문자 영역**으로 저장됨 (`/plan` 커맨드 산출물). 현재 체크아웃된 Docs 브랜치(`context/<SLUG>` 등)와 다를 수 있으므로 `git show`로 추출해 로컬 캐시에 풀어낸 뒤 Agent에 전달.
 
 ```bash
-AREA_LOWER=$(echo "<area>" | tr '[:upper:]' '[:lower:]')
-PLAN_GIT_PATH="claude/plans/${SLUG}-${AREA_LOWER}.md"
-REQ_GIT_PATH="claude/requirements/${SLUG}.md"
+# Docs 가 "독립 git 레포 루트"인지 판정. rev-parse --git-dir 은 부모로 거슬러 올라가
+# 워크스페이스 루트(예: Reclip 자체가 git 레포)의 .git 을 잡아 오판하므로 쓰지 않는다.
+# toplevel 이 Docs 자신과 일치할 때만 독립 Docs 레포로 인정.
+docs_top="$(git -C Docs rev-parse --show-toplevel 2>/dev/null || true)"
+docs_abs="$(cd Docs 2>/dev/null && pwd -P || true)"
+if [ -n "$docs_top" ] && [ "$docs_top" = "$docs_abs" ]; then HAS_DOCS=1; else HAS_DOCS=0; fi
 
-# plan/<SLUG> 브랜치 fetch (없으면 조용히 패스)
-git -C Docs fetch origin "plan/${SLUG}" 2>/dev/null || true
+if [ "$HAS_DOCS" = "1" ]; then
+  AREA_LOWER=$(echo "<area>" | tr '[:upper:]' '[:lower:]')
+  PLAN_GIT_PATH="claude/plans/${SLUG}-${AREA_LOWER}.md"
+  REQ_GIT_PATH="claude/requirements/${SLUG}.md"
 
-# 로컬 브랜치 우선, 없으면 원격 ref 사용
-PLAN_REF="plan/${SLUG}"
-git -C Docs rev-parse --verify "refs/heads/${PLAN_REF}" >/dev/null 2>&1 \
-  || PLAN_REF="origin/plan/${SLUG}"
+  # plan/<SLUG> 브랜치 fetch (없으면 조용히 패스)
+  git -C Docs fetch origin "plan/${SLUG}" 2>/dev/null || true
 
-# 캐시 디렉토리
-mkdir -p .omc/state/reviews/cache
+  # 로컬 브랜치 우선, 없으면 원격 ref 사용
+  PLAN_REF="plan/${SLUG}"
+  git -C Docs rev-parse --verify "refs/heads/${PLAN_REF}" >/dev/null 2>&1 \
+    || PLAN_REF="origin/plan/${SLUG}"
 
-PLAN_CACHE=".omc/state/reviews/cache/${SLUG}-${AREA_LOWER}-plan.md"
-REQ_CACHE=".omc/state/reviews/cache/${SLUG}-requirements.md"
+  # 캐시 디렉토리
+  mkdir -p .omc/state/reviews/cache
 
-# 플랜 존재 확인 + 캐시 추출
-if git -C Docs cat-file -e "${PLAN_REF}:${PLAN_GIT_PATH}" 2>/dev/null; then
-  git -C Docs show "${PLAN_REF}:${PLAN_GIT_PATH}" > "${PLAN_CACHE}"
-  planPath="$PLAN_CACHE"
-  planSource="Docs@${PLAN_REF}:${PLAN_GIT_PATH}"
+  PLAN_CACHE=".omc/state/reviews/cache/${SLUG}-${AREA_LOWER}-plan.md"
+  REQ_CACHE=".omc/state/reviews/cache/${SLUG}-requirements.md"
+
+  # 플랜 존재 확인 + 캐시 추출
+  if git -C Docs cat-file -e "${PLAN_REF}:${PLAN_GIT_PATH}" 2>/dev/null; then
+    git -C Docs show "${PLAN_REF}:${PLAN_GIT_PATH}" > "${PLAN_CACHE}"
+    planPath="$PLAN_CACHE"
+    planSource="Docs@${PLAN_REF}:${PLAN_GIT_PATH}"
+  else
+    planPath=null
+    planSource=null
+  fi
+
+  # 요구사항(parent 공통) 존재 시 캐시 추출 — verifier 입력용
+  if git -C Docs cat-file -e "${PLAN_REF}:${REQ_GIT_PATH}" 2>/dev/null; then
+    git -C Docs show "${PLAN_REF}:${REQ_GIT_PATH}" > "${REQ_CACHE}"
+    reqPath="$REQ_CACHE"
+  else
+    reqPath=null
+  fi
 else
   planPath=null
   planSource=null
-fi
-
-# 요구사항(parent 공통) 존재 시 캐시 추출 — verifier 입력용
-if git -C Docs cat-file -e "${PLAN_REF}:${REQ_GIT_PATH}" 2>/dev/null; then
-  git -C Docs show "${PLAN_REF}:${REQ_GIT_PATH}" > "${REQ_CACHE}"
-  reqPath="$REQ_CACHE"
-else
   reqPath=null
 fi
 ```
+
+> **Docs 독립 레포 가드**: 위는 `HAS_DOCS=1`(Docs 가 독립 git 레포 루트)일 때만 실행한다. Docs 미클론(부재/빈 dir)이거나 부모 git 의 하위 일반 dir 이면 `HAS_DOCS=0` → planPath/reqPath=null 로 **플랜 없이 정상 진행**. (`rev-parse --git-dir` 은 부모 .git 을 오인하므로 쓰지 않음.)
 
 - `planPath != null` → verifier 호출 대상 (프롬프트에 `PLAN_CACHE` 경로 전달)
 - `planPath == null` → code-reviewer 단독 리뷰
@@ -835,16 +850,29 @@ __DOCS_CONTEXT_DIR__/<slug>-status.md
 
 #### 10-a. Docs 커밋 트리거 (`/kickoff` G7-c 동일 조건)
 
+**먼저 Docs 가 독립 git 레포 루트인지**(`--show-toplevel` 일치) 확인하고, 아니면(미클론·부모 git 하위 일반 dir 포함) 이 커밋 단계 전체를 스킵한다. 있을 때만 아래 트리거를 평가한다.
+
 다음 중 하나 이상 충족 시만 Docs 레포에 커밋·push:
 - (a) 한 영역 이상 `verdict=escalated` 또는 `request_changes`
 - (b) SIGINT 캡처로 중단
 - (c) 혼합 상태 (approved + request_changes · escalated 동시 존재)
 
 ```bash
-git -C Docs checkout context/<slug> 2>/dev/null || git -C Docs checkout -b context/<slug>
-git -C Docs add claude/context/<slug>-status.md
-git -C Docs commit -m "[context] <parent-title> /review 결과 반영 (#<parent-N>)"
-git -C Docs push -u origin context/<slug>
+# Docs 가 "독립 git 레포 루트"인지 판정. rev-parse --git-dir 은 부모로 거슬러 올라가
+# 워크스페이스 루트(예: Reclip 자체가 git 레포)의 .git 을 잡아 오판하므로 쓰지 않는다.
+# toplevel 이 Docs 자신과 일치할 때만 독립 Docs 레포로 인정.
+docs_top="$(git -C Docs rev-parse --show-toplevel 2>/dev/null || true)"
+docs_abs="$(cd Docs 2>/dev/null && pwd -P || true)"
+if [ -n "$docs_top" ] && [ "$docs_top" = "$docs_abs" ]; then HAS_DOCS=1; else HAS_DOCS=0; fi
+
+if [ "$HAS_DOCS" = "1" ]; then
+  git -C Docs checkout context/<slug> 2>/dev/null || git -C Docs checkout -b context/<slug>
+  git -C Docs add claude/context/<slug>-status.md
+  git -C Docs commit -m "[context] <parent-title> /review 결과 반영 (#<parent-N>)"
+  git -C Docs push -u origin context/<slug>
+else
+  echo "Docs 독립 레포 없음 — Context md 커밋 스킵 (Docs 미사용/미클론 프로젝트)"
+fi
 ```
 
 클린 성공(전부 approved)은 Docs 커밋 생략.
