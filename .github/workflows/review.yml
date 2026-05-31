@@ -70,7 +70,7 @@ permissions:
 jobs:
   review:
     runs-on: self-hosted
-    timeout-minutes: 120
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -112,7 +112,16 @@ jobs:
 
           while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
             echo "=== Review attempt $((attempt + 1))/$MAX_ATTEMPTS ==="
-            claude --dangerously-skip-permissions -p "/review $PR_URL --bot"
+            # 단일 review 실행 최대 30분 — hung 방지 (#20 버그 수정)
+            timeout 30m claude --dangerously-skip-permissions -p "/review $PR_URL --bot" || {
+              rc=$?
+              if [ "$rc" -eq 124 ]; then
+                echo "::warning::review timeout (30분 초과) — 다음 attempt 로"
+                attempt=$((attempt + 1))
+                continue
+              fi
+              exit "$rc"
+            }
 
             LATEST_STATE=$(gh pr view "$PR_URL" \
               --json reviews \
@@ -129,7 +138,11 @@ jobs:
             attempt=$((attempt + 1))
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
               echo "REQUEST_CHANGES — /kickoff --bot 실행..."
-              claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot"
+              # kickoff 최대 15분 — hung 방지 (#20)
+              timeout 15m claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot" || {
+                rc=$?
+                [ "$rc" -eq 124 ] && echo "::warning::kickoff timeout (15분 초과)" || true
+              }
             fi
           done
 

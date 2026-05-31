@@ -112,6 +112,17 @@ jobs:
           STRICT_REVIEW_BOT_CHECK: ${{ inputs.strict-review-bot-check }}
         run: |
           set -euo pipefail
+
+          # PR 이 이미 머지/닫혔으면 critic 불필요 (#18 버그 수정)
+          # post-merge 재실행 시 "검증 불능" 오경보를 방지한다.
+          PR_STATE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+          if [ "$PR_STATE" = "MERGED" ] || [ "$PR_STATE" = "CLOSED" ]; then
+            echo "PR 이미 $PR_STATE — critic 스킵 (post-merge 재실행 방지)"
+            echo "all_approved=false" >> "$GITHUB_OUTPUT"
+            echo "blocked=pr-already-$PR_STATE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           PR_OWNER=$(echo "$PR_REPO" | cut -d/ -f1)
           PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
           BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
