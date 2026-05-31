@@ -101,10 +101,12 @@ ENV_FILE="${ENV_FILE:-$REPO_ROOT/app/.env}"
 
 # 색상 출력
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
-info()    { echo -e "${GREEN}✅${NC} $1"; }
-warn()    { echo -e "${YELLOW}⚠️ ${NC} $1"; }
+# 모든 로그는 stderr 로 — 커맨드치환($(...))으로 stdout 값을 캡처하는 함수가
+# 내부에서 이들을 호출해도 캡처가 오염되지 않도록(eval "$(parse_config)" 등 보호).
+info()    { echo -e "${GREEN}✅${NC} $1" >&2; }
+warn()    { echo -e "${YELLOW}⚠️ ${NC} $1" >&2; }
 error()   { echo -e "${RED}❌${NC} $1" >&2; }
-section() { echo -e "\n${CYAN}══ $1 ══${NC}"; }
+section() { echo -e "\n${CYAN}══ $1 ══${NC}" >&2; }
 
 # ── 사전 준비 체크리스트 ─────────────────────────────────────
 show_checklist() {
@@ -378,7 +380,7 @@ read_existing_webhook_secret() {
     value="${value%\'}"
   fi
   if [ -z "$value" ]; then
-    warn "기존 .env 의 WEBHOOK_SECRET 값이 비어있음 — 새로 생성합니다 ($ENV_FILE)" >&2
+    warn "기존 .env 의 WEBHOOK_SECRET 값이 비어있음 — 새로 생성합니다 ($ENV_FILE)"
     printf '%s' ""
     return 0
   fi
