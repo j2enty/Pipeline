@@ -472,22 +472,30 @@
 - Phase 0 (--dry-run 안전 테스트 경로) — PR #22 머지, main `d6c9528`
 - Phase A1 (파일명·브랜치명 `<parent-N>-<slug>` 형식) — PR #24 머지, main `92210ae`
 - Phase A2+A3 (7구간 인터뷰 내장 + 사람용 문서 템플릿) — PR #25 머지, main `b875d41`
-  - D6: deep-interview 스킬 의존 제거, plan.md.tmpl 자체 내장
-  - D7: 7구간 대본 + 3.5번(접근법) 신설 + 4·5번 스킵 금지 + 5번 AI 선제 가정
-  - D8: `--deep` 재정의 (스킵 없이 7구간 풀), `--bot` 자동 추론 정의
-  - §3.6: requirements 파일 사람용 템플릿 구조 추가 (★ 접근법 슬롯 포함)
-  - 테스트: interview-structure.test.sh 신규 (12항목)
-- 설계 결정 D1~D9·R1·R2 전부 §0.5에 확정
-- 해소: D6·D7·D8·D9(보류)·R1·R2
+- Phase B (③⑤ critic + config 인프라) — PR #26 + #27(이중리뷰 fix) 머지, main `1ce0e93`
+  - Step 5.5: ③ 완결성 critic (단일 모델, `__PLAN_COMPLETENESS_CRITIC_ENABLED__`)
+  - Step 6.5: ⑤ 정합성 critic (이중 모델, `__PLAN_CONSISTENCY_CRITIC_ENABLED__` + `__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__`)
+  - config 인프라: `claude-commands.plan` 서브섹션 신설, install.sh 파싱·치환 추가
+  - 테스트: T-B0-1~4 (config 파싱) + C-1~10+C-DRIFT (구조 정적분석) 총 91개 통과
+  - 이중리뷰 fix: `get_plan_bool` 대소문자(`[ \t]+`·`\w+`+lower+whitelist) 수정
+- 설계 결정 D1~D9·R1·R2 + §8-2·§8-3 전부 확정
 
-**다음 할 일 = Phase B** — ③⑤ critic 단계 (D1).
-- ③ 완결성 critic: 단일 모델, AI용 명세 생성 직후 실행
-- ⑤ 정합성 critic: 이중 모델 (Claude+Codex), 사람용 파생 후 실행 (사람 게이트 직전)
-- D5 구현 전략: "저비용·고레버리지" 완료 → 이제 critic 단계로
-- ~~§8-3(config 명명) 구현 직전에 확정 필요~~ → **✅ 2026-06-02 확정 완료** (§8 참조)
-- ~~D9 보류 확인~~ → **✅ 보류 유지 확정**
-- 브랜치: `feat/plan-B-critic`
-- **선결 사항 전부 완료 → 착수 가능**
+## ★ 복귀노트 (2026-06-02 기준 최신)
+
+**현재 상태**: Pipeline `main` = `1ce0e93` (PR #27). 작업트리 clean. 테스트 91개 통과.
+
+**다음 = Phase C 또는 골든 픽스처 G-1 — 결정 필요**
+
+| 선택지 | 내용 | D5 근거 |
+|---|---|---|
+| **G-1 골든 픽스처** | service-status-page 이슈로 `/plan --dry-run` 실행해 critic이 제대로 동작하는지 검증 | D2: "착수는 G-1 1장" |
+| **Phase C** | Step 5에 `contract.md` 신설 — 영역 간 API·인터페이스 공유 계약 (§3.4) | D5: 계약문서는 critic 이후 다음 레버리지 |
+
+D2 설계: "각 기능은 자기 픽스처와 함께 출하" → Phase B critic의 픽스처(G-1)가 아직 없음. G-1을 먼저 만드는 것이 자연스러운 순서.
+
+**운영 주의사항**:
+- `install.sh --update-commands-only` 실행 필요 (plan.md.tmpl 변경됨, Reclip develop 재배포)
+- 테스트 기준: `bash scripts/test/run-tests.sh` → 91개 통과
 
 ---
 
