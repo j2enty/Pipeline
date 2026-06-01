@@ -279,8 +279,8 @@ fi  # dry-run/fixture 스킵 블록 끝
    - Claude가 이슈 본문 읽고 선제안 → 사용자가 조정
    - **Frontend (사용자 공개 웹, Next.js)는 미래 도입 영역** — 도입 전이면 multiSelect 에서 자동 제외 또는 사용자가 명시적으로 선택할 때만 포함
 
-2. **slug 확인** — 제안된 `<parent-N>-<slug>`가 괜찮은가?
-   - options: "OK" / "다른 이름" (다른 이름 고르면 재질문)
+2. **slug 확인** — 제안된 `<slug>`가 괜찮은가? (파일명·브랜치명은 `<parent-N>-<slug>` 형식이 됩니다)
+   - options: "OK" / "다른 이름" (다른 이름 고르면 순수 slug만 재입력)
 
 **`--deep` 모드 — 풀 인터뷰:**
 
