@@ -278,6 +278,18 @@ for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_blo
     area_hash = am.group(2).strip().strip("'\"")
     print(f"CMD_AREA_ID_{area_name.upper()}='{area_hash}'")
 
+# plan 서브섹션 — critic 토글 (claude-commands 블록 내부에서만 탐색)
+# plan: 의 들여쓰기를 \1 로 캡처해, 같은(또는 더 얕은) 들여쓰기의 다음 키에서 종료한다.
+# (\s+[a-z] 종료는 plan 본문 첫 줄에서 곧바로 멈춰 빈 블록이 되는 버그가 있었음)
+plan_m = re.search(r'^(\s+)plan:\s*\n(.*?)(?=^\1\S|\Z)', cc_block, re.MULTILINE | re.DOTALL)
+plan_block = plan_m.group(2) if plan_m else ''
+def get_plan_bool(key, default='true'):
+    m = re.search(r'^\s+' + re.escape(key) + r':\s*(true|false)', plan_block, re.MULTILINE)
+    return m.group(1) if m else default
+print(f"CMD_PLAN_COMPLETENESS_CRITIC_ENABLED='{get_plan_bool('completeness-critic-enabled')}'")
+print(f"CMD_PLAN_CONSISTENCY_CRITIC_ENABLED='{get_plan_bool('consistency-critic-enabled')}'")
+print(f"CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL='{get_plan_bool('consistency-critic-dual-model')}'")
+
 # ── tracking 섹션 — finding 추적 라벨 자동 등록용 ───────────────────────
 # tracking: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
 # (claude-commands 블록 파싱과 동일 방식 — 다른 섹션의 동명 키와 충돌 방지)
@@ -754,6 +766,9 @@ install_claude_commands() {
     -e "s|__AREA_ID_IOS__|$(esc "${CMD_AREA_ID_IOS:-}")|g"
     -e "s|__AREA_ID_ANDROID__|$(esc "${CMD_AREA_ID_ANDROID:-}")|g"
     -e "s|__AREA_ID_DESIGN__|$(esc "${CMD_AREA_ID_DESIGN:-}")|g"
+    -e "s|__PLAN_COMPLETENESS_CRITIC_ENABLED__|$(esc "${CMD_PLAN_COMPLETENESS_CRITIC_ENABLED:-true}")|g"
+    -e "s|__PLAN_CONSISTENCY_CRITIC_ENABLED__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_ENABLED:-true}")|g"
+    -e "s|__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL:-true}")|g"
   )
 
   # 3개 템플릿 치환 → 임시 디렉토리에 생성

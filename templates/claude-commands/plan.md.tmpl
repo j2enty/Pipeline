@@ -368,6 +368,46 @@ Agent(
 - 여러 영역은 **병렬 실행**
 - **Cross-area 3축 명시 룰**: Frontend·iOS·Android 중 2개 이상 영역이 선택된 경우, 각 영역 플랜에 위 3축을 미리 명시해 격차 예방. 메모리 `project_cross_area_consistency_patterns.md` (M1 파일럿 critic 이 잡은 격차 3종) 참조
 
+### 5.5. ③ 완결성 critic
+
+> **이 단계는 설치 시 결정됩니다: `__PLAN_COMPLETENESS_CRITIC_ENABLED__`**
+> 값이 `false`면 이 단계 전체를 스킵하고 Step 6으로 진행하세요.
+
+Step 5에서 생성한 각 영역 플랜(LLM 컨텍스트의 planner 출력)을 대상으로 완결성 critic을 실행합니다. 파일로 쓰기 전에 구멍을 먼저 잡는 단계입니다.
+
+**Agent 호출:**
+
+```
+Agent(
+  description="③ 완결성 critic — AI용 명세 검토",
+  subagent_type="oh-my-claudecode:critic",
+  prompt="""
+아래 영역별 AI용 명세를 검토해주세요. 메우지 말고 분류만 합니다.
+
+[Step 5 planner 출력 내용 전달]
+
+## 체크리스트
+- 표준 보안 누락: 인증·rate limit·입력검증 명시됐나
+- 에러·경계 처리: 빠진 케이스 없나
+- 영역 인터페이스: 영역 간 만나는 지점이 정의됐나
+- acceptance 검증가능성: 완료 기준이 측정 가능한가
+- 모호어: "적절히", "필요에 따라" 등 남아있나
+- 인터뷰 제약 반영: Step 4 답변이 명세에 반영됐나
+
+## 출력 형식
+### 명세 보강 가능 (자동 처리 가능)
+- [영역]: [항목] — [보강 내용]
+
+### ★ 결정할 것 (사람 판단 필요)
+- [항목]: [이유]
+"""
+)
+```
+
+**결과 반영 규칙 (Step 6a 문서 생성 시 적용):**
+- "명세 보강 가능" 항목 → AI용 명세 파일에 직접 포함
+- "★ 결정할 것" 항목 → 사람용 `## 당신이 결정할 것` 섹션에 추가
+
 ### 6. 문서 저장 (Docs 레포에 커밋·PR)
 
 `Docs/` 하위 작업 (Docs는 별도 레포):
@@ -443,6 +483,55 @@ TBD — 다른 영역 플랜과 UI/UX 일관성 검토 예정.
 ```
 
 *실제 디자인 프로세스가 확정되면 이 템플릿을 업데이트. 지금은 "껍데기 + 체크리스트"로 시작.*
+
+#### 6.5. ⑤ 정합성 critic
+
+> **이 단계는 설치 시 결정됩니다: `__PLAN_CONSISTENCY_CRITIC_ENABLED__`**
+> 값이 `false`면 이 단계를 스킵하고 🛑 DRY-RUN 정지선으로 진행하세요.
+
+Step 6a에서 생성한 사람용 + AI용 문서를 대상으로 정합성을 검증합니다. 사람 게이트 직전 마지막 기계 방어선입니다.
+
+**이중 모델 설정: `__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__`**
+- `true`: Claude + Codex 교차 검증 (두 결과 합산 후 처리)
+- `false`: Claude만 실행
+
+**1단계 — Claude critic:**
+
+```
+Agent(
+  description="⑤ 정합성 critic (Claude) — 사람용↔AI용 대조",
+  subagent_type="oh-my-claudecode:critic",
+  prompt="""
+사람용 문서와 AI용 명세의 정합성을 검토해주세요.
+- 사람용: Docs/claude/requirements/<parent-N>-<slug>.md
+- AI용: Docs/claude/plans/<parent-N>-<slug>-*.md
+
+## 체크리스트
+- 사람용 ★·키피처·안하는것 ↔ AI용 일대일 대응 여부
+- AI용에 사람 미승인 중대 결정(★ 없이 박힌 것) 없나
+- 사람용 가정("○○로 가정함")이 AI용에 반영됐나
+- 영역교차: 영역별 인터페이스 서술 상호 일치 (필드명 snake/camel 등)
+- 의도추적: Step 4 인터뷰 답 → 명세 → 사람용 추적성
+
+## 출력
+불일치 항목과 수정 방향을 구체적으로 제시하세요.
+"""
+)
+```
+
+**`__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__`이 `true`이면 2단계 실행:**
+
+```
+Skill("oh-my-claudecode:ask", args="codex 아래 두 문서의 정합성을 검토해줘. [사람용·AI용 문서 내용 전달] 체크리스트: 사람용↔AI용 일대일 대응 / 미승인 결정 / 가정 반영 / 영역교차 일치 / 의도추적")
+```
+
+오케스트레이터가 없는 환경에서 `oh-my-claudecode:ask`를 쓸 수 없다면 Claude critic을 한 번 더 다른 관점(보안·인터페이스 집중)으로 실행하세요.
+
+**결과 처리:**
+- 불일치 발견 → Edit 도구로 해당 파일 직접 수정
+- ★결정할것 중 AI용에서 미승인 결정 발견 → 사람용에 항목 추가 + 사용자에게 알림
+- 양쪽 findings 합산해 처리
+- 완료 후 한 줄 요약: "⑤ critic: [N]건 수정됨 — [수정 항목 목록]"
 
 #### 🛑 DRY-RUN 정지선 (6a 직후 · 6b 직전)
 
