@@ -314,7 +314,7 @@ Skill("oh-my-claudecode:team", task_list=[...], worker_count=N)
 
 ## 입력
 - Sub-issue: __ORG__/<영역>#<sub-N>
-- 플랜: Docs/claude/plans/<slug>-<영역>.md (먼저 읽기)
+- 플랜: Docs/claude/plans/<parent-N>-<slug>-<영역>.md (먼저 읽기)
 - 브랜치: feature/#<sub-N>-<slug>
 
 ## 절차
@@ -345,8 +345,8 @@ Skill("oh-my-claudecode:team", task_list=[...], worker_count=N)
 ## 입력
 - 브랜치: <branch>  ( diff: git diff origin/develop...HEAD )
 - Executor testSummary: <JSON>
-- 플랜 문서: Docs/claude/plans/<slug>-<영역>.md
-- Parent 요구사항: Docs/claude/requirements/<slug>.md
+- 플랜 문서: Docs/claude/plans/<parent-N>-<slug>-<영역>.md
+- Parent 요구사항: Docs/claude/requirements/<parent-N>-<slug>.md
 
 ## 체크리스트
 1. diff가 플랜의 "구현 태스크 리스트"와 일치하는가?
@@ -430,7 +430,7 @@ Parent: __ORG__/__PARENT_REPO_NAME__#<parent-N>
 <필요시 주석 (예: "Compose UI 테스트는 에뮬레이터 미실행")>
 
 ## 🔗 참고
-- 플랜: \`Docs/claude/plans/<slug>-<영역>.md\`
+- 플랜: \`Docs/claude/plans/<parent-N>-<slug>-<영역>.md\`
 - 세션: \`.omc/state/sessions/<slug>.json\`
 EOF
 )"
@@ -526,7 +526,7 @@ ${ASSIGNEES:+${ASSIGNEES} 확인 요청.}
 3. 상태 파일 감지 → AskUserQuestion [재개 / 처음부터 / 취소] — "재개" 시 실패 영역만 다시 실행
 
 **참고**
-- 플랜: Docs/claude/plans/<slug>-<영역>.md
+- 플랜: Docs/claude/plans/<parent-N>-<slug>-<영역>.md
 
 ---
 *자동 발송됨.*
@@ -666,7 +666,7 @@ __DOCS_CONTEXT_DIR__/<slug>-status.md
 
 ## 참고
 - 상태 파일: `.omc/state/sessions/<slug>.json`
-- 플랜: Docs/claude/plans/<slug>-*.md
+- 플랜: Docs/claude/plans/<parent-N>-<slug>-*.md
 ```
 
 **Docs 커밋 트리거 (G7-c)**: 다음 중 하나 이상 충족 시만 Docs 레포에 커밋·push:
