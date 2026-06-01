@@ -180,6 +180,18 @@ run_negative_remove_guard \
   "13. Step 9 self-guard 제거" \
   "Step 9(parent 본문 업데이트) 원격 반영 스킵"
 
+# R5-1: Step 9.5 self-guard 제거
+run_negative_remove_guard \
+  "14. Step 9.5 self-guard 제거" \
+  "Step 9.5(자가 검증 보정) 원격 반영 스킵"
+
+# R5-2: 감싼-쓰기(명령치환 래핑) 탐지 — self-guard 없는 펜스에
+#        X=$(gh issue create ...) 형태만 주입해도 FAIL 나는지(R4 탐지기 검증)
+printf "\n  [R4/R5-2] 감싼-쓰기 래핑 탐지:\n"
+run_negative_bash \
+  "15. 명령치환 래핑 X=\$(gh issue create) — R4 탐지기 검증" \
+  "X=\$(gh issue create --repo org/repo --title evil)"
+
 # ── 집계 ────────────────────────────────────────────────────────────────────
 printf "\n${C_CYAN}══════════════════════════════${C_NC}\n"
 if [ "$FAILED" -eq 0 ]; then

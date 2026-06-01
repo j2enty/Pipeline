@@ -124,6 +124,18 @@ fi
 ### 2. Parent 이슈 조회
 
 ```bash
+# R3: 펜스 독립 실행 대비 — $ARGUMENTS 에서 ISSUE_FIXTURE 재파생
+# (Step 1 에서 set 한 변수는 펜스 간 전파 보장 없음)
+ISSUE_FIXTURE=
+set -f; set -- $ARGUMENTS; set +f
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --issue-fixture=*) ISSUE_FIXTURE="${1#*=}" ;;
+    --issue-fixture)   ISSUE_FIXTURE="${2:-}"; shift ;;
+  esac
+  shift
+done
+
 # ISSUE_FIXTURE 가 지정되면 실 GitHub 조회를 우회하고 로컬 JSON 픽스처를 읽는다.
 #   (외부 상태 비의존 결정적 테스트 경로 — gh 호출 없음)
 if [ -n "$ISSUE_FIXTURE" ]; then
@@ -146,6 +158,17 @@ fi
 `$ISSUE_JSON`의 `.number` 값을 읽어 이후 단계의 `<parent-N>` 자리에 채운다.
 
 ```bash
+# R3: 펜스 독립 실행 대비 — $ARGUMENTS 에서 ISSUE_FIXTURE 재파생
+ISSUE_FIXTURE=
+set -f; set -- $ARGUMENTS; set +f
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --issue-fixture=*) ISSUE_FIXTURE="${1#*=}" ;;
+    --issue-fixture)   ISSUE_FIXTURE="${2:-}"; shift ;;
+  esac
+  shift
+done
+
 # fixture 모드: .number null 가드 — fixture 파일이 number 를 빠뜨리면 즉시 실패
 if [ -n "$ISSUE_FIXTURE" ]; then
   PN=$(echo "$ISSUE_JSON" | jq -r '.number')
@@ -155,7 +178,7 @@ if [ -n "$ISSUE_FIXTURE" ]; then
       exit 1 ;;
   esac
   # args 에 번호/URL 이 함께 왔으면 일관성 경고 (실모드에서 이 블록은 실행되지 않음)
-  if [ -n "$PARENT_ARG" ]; then
+  if [ -n "${PARENT_ARG:-}" ]; then
     PARENT_ARG_NUM=$(echo "$PARENT_ARG" | grep -oE '[0-9]+$')
     if [ -n "$PARENT_ARG_NUM" ] && [ "$PARENT_ARG_NUM" != "$PN" ]; then
       echo "⚠️  args 번호($PARENT_ARG_NUM)와 fixture .number($PN)가 다릅니다. fixture 값($PN)을 사용합니다."
@@ -185,6 +208,19 @@ fi
 **실수로 같은 parent에 `/plan`을 두 번 돌리면 중복 sub-issue·Project 아이템·Docs PR이 생기므로, 본 단계에서 fail-fast**:
 
 ```bash
+# R3: 펜스 독립 실행 대비 — $ARGUMENTS 에서 DRY_RUN·ISSUE_FIXTURE 재파생
+# (Step 1 에서 set 한 변수는 펜스 간 전파 보장 없음)
+DRY_RUN=false; ISSUE_FIXTURE=
+set -f; set -- $ARGUMENTS; set +f
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)         DRY_RUN=true ;;
+    --issue-fixture=*) ISSUE_FIXTURE="${1#*=}" ;;
+    --issue-fixture)   ISSUE_FIXTURE="${2:-}"; shift ;;
+  esac
+  shift
+done
+
 # dry-run 이거나 --issue-fixture 가 지정된 경우 멱등성 가드 전체를 스킵한다.
 # 이유: dry-run 은 아무것도 생성하지 않으므로 중복 방지 가드가 무의미하고,
 #       fixture 경로는 실 GitHub/네트워크 비의존이어야 하므로 원격 조회(3.5-a)와
@@ -323,6 +359,14 @@ TBD — 다른 영역 플랜과 UI/UX 일관성 검토 예정.
 이 정지선보다 **앞에는 원격 쓰기 명령이 하나도 없으므로**, 아래 분기 한 번으로 PR·이슈·Project·parent 변경을 전부 안전하게 스킵할 수 있다.
 
 ```bash
+# R3: 펜스 독립 실행 대비 — $ARGUMENTS 에서 DRY_RUN 재파생 (가독성용 보조 정지선)
+DRY_RUN=false
+set -f; set -- $ARGUMENTS; set +f
+while [ $# -gt 0 ]; do
+  case "$1" in --dry-run) DRY_RUN=true ;; esac
+  shift
+done
+
 if [ "$DRY_RUN" = true ]; then
   echo "[DRY-RUN] 로컬 문서 생성 완료. 원격(PR·이슈·Project·parent) 반영은 스킵합니다."
   echo "[DRY-RUN] 생성된 로컬 문서:"

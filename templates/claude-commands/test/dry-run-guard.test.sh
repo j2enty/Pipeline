@@ -143,46 +143,46 @@ fi
 #   펜스 안에 원격 쓰기 명령이 있으면 → 그 펜스 안에 self-guard 도 있어야 함.
 #   self-guard 가 원격 쓰기 첫 줄보다 앞에 있어야 함.
 
-# 원격 쓰기 패턴을 줄 단위로 판정하는 함수
+# 원격 쓰기 패턴을 줄 단위로 판정하는 함수 (R4: 시작 게이트 → 부분일치로 확장)
+# 래핑 형태 SUB_URL=$(gh issue create …)·if gh·( gh·파이프 등을 포함.
 is_remote_write() {
   local line="$1"
   # 좌측 공백 제거
   local t="${line#"${line%%[![:space:]]*}"}"
-  # 주석 줄 스킵
+  # 주석 줄 스킵 (# 로 시작하는 줄은 실행 안 됨)
   case "$t" in \#*) return 1 ;; esac
   [ -n "$t" ] || return 1
 
-  # gh/git 으로 시작하지 않으면 비해당
-  case "$t" in gh\ *|git\ *) ;; *) return 1 ;; esac
-
-  # git 쓰기 명령
+  # ── git 쓰기 동사 부분일치 ───────────────────────────────────────────────
+  # git push / git commit / git checkout -b 가 줄 어디에든 있으면 쓰기
   case "$t" in
-    git\ push\ *|git\ push|git\ commit\ *|git\ commit|\
-    git\ checkout\ -b\ *|\
-    git\ -C\ *\ push\ *|git\ -C\ *\ commit\ *|git\ -C\ *\ checkout\ -b\ *) return 0 ;;
+    *git\ push*|*git\ commit*|*git\ checkout\ -b*|\
+    *git\ -C\ *\ push*|*git\ -C\ *\ commit*|*git\ -C\ *\ checkout\ -b*) return 0 ;;
   esac
 
-  # gh 쓰기 명령
+  # ── gh 쓰기 동사 부분일치 ───────────────────────────────────────────────
+  # gh pr create / gh issue create / gh issue edit / gh label create
   case "$t" in
-    gh\ pr\ create\ *|gh\ pr\ create|\
-    gh\ issue\ create\ *|gh\ issue\ create|\
-    gh\ issue\ edit\ *|gh\ issue\ edit|\
-    gh\ label\ create\ *|gh\ label\ create) return 0 ;;
+    *gh\ pr\ create*|\
+    *gh\ issue\ create*|\
+    *gh\ issue\ edit*|\
+    *gh\ label\ create*) return 0 ;;
   esac
 
-  # gh api --method POST|DELETE|PATCH|PUT
+  # gh api --method POST|DELETE|PATCH|PUT (명시적 쓰기 메서드)
   case "$t" in
     *--method\ POST*|*--method\ DELETE*|*--method\ PATCH*|*--method\ PUT*) return 0 ;;
   esac
 
-  # gh api graphql -f (Project mutation 포함)
+  # gh api graphql -f (Project mutation: addProjectV2ItemById 등)
   case "$t" in
-    gh\ api\ graphql\ -f\ *) return 0 ;;
+    *gh\ api\ graphql\ -f*) return 0 ;;
   esac
 
-  # gh api -f/-F (암묵 POST, G1)
+  # gh api -f/-F/-–field/--raw-field/--input (암묵 POST, G1)
+  # gh api 가 줄 어딘가에 있고 쓰기 플래그도 있으면 쓰기로 판정.
   case "$t" in
-    gh\ api\ *)
+    *gh\ api\ *)
       case "$t" in
         *\ -f\ *|*\ -F\ *|*\ --field\ *|*\ --raw-field\ *|*\ --input\ *) return 0 ;;
       esac
