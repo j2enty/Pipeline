@@ -22,7 +22,7 @@
 - 결정:
   - **③ 완결성 critic = 단일 모델** (중간 검사, 싸게)
   - **⑤ 정합성 critic = 이중 모델 (Claude + Codex 교차)** — "사람이 GO 누르기 직전 마지막 방어선"이라 여기에 교차를 몰아 비용 대비 안전마진 최대화
-- → §8-2 부분 해소. 남은 것: 이중 critic을 config 토글로 끌 수 있게 할지(비용 회피)는 미정.
+- → §8-2 **완전 해소 (2026-06-02)**. `consistency-critic-dual-model: true` 토글 추가 확정.
 
 ### D2. 단계 합격 판정 = **골든 픽스처(모범답안 시험지) 방식**
 - 배경: plan 산출물은 글이라 "테스트 초록불"이 안 나옴. 그러나 Pipeline 작업 프로토콜은 단계별 테스트 게이트를 강제 → 글에도 합격선이 필요.
@@ -446,8 +446,19 @@
 ## 8. 그쪽에서 판단/결정할 미해결 질문
 
 1. **인터뷰 구현 방식**: § 3.3 7구간 대본을 (a) 기존 `deep-interview` 스킬에 대본을 주입해 재사용할지, (b) plan 자체 인터뷰 루틴으로 구현할지. (운영자는 deep-interview를 이미 많이 써서 "다른 방법론 기반"을 원함 — 단 "스킬을 안 쓴다"가 아니라 "질문 대본이 달라야 한다"는 뜻)
-2. **critic 호출 비용/시점**: ③⑤를 매 plan마다 돌리면 자동 회로가 느려진다. ~~단일 1패스 시작~~ → **§0.5 D1로 갱신**(③단일·⑤이중 비대칭). 남은 미정: ⑤ 이중 critic을 config 토글로 끌 수 있게 할지(비용 회피).
-3. **config 항목 최종 명명**: §6.2 후보를 Pipeline 표준 카탈로그 컨벤션으로 확정.
+2. ~~**critic 호출 비용/시점**~~ → **✅ 해소 (2026-06-02)**. ③단일·⑤이중 비대칭(D1) + `consistency-critic-dual-model` 토글 추가.
+3. ~~**config 항목 최종 명명**~~ → **✅ 해소 (2026-06-02)**. 최종 확정:
+   ```yaml
+   plan:
+     interview-enabled: true
+     two-layer-enabled: true
+     contract-doc-enabled: true
+     completeness-critic-enabled: true
+     consistency-critic-enabled: true
+     consistency-critic-dual-model: true
+     ssot-convergence-enabled: false
+     architecture-ssot-path: ""
+   ```
 4. **`--deep` 플래그와의 관계**: 7구간 인터뷰가 기본이 되면 기존 `--deep`(deep-interview 풀 인터뷰)의 위치를 재정의해야 함.
 5. **사람용 문서의 Docs PR 리뷰**: 현재 plan은 사람용을 Docs PR로 낸다. ⑥ 사람 게이트(GO)를 그 PR 리뷰로 볼지, 별도 단계로 둘지.
 
@@ -473,8 +484,10 @@
 - ③ 완결성 critic: 단일 모델, AI용 명세 생성 직후 실행
 - ⑤ 정합성 critic: 이중 모델 (Claude+Codex), 사람용 파생 후 실행 (사람 게이트 직전)
 - D5 구현 전략: "저비용·고레버리지" 완료 → 이제 critic 단계로
-- §8-3(config 명명) 구현 직전에 확정 필요
+- ~~§8-3(config 명명) 구현 직전에 확정 필요~~ → **✅ 2026-06-02 확정 완료** (§8 참조)
+- ~~D9 보류 확인~~ → **✅ 보류 유지 확정**
 - 브랜치: `feat/plan-B-critic`
+- **선결 사항 전부 완료 → 착수 가능**
 
 ---
 

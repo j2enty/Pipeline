@@ -1,0 +1,42 @@
+# 테스트용 더미 config — plan 서브섹션 없음 (backward-compat 검증용)
+# install.sh B0 테스트 전용. 실제 프로젝트 식별자 없음.
+
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+
+modules:
+  - name: ModuleA
+    ci-workflow-name: ModuleA CI
+
+modules-ignore:
+  - ""
+
+reviewer:
+  enabled: false
+
+pipeline:
+  repo: test-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+  project-name: TestProject
+  project-id: proj-123
+  status-field-id: field-456
+  area-field-id: field-789
+  reviewer-app-id: ""
+  reviewer-bot-slug: ""
+  reviewer-token-key: ""
+  slack-token-key: ""
+  author-login: test-author
+  local-account: test-local
+  docs-context-dir: ""
+  area-ids:
+    Backend: ""
+    Admin: ""
+
+tracking:
+  enabled: false
