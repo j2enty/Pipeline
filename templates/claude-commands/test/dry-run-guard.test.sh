@@ -339,6 +339,22 @@ else
   fail "(F9) 사용법 예시의 --issue-fixture 상대경로에 '테스트 하니스 전용' 주석 없음"
 fi
 
+# ── (G-2) 파일명·브랜치명에 <slug> 단독 잔존 없는지 ─────────────────────────────
+# Phase A1 보장: 파일경로/브랜치명의 모든 <slug> 는 <parent-N>-<slug> 형식이어야 함.
+# 검사 패턴: /<slug>  →  requirements/<slug>, plans/<slug>, plan/<slug> 모두 포착.
+# 올바른 형식(/<parent-N>-<slug>)은 슬래시 바로 뒤가 <parent-N> 이므로 이 패턴에 안 걸림.
+G2_HITS="$(grep -n '/<slug>' "$TEMPLATE")"
+if [ -n "$G2_HITS" ]; then
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    fail "(G-2) 파일경로·브랜치명에 번호 없는 /<slug> 잔존: $hit"
+  done <<EOF
+$G2_HITS
+EOF
+else
+  pass "(G-2) 파일경로·브랜치명 전체에 번호 없는 /<slug> 없음 (모두 <parent-N>-<slug> 형식)"
+fi
+
 # ── 집계 ─────────────────────────────────────────────────────────────────────
 printf "\n${C_CYAN}══════════════════════════════${C_NC}\n"
 if [ "$FAILED" -eq 0 ]; then

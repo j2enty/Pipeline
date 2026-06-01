@@ -203,6 +203,8 @@ fi
 - 3~5단어 내외, 너무 길면 줄임
 - 이슈 제목이 이미 영어면 그대로 kebab-case 정규화
 
+파일명·브랜치명은 `<parent-N>-<slug>` 형식 사용 (예: `12-save-recipe`). parent 이슈 번호를 prefix로 붙여 slug 충돌을 원천 차단한다.
+
 ### 3.5. 재실행 가드 (Idempotency check)
 
 **실수로 같은 parent에 `/plan`을 두 번 돌리면 중복 sub-issue·Project 아이템·Docs PR이 생기므로, 본 단계에서 fail-fast**:
@@ -237,22 +239,22 @@ if echo "$BODY" | grep -q "📋 Plan 산출물"; then
   exit 1
 fi
 
-# 3.5-b. Docs 레포에 <slug> 관련 파일이 이미 존재하는지 확인
+# 3.5-b. Docs 레포에 <parent-N>-<slug> 관련 파일이 이미 존재하는지 확인
 # || exit 1 — 서브셸만 종료하면 부모가 계속 진행하므로 전파 필수
 ( cd Docs && \
-  if [ -f "claude/requirements/<slug>.md" ] || ls claude/plans/<slug>-*.md 2>/dev/null | grep -q .; then
-    echo "❌ 중단: Docs에 '<slug>' 관련 기획서/플랜이 이미 존재함."
+  if [ -f "claude/requirements/<parent-N>-<slug>.md" ] || ls claude/plans/<parent-N>-<slug>-*.md 2>/dev/null | grep -q .; then
+    echo "❌ 중단: Docs에 '<parent-N>-<slug>' 관련 기획서/플랜이 이미 존재함."
     echo "   다른 parent의 slug와 충돌했는지 확인하거나, 재실행이 필요하면 해당 파일을 먼저 정리할 것."
     exit 1
   fi
 ) || exit 1
 
-# 3.5-c. plan/<slug> 브랜치가 로컬·원격에 이미 존재하는지 확인
+# 3.5-c. plan/<parent-N>-<slug> 브랜치가 로컬·원격에 이미 존재하는지 확인
 # || exit 1 — 동일: 서브셸 exit 1 을 부모로 전파
 ( cd Docs && \
-  if git rev-parse --verify "plan/<slug>" >/dev/null 2>&1 \
-     || git ls-remote --exit-code --heads origin "plan/<slug>" >/dev/null 2>&1; then
-    echo "❌ 중단: 브랜치 plan/<slug>가 이미 존재함."
+  if git rev-parse --verify "plan/<parent-N>-<slug>" >/dev/null 2>&1 \
+     || git ls-remote --exit-code --heads origin "plan/<parent-N>-<slug>" >/dev/null 2>&1; then
+    echo "❌ 중단: 브랜치 plan/<parent-N>-<slug>가 이미 존재함."
     echo "   재실행이 필요하면 해당 브랜치를 먼저 삭제할 것."
     exit 1
   fi
@@ -265,8 +267,8 @@ fi  # dry-run/fixture 스킵 블록 끝
 
 정리 팁은 최종 출력에 간단히 안내:
 - Parent 본문: 섹션 지우고 사용자 재호출
-- Docs 파일: `git rm claude/requirements/<slug>.md claude/plans/<slug>-*.md && git commit`
-- 브랜치: `git branch -D plan/<slug>` + `git push origin --delete plan/<slug>`
+- Docs 파일: `git rm claude/requirements/<parent-N>-<slug>.md claude/plans/<parent-N>-<slug>-*.md && git commit`
+- 브랜치: `git branch -D plan/<parent-N>-<slug>` + `git push origin --delete plan/<parent-N>-<slug>`
 
 ### 4. 가벼운 확인 (기본 모드) / 풀 인터뷰 (`--deep`)
 
@@ -277,8 +279,8 @@ fi  # dry-run/fixture 스킵 블록 끝
    - Claude가 이슈 본문 읽고 선제안 → 사용자가 조정
    - **Frontend (사용자 공개 웹, Next.js)는 미래 도입 영역** — 도입 전이면 multiSelect 에서 자동 제외 또는 사용자가 명시적으로 선택할 때만 포함
 
-2. **slug 확인** — 제안된 `<slug>`가 괜찮은가?
-   - options: "OK" / "다른 이름" (다른 이름 고르면 재질문)
+2. **slug 확인** — 제안된 `<slug>`가 괜찮은가? (파일명·브랜치명은 `<parent-N>-<slug>` 형식이 됩니다)
+   - options: "OK" / "다른 이름" (다른 이름 고르면 순수 slug만 재입력)
 
 **`--deep` 모드 — 풀 인터뷰:**
 
@@ -316,18 +318,18 @@ Agent(
 #### 6a. 로컬 파일 생성 (dry-run에서도 수행 — G-1 검증 대상)
 
 **파일 생성:**
-- `Docs/claude/requirements/<slug>.md` — 통합 기획서 (parent 이슈 요약 + 결정 사항 + 영역별 목표)
-- `Docs/claude/plans/<slug>-backend.md` (해당되면)
-- `Docs/claude/plans/<slug>-admin.md` (해당되면)
-- `Docs/claude/plans/<slug>-frontend.md` (해당되면 — 미래 사용자 공개 웹)
-- `Docs/claude/plans/<slug>-ios.md` (해당되면)
-- `Docs/claude/plans/<slug>-android.md` (해당되면)
-- `Docs/claude/plans/<slug>-design.md` (Design 선택 시, 아래 placeholder 템플릿 사용)
+- `Docs/claude/requirements/<parent-N>-<slug>.md` — 통합 기획서 (parent 이슈 요약 + 결정 사항 + 영역별 목표)
+- `Docs/claude/plans/<parent-N>-<slug>-backend.md` (해당되면)
+- `Docs/claude/plans/<parent-N>-<slug>-admin.md` (해당되면)
+- `Docs/claude/plans/<parent-N>-<slug>-frontend.md` (해당되면 — 미래 사용자 공개 웹)
+- `Docs/claude/plans/<parent-N>-<slug>-ios.md` (해당되면)
+- `Docs/claude/plans/<parent-N>-<slug>-android.md` (해당되면)
+- `Docs/claude/plans/<parent-N>-<slug>-design.md` (Design 선택 시, 아래 placeholder 템플릿 사용)
 
-**Design placeholder 템플릿** (Design 영역 선택 시 `<slug>-design.md` 내용):
+**Design placeholder 템플릿** (Design 영역 선택 시 `<parent-N>-<slug>-design.md` 내용):
 
 ```markdown
-# [plan] <slug> — Design
+# [plan] <parent-N>-<slug> — Design
 
 ## 상태
 TBD — 디자이너(사용자)가 작성 예정.
@@ -370,8 +372,8 @@ done
 if [ "$DRY_RUN" = true ]; then
   echo "[DRY-RUN] 로컬 문서 생성 완료. 원격(PR·이슈·Project·parent) 반영은 스킵합니다."
   echo "[DRY-RUN] 생성된 로컬 문서:"
-  echo "  - Docs/claude/requirements/<slug>.md"
-  echo "  - Docs/claude/plans/<slug>-*.md"
+  echo "  - Docs/claude/requirements/<parent-N>-<slug>.md"
+  echo "  - Docs/claude/plans/<parent-N>-<slug>-*.md"
   echo "[DRY-RUN] 여기서 멈춤. Step 6b(git/PR)·Step 7(sub-issue)·Step 8(Project)·Step 9(parent 본문)는 실행하지 않습니다."
   exit 0
 fi
@@ -385,14 +387,14 @@ fi
 # $ARGUMENTS 는 모든 펜스에 substitution되므로 DRY_RUN 변수 전파 없이도 안전하게 검사 가능.
 case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Step 6b(git/PR) 원격 반영 스킵"; exit 0 ;; esac
 cd Docs
-git checkout -b plan/<slug>
-git add claude/requirements/<slug>.md claude/plans/<slug>-*.md
+git checkout -b plan/<parent-N>-<slug>
+git add claude/requirements/<parent-N>-<slug>.md claude/plans/<parent-N>-<slug>-*.md
 git commit -m "[plan] <parent-issue-title> 기획서·플랜 추가 (#<parent-number>)"
-git push -u origin plan/<slug>
+git push -u origin plan/<parent-N>-<slug>
 gh pr create --title "[plan] <parent-issue-title>" --body "Parent: __ORG__/__PARENT_REPO_NAME__#<N>"
 ```
 
-**Docs 영역 정책 (2026-05-07 확정):** plan PR(`plan/<slug>` 브랜치) 만으로 기획·플랜 작업을 추적한다. **Docs 레포에 sub-issue를 만들지 않으며 Prep Project 칸반에도 Docs 카드를 만들지 않는다.** Step 7의 sub-issue 생성 대상은 코드 영역(Backend/Frontend/iOS/Android/Design)에 한정.
+**Docs 영역 정책 (2026-05-07 확정):** plan PR(`plan/<parent-N>-<slug>` 브랜치) 만으로 기획·플랜 작업을 추적한다. **Docs 레포에 sub-issue를 만들지 않으며 Prep Project 칸반에도 Docs 카드를 만들지 않는다.** Step 7의 sub-issue 생성 대상은 코드 영역(Backend/Admin/Frontend/iOS/Android/Design)에 한정.
 
 ### 7. Sub-issue 생성 (영역 레포에)
 
@@ -415,7 +417,7 @@ gh label create plan \
 SUB_URL=$(gh issue create \
   --repo __ORG__/<영역> \
   --title "<parent-issue-title>" \
-  --body "Parent: __ORG__/__PARENT_REPO_NAME__#<N>\n플랜: Docs/claude/plans/<slug>-<영역>.md" \
+  --body "Parent: __ORG__/__PARENT_REPO_NAME__#<N>\n플랜: Docs/claude/plans/<parent-N>-<slug>-<영역>.md" \
   --assignee __AUTHOR_LOGIN__ \
   --label plan)
 
@@ -520,17 +522,18 @@ Parent 이슈 본문 하단에 "📋 Plan 산출물" 섹션 추가 (또는 코�
 
 ## 📋 Plan 산출물 (by /plan)
 
-- **기획서:** [Docs/claude/requirements/<slug>.md](링크)
+**Slug:** <parent-N>-<slug>
+
+- **기획서:** [Docs/claude/requirements/<parent-N>-<slug>.md](링크)
 - **영역별 플랜:**
-  - Backend: [Docs/claude/plans/<slug>-backend.md](링크)
-  - Frontend: [Docs/claude/plans/<slug>-frontend.md](링크)
+  - Backend: [Docs/claude/plans/<parent-N>-<slug>-backend.md](링크)
+  - Frontend: [Docs/claude/plans/<parent-N>-<slug>-frontend.md](링크)
   - ...
-- **Sub-issues:**
+- **Sub-issues:** (코드 영역만 — Docs는 sub-issue 없음)
   - __ORG__/Backend#<N>
   - __ORG__/Frontend#<N>
   - ...
-  - __ORG__/Docs#<N>
-- **Docs PR:** [plan/<slug>](링크)
+- **Docs PR:** [plan/<parent-N>-<slug>](링크)
 
 *Parent Status는 사용자가 직접 관리합니다. `/plan`은 Parent의 Status 필드를 건드리지 않습니다.*
 ```
@@ -564,8 +567,7 @@ fi
 
 **체크리스트 (공통):**
 - [ ] Docs PR 생성됨
-- [ ] Docs 이슈 생성됨 + parent(__PARENT_REPO_NAME__#N)에 sub-issue 연결됨
-- [ ] Parent 이슈 본문에 "📋 Plan 산출물" 섹션 추가됨 (Docs 이슈 번호 포함)
+- [ ] Parent 이슈 본문에 "📋 Plan 산출물" 섹션 추가됨
 
 누락 항목은 즉시 보정. 보정 불가(권한/네트워크 등)면 최종 리포트에 ⚠️ 표기하여 사용자에게 이관.
 
@@ -576,16 +578,15 @@ fi
 ```
 /plan 완료 — <parent-issue-title>
 
-Slug: <slug>
+Slug: <parent-N>-<slug>
 영역: Backend, Frontend  (iOS/Android/Design 제외)
 
 📄 문서:
   - Docs PR: <링크>
 
-🔗 Sub-issues (Prep Project에 추가 완료):
+🔗 Sub-issues (Prep Project에 추가 완료, 코드 영역만):
   - Backend#N  [Status=Ready]
   - Frontend#N [Status=Ready]
-  - Docs#N     [sub-issue 연결만, Project 미등록]
 
 ▶ 다음: /kickoff <parent-issue-url>
 ```
