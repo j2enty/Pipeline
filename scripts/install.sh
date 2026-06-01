@@ -280,12 +280,14 @@ for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_blo
 
 # plan 서브섹션 — critic 토글 (claude-commands 블록 내부에서만 탐색)
 # plan: 의 들여쓰기를 \1 로 캡처해, 같은(또는 더 얕은) 들여쓰기의 다음 키에서 종료한다.
-# (\s+[a-z] 종료는 plan 본문 첫 줄에서 곧바로 멈춰 빈 블록이 되는 버그가 있었음)
-plan_m = re.search(r'^(\s+)plan:\s*\n(.*?)(?=^\1\S|\Z)', cc_block, re.MULTILINE | re.DOTALL)
+# [ \t]+ 로 제한: \s+ 는 개행을 포함해 plan: 앞 빈 줄이 있으면 \1 에 개행이 섞이는 버그.
+plan_m = re.search(r'^([ \t]+)plan:\s*\n(.*?)(?=^\1\S|\Z)', cc_block, re.MULTILINE | re.DOTALL)
 plan_block = plan_m.group(2) if plan_m else ''
 def get_plan_bool(key, default='true'):
-    m = re.search(r'^\s+' + re.escape(key) + r':\s*(true|false)', plan_block, re.MULTILINE)
-    return m.group(1) if m else default
+    # tracking.enabled 패턴과 동일: \w+ 캡처 → lower() → ('true','false') 검증
+    m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*(\w+)', plan_block, re.MULTILINE)
+    value = m.group(1).strip().lower() if m else default
+    return value if value in ('true', 'false') else default
 print(f"CMD_PLAN_COMPLETENESS_CRITIC_ENABLED='{get_plan_bool('completeness-critic-enabled')}'")
 print(f"CMD_PLAN_CONSISTENCY_CRITIC_ENABLED='{get_plan_bool('consistency-critic-enabled')}'")
 print(f"CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL='{get_plan_bool('consistency-critic-dual-model')}'")
