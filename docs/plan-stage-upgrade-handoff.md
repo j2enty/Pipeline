@@ -460,18 +460,21 @@
 **완료된 것:**
 - Phase 0 (--dry-run 안전 테스트 경로) — PR #22 머지, main `d6c9528`
 - Phase A1 (파일명·브랜치명 `<parent-N>-<slug>` 형식) — PR #24 머지, main `92210ae`
-  - #23(Docs sub-issue 표기 불일치) 함께 해소
-  - kickoff·review downstream 동기화 (12곳)
-  - parent 본문 `**Slug:**` 라인 추가 (SLUG 파싱 지원)
-  - G-2 테스트 게이트 추가
+- Phase A2+A3 (7구간 인터뷰 내장 + 사람용 문서 템플릿) — PR #25 머지, main `b875d41`
+  - D6: deep-interview 스킬 의존 제거, plan.md.tmpl 자체 내장
+  - D7: 7구간 대본 + 3.5번(접근법) 신설 + 4·5번 스킵 금지 + 5번 AI 선제 가정
+  - D8: `--deep` 재정의 (스킵 없이 7구간 풀), `--bot` 자동 추론 정의
+  - §3.6: requirements 파일 사람용 템플릿 구조 추가 (★ 접근법 슬롯 포함)
+  - 테스트: interview-structure.test.sh 신규 (12항목)
 - 설계 결정 D1~D9·R1·R2 전부 §0.5에 확정
-- §8 미해결 질문: D9(보류)·D6·D7·D8 해소. §8-3(config 명명)만 구현 직전에.
+- 해소: D6·D7·D8·D9(보류)·R1·R2
 
-**다음 할 일 = Phase A2+A3** — 7구간 인터뷰(D7) + 사람용 문서 템플릿(§3.6).
-- D7: plan.md.tmpl 자체 내장 7구간 인터뷰 대본 (deep-interview 스킬 비종속)
-- §3.6: 사람용 템플릿에 D7 접근법 결정(3.5번) 슬롯 추가
-- D8: `--deep` = 스킵 끄고 7개 전부 + 꼬리질문 강화
-- 브랜치: `feat/plan-A2-A3-interview`
+**다음 할 일 = Phase B** — ③⑤ critic 단계 (D1).
+- ③ 완결성 critic: 단일 모델, AI용 명세 생성 직후 실행
+- ⑤ 정합성 critic: 이중 모델 (Claude+Codex), 사람용 파생 후 실행 (사람 게이트 직전)
+- D5 구현 전략: "저비용·고레버리지" 완료 → 이제 critic 단계로
+- §8-3(config 명명) 구현 직전에 확정 필요
+- 브랜치: `feat/plan-B-critic`
 
 ---
 
