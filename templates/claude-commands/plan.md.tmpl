@@ -527,11 +527,10 @@ Parent 이슈 본문 하단에 "📋 Plan 산출물" 섹션 추가 (또는 코�
   - Backend: [Docs/claude/plans/<parent-N>-<slug>-backend.md](링크)
   - Frontend: [Docs/claude/plans/<parent-N>-<slug>-frontend.md](링크)
   - ...
-- **Sub-issues:**
+- **Sub-issues:** (코드 영역만 — Docs는 sub-issue 없음)
   - __ORG__/Backend#<N>
   - __ORG__/Frontend#<N>
   - ...
-  - __ORG__/Docs#<N>
 - **Docs PR:** [plan/<parent-N>-<slug>](링크)
 
 *Parent Status는 사용자가 직접 관리합니다. `/plan`은 Parent의 Status 필드를 건드리지 않습니다.*
@@ -566,8 +565,7 @@ fi
 
 **체크리스트 (공통):**
 - [ ] Docs PR 생성됨
-- [ ] Docs 이슈 생성됨 + parent(__PARENT_REPO_NAME__#N)에 sub-issue 연결됨
-- [ ] Parent 이슈 본문에 "📋 Plan 산출물" 섹션 추가됨 (Docs 이슈 번호 포함)
+- [ ] Parent 이슈 본문에 "📋 Plan 산출물" 섹션 추가됨
 
 누락 항목은 즉시 보정. 보정 불가(권한/네트워크 등)면 최종 리포트에 ⚠️ 표기하여 사용자에게 이관.
 
