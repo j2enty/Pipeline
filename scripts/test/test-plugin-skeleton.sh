@@ -3,11 +3,15 @@
 #
 # 검증 대상:
 #   1. 매니페스트 2개(.claude-plugin/plugin.json·marketplace.json) 존재 + JSON 유효
-#   2. `claude plugin validate .` [--strict] 통과 (claude CLI 있을 때만)
+#   2. claude plugin validate (claude CLI 있을 때만):
+#        - marketplace: 비-strict + --strict 둘 다 통과
+#        - plugin.json: 비-strict 통과 (--strict 는 레포 루트 CLAUDE.md 경고로
+#          실패하는 게 정상 — 의도된 동작이라 strict 적용 안 함)
 #   3. 에이전트 2개(agents/critic.md·planner.md) 존재
 #   4. 에이전트 frontmatter 필수필드(name·description) 보유 + name 일치
 #      ← claude plugin validate 는 매니페스트만 보고 에이전트 frontmatter 는
-#        검증하지 않으므로(P0 실측), 이 사각지대를 직접 메운다.
+#        검증하지 않으므로(실측), 이 사각지대를 직접 메운다.
+#   5. 파서 음성 self-test — frontmatter 파서가 깨진 에이전트를 실제로 떨어뜨리는지.
 #
 # 설계: 독립 실행 스크립트(install.sh source 모델이 아님 — 순수 파일·CLI 검증).
 #   claude CLI 가 없으면 validate 항목만 SKIP 하고 나머지는 그대로 검사
@@ -35,27 +39,36 @@ fail() { FAIL_COUNT=$((FAIL_COUNT + 1)); printf "${C_RED}✗${C_NC} %s\n    %s\n
 skip() { SKIP_COUNT=$((SKIP_COUNT + 1)); printf "${C_YELLOW}–${C_NC} %s (SKIP: %s)\n" "$1" "${2:-}"; }
 
 # ── frontmatter 필드 추출 — <file> <key> ─────────────────────
-# 첫 --- --- 블록 안에서 `key:` 값을 추출(없으면 빈 문자열).
-# YAML 스칼라/접힘(>-) 모두에서 키 존재만 확인하면 되므로 값 첫 토큰만 본다.
+# 첫 `---` … `---` 블록 안에서만 `key:` 를 찾는다.
+# 닫는 `---` 가 없는(깨진) frontmatter 는 키를 못 찾은 것으로 간주해 실패시킨다.
+#   ← awk 가 매치 없이 끝까지 가면 기본 exit 0(=성공)이 되어, 닫는 `---` 없는
+#     파일이 "키 있음"으로 거짓 통과하던 버그를 END 블록으로 차단(Codex 지적).
 frontmatter_has_key() {
   local file="$1" key="$2"
   awk -v k="$key" '
-    NR==1 && $0!="---" { exit 1 }      # frontmatter 시작 아니면 실패
+    NR==1 && $0!="---" { exit 1 }      # frontmatter 시작(--- ) 아니면 실패
     NR==1 { infm=1; next }
-    infm && $0=="---" { exit 1 }       # 키 못 찾고 블록 끝 → 실패
-    infm && $0 ~ "^"k":" { exit 0 }    # 키 발견 → 성공
+    infm && $0=="---" { exit 1 }       # 닫는 --- 도달, 키 못 찾음 → 실패
+    infm && $0 ~ "^"k":" { found=1; exit 0 }  # 키 발견 → 성공
+    END { if (!found) exit 1 }         # EOF(닫는 --- 부재 포함) → 실패
   ' "$file"
 }
 
-# frontmatter 스칼라 값 추출(한 줄 스칼라용) — <file> <key>
+# frontmatter 스칼라 값 추출(한 줄 스칼라 전용) — <file> <key>
+#   - 매칭 앵커는 has_key 와 동일(`^key:`)하게 맞춰 둘의 판정이 어긋나지 않게 한다.
+#   - 값이 접힘/블록 스칼라 지시자(`>-` `>` `|` `|-` 등)면 실제 값은 다음 줄들에
+#     있으므로 한 줄 스칼라가 아니다 → 지시자 리터럴을 반환하지 않고 빈 문자열 반환.
+#   - 닫는 --- 부재/키 부재면 빈 문자열(awk 기본). 값 비교 측에서 불일치로 잡힘.
 frontmatter_value() {
   local file="$1" key="$2"
   awk -v k="$key" '
     NR==1 && $0!="---" { exit }
     NR==1 { infm=1; next }
     infm && $0=="---" { exit }
-    infm && $0 ~ "^"k":[ \t]" {
-      sub("^"k":[ \t]*", ""); gsub(/^[ \t"\x27]+|[ \t"\x27]+$/, ""); print; exit
+    infm && $0 ~ "^"k":" {
+      sub("^"k":[ \t]*", "")
+      if ($0 ~ /^[>|][+-]?[ \t]*$/) { print ""; exit }   # 접힘/블록 스칼라 → 빈 값
+      gsub(/^[ \t"\x27]+|[ \t"\x27]+$/, ""); print; exit
     }
   ' "$file"
 }
@@ -104,16 +117,32 @@ print(ps[0].get('source','') if ps else 'MISSING')
 fi
 
 # ── 2. claude plugin validate (CLI 있을 때만) ────────────────
+# 주의(실측): `claude plugin validate <레포>` 는 매니페스트가 둘 다 있으면
+#   marketplace.json 만 검증한다(plugin.json·컴포넌트는 안 봄). 따라서
+#   marketplace 와 plugin 을 각각 명시 경로로 검증한다.
+#
+# 또 plugin 검증은 레포 루트의 CLAUDE.md 를 "plugin context 로 안 실린다"고
+#   경고한다 — 레포=플러그인 루트 구조의 의도된 동작(우리 CLAUDE.md 는 프레임워크
+#   지침이지 배포 대상 컨텍스트가 아님). 따라서 plugin 은 비-strict 로 검증하고,
+#   --strict 는 그 경고가 없는 marketplace 에만 적용한다.
 if command -v claude >/dev/null 2>&1; then
+  # marketplace — 비-strict + strict 둘 다 깨끗해야 함
   if claude plugin validate "$REPO_ROOT" >/dev/null 2>&1; then
-    pass "claude plugin validate ."
+    pass "claude plugin validate . (marketplace)"
   else
-    fail "claude plugin validate ." "exit != 0"
+    fail "claude plugin validate . (marketplace)" "exit != 0"
   fi
   if claude plugin validate "$REPO_ROOT" --strict >/dev/null 2>&1; then
-    pass "claude plugin validate . --strict"
+    pass "claude plugin validate . --strict (marketplace)"
   else
-    fail "claude plugin validate . --strict" "exit != 0 (미인식 필드·메타 누락 가능)"
+    fail "claude plugin validate . --strict (marketplace)" "exit != 0 (미인식 필드·메타 누락)"
+  fi
+  # plugin manifest — 실제 플러그인 검증(비-strict). 컴포넌트 frontmatter 는
+  #   validate 가 안 보므로 아래 3·4 항목이 보완.
+  if claude plugin validate "$PLUGIN_JSON" >/dev/null 2>&1; then
+    pass "claude plugin validate <plugin.json>"
+  else
+    fail "claude plugin validate <plugin.json>" "exit != 0 (CLAUDE.md 경고 외 실패)"
   fi
 else
   skip "claude plugin validate" "claude CLI 미설치"
@@ -158,6 +187,25 @@ if [ -f "$CRITIC" ]; then
     fail "agents/critic.md model == 'opus'" "실제='$cm' (critic 은 모델 민감 — opus 고정 필요)"
   fi
 fi
+
+# ── 5. 파서 음성 self-test (게이트 실효성 증명) ──────────────
+# claude CLI 가 없는 CI 에서는 위 3·4 frontmatter 검사가 유일한 에이전트 게이트다.
+# 그 파서가 "깨진 에이전트를 실제로 떨어뜨리는지" 직접 증명한다.
+SELFTEST_TMP="$(mktemp)"
+# 닫는 --- 없고 description 도 없는 깨진 frontmatter
+printf -- '---\nname: probe\nmodel: opus\n본문(닫는 펜스 없음)\n' > "$SELFTEST_TMP"
+if frontmatter_has_key "$SELFTEST_TMP" "description"; then
+  fail "파서 self-test: 깨진 frontmatter 의 누락 키" "has_key 가 거짓 통과(EOF 버그)"
+else
+  pass "파서 self-test: 깨진 frontmatter(닫는 --- 부재)의 누락 키를 실패 처리"
+fi
+# 정상 키는 여전히 잡혀야 함(거짓 음성 방지)
+if frontmatter_has_key "$SELFTEST_TMP" "name"; then
+  pass "파서 self-test: 존재하는 키는 정상 탐지"
+else
+  fail "파서 self-test: 존재하는 키 탐지" "has_key 가 정상 키를 놓침"
+fi
+rm -f "$SELFTEST_TMP"
 
 # ── 집계 ─────────────────────────────────────────────────────
 echo ""

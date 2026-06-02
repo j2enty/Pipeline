@@ -462,7 +462,7 @@ Reclip 프로젝트(상위 워크스페이스). Reclip에서 학습한 패턴을
 - 커밋 메시지 prefix: `[App]`, `[워크플로]`, `[액션]`, `[스크립트]`, `[설정]`, `[플러그인]`, `[문서]`, `[기타]`
   - `[플러그인]` = `.claude-plugin/`·`agents/`·`skills/` 등 Claude Code 플러그인 컴포넌트 작업
 - 새 yml 추가 시 — 다른 yml과 중복되는 로직이 있는지 먼저 확인. 있으면 reusable로 먼저 빼고 나서 yml 추가
-- 본체 코드(`/app/`, `/.github/workflows/`, `/actions/`, `/scripts/`)에 프로젝트 식별자 하드코딩 시도 시 — 즉시 거부하고 설정 주입 방식으로 변경
+- 본체 코드(`/.claude-plugin/`, `/agents/`, `/skills/`, `/app/`, `/.github/workflows/`, `/actions/`, `/scripts/`)에 프로젝트 식별자 하드코딩 시도 시 — 즉시 거부하고 설정 주입 방식으로 변경
 - 새 input/secret/output — 표준 카탈로그에 먼저 추가, yml 내에서 즉흥적으로 새 이름 만들지 않음
 - 큰 결정 시 — "큰 결정 체크리스트" 4항목을 명시적으로 평가
 
