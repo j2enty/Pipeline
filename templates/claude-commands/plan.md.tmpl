@@ -377,10 +377,14 @@ Step 5에서 생성한 각 영역 플랜(LLM 컨텍스트의 planner 출력)을 
 
 **Agent 호출:**
 
+> **모델 고정**: critic 품질은 모델에 민감하다(G-1 검증서 sonnet은 rate limit 누락을 놓치고 opus는 잡음).
+> 약한 모델로 떨어지면 핵심 구멍을 놓치므로 **반드시 `model="opus"`로 호출**한다.
+
 ```
 Agent(
   description="③ 완결성 critic — AI용 명세 검토",
   subagent_type="oh-my-claudecode:critic",
+  model="opus",
   prompt="""
 아래 영역별 AI용 명세를 검토해주세요. 메우지 말고 분류만 합니다.
 
@@ -388,10 +392,15 @@ Agent(
 
 ## 체크리스트
 - 표준 보안 누락: 인증·rate limit·입력검증 명시됐나
-- 에러·경계 처리: 빠진 케이스 없나
-- 영역 인터페이스: 영역 간 만나는 지점이 정의됐나
+  ⚠️ 강제 규칙: **인증 없는 공개 엔드포인트**(로그인·토큰 없이 접근 가능)가 있고,
+     그것이 **서버 연산·DB·외부 호출을 유발하거나 버전·상태·내부 메타데이터를 반환**하면
+     — rate limit(무인증 무한 호출 → 백엔드·DB 부하, 저비용 DoS)과
+     정보 노출(fingerprinting)을 **반드시 점검**하고, 명세에 없으면 누락으로 지적하라.
+     (순수 정적 응답만 주는 공개 엔드포인트는 이 강도 불필요 — 헛다리 방지.)
+- 에러·경계 처리: 빠진 케이스 없나 (외부 의존[DB·API] 실패·타임아웃 시 동작 정의됐나)
+- 영역 인터페이스: 영역 간 만나는 지점이 정의됐나 (응답 스키마 SSOT가 한 곳인가, 영역마다 베껴 표류하지 않나)
 - acceptance 검증가능성: 완료 기준이 측정 가능한가
-- 모호어: "적절히", "필요에 따라" 등 남아있나
+- 모호어: "적절히", "필요에 따라", "보기 좋게" 등 측정 불가·주관적 표현 남아있나
 - 인터뷰 제약 반영: Step 4 답변이 명세에 반영됐나
 
 ## 출력 형식
@@ -495,12 +504,13 @@ Step 6a에서 생성한 사람용 + AI용 문서를 대상으로 정합성을 �
 - `true`: Claude + Codex 교차 검증 (두 결과 합산 후 처리)
 - `false`: Claude만 실행
 
-**1단계 — Claude critic:**
+**1단계 — Claude critic:** (③과 동일 이유로 **반드시 `model="opus"`** — 약한 모델은 핵심 누락을 놓친다)
 
 ```
 Agent(
   description="⑤ 정합성 critic (Claude) — 사람용↔AI용 대조",
   subagent_type="oh-my-claudecode:critic",
+  model="opus",
   prompt="""
 사람용 문서와 AI용 명세의 정합성을 검토해주세요.
 - 사람용: Docs/claude/requirements/<parent-N>-<slug>.md
