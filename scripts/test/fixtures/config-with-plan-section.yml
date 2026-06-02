@@ -42,6 +42,7 @@ claude-commands:
     completeness-critic-enabled: true
     consistency-critic-enabled: false
     consistency-critic-dual-model: false
+    contract-doc-enabled: false
 
 tracking:
   enabled: false

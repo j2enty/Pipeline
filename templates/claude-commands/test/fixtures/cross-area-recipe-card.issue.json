@@ -1,0 +1,11 @@
+{
+  "number": 14,
+  "title": "레시피 카드 공유 컴포넌트",
+  "body": "## 배경\n\n레시피 요약을 보여주는 **카드**를 여러 화면에서 공통으로 쓴다. 백엔드가 카드용 요약 데이터를 내려주고, 관리자 화면과 공개 웹이 **같은 데이터**로 카드를 렌더한다.\n\n## 하려는 것\n\n- Backend: `GET /recipes/{id}/card` 신설 — 카드에 필요한 요약 필드를 한 번에 반환\n- Admin: 레시피 카드 미리보기 컴포넌트 (관리자가 카드 모양 확인)\n- Frontend: 공개 웹의 레시피 카드 (사용자가 보는 실제 카드)\n\n## 카드에 들어갈 정보\n\n- 레시피 ID\n- 제목\n- 썸네일 이미지 주소\n- 조리 시간(분)\n- 난이도\n- 작성자 이름\n- 등록 시각\n\n## 영역\n\n- Backend: `/recipes/{id}/card` 엔드포인트\n- Admin: 카드 미리보기 컴포넌트\n- Frontend: 공개 카드 컴포넌트\n\n## 참고\n\n- 세 영역이 같은 카드 데이터를 쓴다\n- 썸네일이 없는 레시피는 어떻게 보여줄지는 추후 결정\n- 조리 시간 표시 형식(\"30분\" vs \"30\")은 클라이언트가 정한다\n",
+  "author": {
+    "login": "test-operator"
+  },
+  "assignees": [],
+  "labels": [],
+  "url": "https://github.com/EXAMPLE_ORG/EXAMPLE_PARENT/issues/14"
+}

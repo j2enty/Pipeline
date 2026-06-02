@@ -63,6 +63,16 @@ claude-commands:
     Android: 7394b300
     Design: 56405937
 
+  plan:
+    # ③ 완결성 critic — AI용 명세 생성 직후 단일 모델 검사 (기본 ON)
+    completeness-critic-enabled: true
+    # ⑤ 정합성 critic — 사람 게이트 직전 검사 (기본 ON)
+    consistency-critic-enabled: true
+    # ⑤ 이중 모델 (Claude+Codex 교차, 기본 ON / 비용 절감 시 false)
+    consistency-critic-dual-model: true
+    # ② 영역 간 공유 계약 문서(contract.md) — 2개 이상 영역이 만날 때 생성 (기본 ON)
+    contract-doc-enabled: true
+
 tracking:
   # finding(리뷰 지적) 추적 이슈 자동 생성 on/off
   enabled: true

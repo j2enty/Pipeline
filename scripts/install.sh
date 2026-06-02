@@ -291,6 +291,7 @@ def get_plan_bool(key, default='true'):
 print(f"CMD_PLAN_COMPLETENESS_CRITIC_ENABLED='{get_plan_bool('completeness-critic-enabled')}'")
 print(f"CMD_PLAN_CONSISTENCY_CRITIC_ENABLED='{get_plan_bool('consistency-critic-enabled')}'")
 print(f"CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL='{get_plan_bool('consistency-critic-dual-model')}'")
+print(f"CMD_PLAN_CONTRACT_DOC_ENABLED='{get_plan_bool('contract-doc-enabled')}'")
 
 # ── tracking 섹션 — finding 추적 라벨 자동 등록용 ───────────────────────
 # tracking: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
@@ -771,6 +772,7 @@ install_claude_commands() {
     -e "s|__PLAN_COMPLETENESS_CRITIC_ENABLED__|$(esc "${CMD_PLAN_COMPLETENESS_CRITIC_ENABLED:-true}")|g"
     -e "s|__PLAN_CONSISTENCY_CRITIC_ENABLED__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_ENABLED:-true}")|g"
     -e "s|__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL:-true}")|g"
+    -e "s|__PLAN_CONTRACT_DOC_ENABLED__|$(esc "${CMD_PLAN_CONTRACT_DOC_ENABLED:-true}")|g"
   )
 
   # 3개 템플릿 치환 → 임시 디렉토리에 생성

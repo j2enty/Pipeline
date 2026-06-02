@@ -3,7 +3,8 @@
 # T-B0-1: plan 섹션 있는 config → 3개 변수 올바르게 파싱
 # T-B0-2: plan 섹션 없는 config → 기본값 true 적용 (backward-compat)
 # T-B0-3: false 값 파싱 정확성
-# T-B0-4: anti-drift — install.sh sed_args에 3개 placeholder 존재
+# T-B0-4: anti-drift — install.sh sed_args에 4개 placeholder 존재
+# T-B0-5: contract-doc-enabled 파싱 (false 명시 / 누락 시 기본 true)
 # shellcheck disable=SC2034
 
 # setup_install_env 가 CONFIG_FILE 을 세팅하므로, 같은 셸에서 parse_config 를
@@ -40,11 +41,25 @@ it "T-B0-3 false 값 파싱 정확성"
   assert_eq "false" "$CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL" "false 파싱 안 됨 (dual)" && pass
 )
 
-# T-B0-4: anti-drift — install.sh sed_args에 3개 placeholder 모두 존재
-it "T-B0-4 anti-drift: install.sh sed_args에 3개 PLAN placeholder 존재"
+# T-B0-4: anti-drift — install.sh sed_args에 4개 placeholder 모두 존재
+it "T-B0-4 anti-drift: install.sh sed_args에 4개 PLAN placeholder 존재"
 (
   grep -q '__PLAN_COMPLETENESS_CRITIC_ENABLED__' "$INSTALL_SH" || { fail "COMPLETENESS placeholder install.sh에 없음"; return; }
   grep -q '__PLAN_CONSISTENCY_CRITIC_ENABLED__'  "$INSTALL_SH" || { fail "CONSISTENCY placeholder install.sh에 없음"; return; }
   grep -q '__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__' "$INSTALL_SH" || { fail "DUAL_MODEL placeholder install.sh에 없음"; return; }
+  grep -q '__PLAN_CONTRACT_DOC_ENABLED__' "$INSTALL_SH" || { fail "CONTRACT_DOC placeholder install.sh에 없음"; return; }
   pass
+)
+
+# T-B0-5: contract-doc-enabled 파싱 — 명시 false / 누락 시 기본 true
+it "T-B0-5 contract-doc-enabled 파싱: 명시 false / 누락 시 기본 true"
+(
+  # plan 섹션 있는 config: contract-doc-enabled: false → 'false' 파싱
+  setup_install_env "$FIXTURES_DIR/config-with-plan-section.yml"
+  eval "$(parse_config 2>/dev/null)"
+  assert_eq "false" "$CMD_PLAN_CONTRACT_DOC_ENABLED" "contract-doc-enabled false 파싱 실패" || return
+  # plan 섹션 없는 config: 누락 → 기본 true
+  setup_install_env "$FIXTURES_DIR/config-without-plan-section.yml"
+  eval "$(parse_config 2>/dev/null)"
+  assert_eq "true" "$CMD_PLAN_CONTRACT_DOC_ENABLED" "contract-doc-enabled 기본값 true 아님" && pass
 )

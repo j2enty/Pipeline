@@ -18,6 +18,11 @@
 #   (C-9) Claude + Codex 이중 모델 분기 설명 존재 ('Codex' 키워드)
 #   (C-10) 5.5 단계가 Step 5 이후 Step 6 이전에 위치 (줄번호 순서 검증)
 #   (C-DRIFT) install.sh sed_args 에 '__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__' 존재
+#   (C-CONTRACT-1) '__PLAN_CONTRACT_DOC_ENABLED__' 게이트 placeholder 존재
+#   (C-CONTRACT-2) contract.md 템플릿 헤더 '# [contract]' + '## API 스키마' + '## 공통 규약' 존재
+#   (C-CONTRACT-3) '2개 이상' 영역 조건 + 단일 영역 생략 지시 존재
+#   (C-CONTRACT-4) Step 6a 산출 목록에 '<parent-N>-<slug>-contract.md' 존재
+#   (C-CONTRACT-5) planner 프롬프트에 '계약 참조'(다시 정의 금지) 지시 존재
 
 set -uo pipefail
 
@@ -129,6 +134,45 @@ elif grep -q "__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__" "$INSTALL_SH"; then
   pass "(C-DRIFT) install.sh 가 '__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__' 치환함"
 else
   fail "(C-DRIFT) install.sh sed_args 에 '__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__' 치환 줄 없음"
+fi
+
+# ── (C-CONTRACT-1) contract 게이트 placeholder 존재 ──────────────────────────
+if grep -q "__PLAN_CONTRACT_DOC_ENABLED__" "$TEMPLATE"; then
+  pass "(C-CONTRACT-1) '__PLAN_CONTRACT_DOC_ENABLED__' placeholder 존재"
+else
+  fail "(C-CONTRACT-1) '__PLAN_CONTRACT_DOC_ENABLED__' placeholder 없음"
+fi
+
+# ── (C-CONTRACT-2) contract.md 템플릿 헤더·필수 섹션 존재 ────────────────────
+if grep -q "# \[contract\]" "$TEMPLATE" \
+   && grep -q "## API 스키마" "$TEMPLATE" \
+   && grep -q "## 공통 규약" "$TEMPLATE"; then
+  pass "(C-CONTRACT-2) contract.md 템플릿 헤더 '# [contract]' + '## API 스키마' + '## 공통 규약' 존재"
+else
+  fail "(C-CONTRACT-2) contract.md 템플릿 헤더 또는 필수 섹션 누락"
+fi
+
+# ── (C-CONTRACT-3) '2개 이상' 영역 조건 + 단일 영역 생략 지시 존재 ────────────
+if grep -q "2개 이상" "$TEMPLATE" \
+   && grep -q "1개뿐이면" "$TEMPLATE"; then
+  pass "(C-CONTRACT-3) '2개 이상' 영역 조건 + 단일 영역 생략 지시 존재"
+else
+  fail "(C-CONTRACT-3) '2개 이상' 조건 또는 단일 영역 생략 지시 누락"
+fi
+
+# ── (C-CONTRACT-4) Step 6a 산출 목록에 contract.md 존재 ──────────────────────
+if grep -q "<parent-N>-<slug>-contract.md" "$TEMPLATE"; then
+  pass "(C-CONTRACT-4) Step 6a 산출 목록에 '<parent-N>-<slug>-contract.md' 존재"
+else
+  fail "(C-CONTRACT-4) Step 6a 산출 목록에 '<parent-N>-<slug>-contract.md' 없음"
+fi
+
+# ── (C-CONTRACT-5) planner 프롬프트에 '계약 참조' 지시 존재 ──────────────────
+if grep -q "계약 참조" "$TEMPLATE" \
+   && grep -q "다시 정의" "$TEMPLATE"; then
+  pass "(C-CONTRACT-5) planner 프롬프트에 '계약 참조'(다시 정의 금지) 지시 존재"
+else
+  fail "(C-CONTRACT-5) planner 프롬프트에 '계약 참조' 또는 '다시 정의' 금지 지시 누락"
 fi
 
 # ── 집계 ─────────────────────────────────────────────────────────────────────
