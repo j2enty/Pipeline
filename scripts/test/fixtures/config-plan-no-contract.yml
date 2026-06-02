@@ -1,0 +1,48 @@
+# 테스트용 더미 config — plan 블록은 있으나 contract-doc-enabled 키만 누락
+# 레거시 시나리오: 기존 사용자가 critic 토글만 둔 config 를 업그레이드하지 않은 경우.
+# contract-doc-enabled 는 기본 true 로 떨어져야 한다. 실제 프로젝트 식별자 없음.
+
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+
+modules:
+  - name: ModuleA
+    ci-workflow-name: ModuleA CI
+
+modules-ignore:
+  - ""
+
+reviewer:
+  enabled: false
+
+pipeline:
+  repo: test-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+  project-name: TestProject
+  project-id: proj-123
+  status-field-id: field-456
+  area-field-id: field-789
+  reviewer-app-id: ""
+  reviewer-bot-slug: ""
+  reviewer-token-key: ""
+  slack-token-key: ""
+  author-login: test-author
+  local-account: test-local
+  docs-context-dir: ""
+  area-ids:
+    Backend: ""
+    Admin: ""
+
+  plan:
+    completeness-critic-enabled: true
+    consistency-critic-enabled: true
+    consistency-critic-dual-model: true
+
+tracking:
+  enabled: false

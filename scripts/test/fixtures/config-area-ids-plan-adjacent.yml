@@ -1,0 +1,47 @@
+# 테스트용 더미 config — area-ids(비어있지 않은 값) 다음에 plan 블록이 인접.
+# 선재 버그 회귀 잠금: area-ids 파서가 콜론 뒤 개행을 넘어 plan 자식 줄을
+# 빨아들여 정크 CMD_AREA_ID_PLAN 을 emit + eval 오염시키던 문제.
+# 기대: 실제 area(Backend/Admin)만 emit, CMD_AREA_ID_PLAN 은 없어야 함.
+
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+
+modules:
+  - name: ModuleA
+    ci-workflow-name: ModuleA CI
+
+modules-ignore:
+  - ""
+
+reviewer:
+  enabled: false
+
+pipeline:
+  repo: test-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+  project-name: TestProject
+  project-id: proj-123
+  status-field-id: field-456
+  area-field-id: field-789
+  reviewer-app-id: ""
+  reviewer-bot-slug: ""
+  reviewer-token-key: ""
+  slack-token-key: ""
+  author-login: test-author
+  local-account: test-local
+  docs-context-dir: ""
+  area-ids:
+    Backend: "bk111"
+    Admin: "ad222"
+
+  plan:
+    contract-doc-enabled: 'false'
+
+tracking:
+  enabled: false

@@ -505,7 +505,7 @@ Agent(
 > **가정+표시**: AI가 인터뷰 답 없이 채운 항목은 반드시 "○○로 가정함 ← 맞나요?"로 `결정할 것` 섹션에 노출 (조용한 기정사실화 차단).
 
 **또한 생성:**
-- `Docs/claude/plans/<parent-N>-<slug>-contract.md` — **영역 간 공유 계약 (②b에서 작성, 2개 이상 영역 + `__PLAN_CONTRACT_DOC_ENABLED__`=true 일 때만)**
+- `Docs/claude/plans/<parent-N>-<slug>-contract.md` — **영역 간 공유 계약. ②b에서 실제로 작성된 경우에만 저장한다 (②b가 토글 off·단일 영역으로 스킵됐으면 이 파일은 없음 — 여기서 새로 만들지 말 것).**
 - `Docs/claude/plans/<parent-N>-<slug>-backend.md` (해당되면)
 - `Docs/claude/plans/<parent-N>-<slug>-admin.md` (해당되면)
 - `Docs/claude/plans/<parent-N>-<slug>-frontend.md` (해당되면 — 미래 사용자 공개 웹)

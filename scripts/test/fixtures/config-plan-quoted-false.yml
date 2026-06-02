@@ -1,0 +1,46 @@
+# 테스트용 더미 config — plan 토글 값에 따옴표 사용 (quoted boolean)
+# get_plan_bool 의 따옴표 처리 회귀 잠금용. 실제 프로젝트 식별자 없음.
+
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+
+modules:
+  - name: ModuleA
+    ci-workflow-name: ModuleA CI
+
+modules-ignore:
+  - ""
+
+reviewer:
+  enabled: false
+
+pipeline:
+  repo: test-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+  project-name: TestProject
+  project-id: proj-123
+  status-field-id: field-456
+  area-field-id: field-789
+  reviewer-app-id: ""
+  reviewer-bot-slug: ""
+  reviewer-token-key: ""
+  slack-token-key: ""
+  author-login: test-author
+  local-account: test-local
+  docs-context-dir: ""
+  area-ids:
+    Backend: ""
+    Admin: ""
+
+  plan:
+    # 따옴표로 감싼 boolean — opt-out 이 무력화되면 안 됨 (false 로 파싱돼야 함)
+    contract-doc-enabled: "false"
+
+tracking:
+  enabled: false
