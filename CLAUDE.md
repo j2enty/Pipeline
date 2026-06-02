@@ -99,6 +99,13 @@ App 코드와 GHA workflow를 한 레포(Pipeline)에서 본다. yml 디렉토�
 
 ```
 Pipeline/
+├── .claude-plugin/         # 마켓플레이스 카탈로그 (레포 루트)
+│   └── marketplace.json    # 자체 마켓플레이스 (source: ./plugin)
+├── plugin/                 # ★ 플러그인 루트 (격리 — 설치 시 이 디렉토리만 실림)
+│   ├── .claude-plugin/
+│   │   └── plugin.json     # 플러그인 정의 (name: pipeline)
+│   ├── agents/             # 플러그인 일꾼 에이전트 (pipeline:critic·planner 등)
+│   └── skills/             # 플러그인 슬래시커맨드(skill) — P2 예정 (명령어 이전)
 ├── app/                    # GitHub App 코드 (webhook 수신 + chain orchestrator)
 │   ├── src/                # App 본체 — 일반화된 코드
 │   ├── Dockerfile          # 표준 배포 단위
@@ -114,7 +121,12 @@ Pipeline/
         └── .github/workflows/      # 영역 레포에 설치할 호출자 yml 예시
 ```
 
-- 본체 = `app/` + `.github/workflows/` + `actions/` + `scripts/`
+- 본체 = `.claude-plugin/` + `plugin/`(= `agents/` +예정 `skills/`) + `app/` + `.github/workflows/` + `actions/` + `scripts/`
+- **플러그인 격리**: 플러그인 루트는 `plugin/`. 마켓플레이스(`.claude-plugin/marketplace.json`)는
+  레포 루트에 남아 `./plugin` 을 카탈로그한다. 레포 루트 CLAUDE.md 가 플러그인 루트 밖이라
+  설치 시 딸려가지 않고, `claude plugin validate plugin/ --strict` 도 깨끗하다. 로드: `claude --plugin-dir plugin`
+- `plugin/agents/`·`plugin/skills/` 는 Claude Code 플러그인 컴포넌트. OMC 등 외부 오케스트레이터
+  없이도 `pipeline:*` 일꾼이 따라오게 하는 자산 — 프로젝트 식별자 하드코딩 금지 동일 적용
 - 프로젝트별 설정·예시는 `examples/`로 격리
 
 
@@ -452,9 +464,10 @@ Reclip 프로젝트(상위 워크스페이스). Reclip에서 학습한 패턴을
 ## 규칙
 
 - 모든 문서·주석·커밋은 한국어
-- 커밋 메시지 prefix: `[App]`, `[워크플로]`, `[액션]`, `[스크립트]`, `[설정]`, `[문서]`, `[기타]`
+- 커밋 메시지 prefix: `[App]`, `[워크플로]`, `[액션]`, `[스크립트]`, `[설정]`, `[플러그인]`, `[문서]`, `[기타]`
+  - `[플러그인]` = `.claude-plugin/`·`plugin/`(agents·skills) 등 Claude Code 플러그인 컴포넌트 작업
 - 새 yml 추가 시 — 다른 yml과 중복되는 로직이 있는지 먼저 확인. 있으면 reusable로 먼저 빼고 나서 yml 추가
-- 본체 코드(`/app/`, `/.github/workflows/`, `/actions/`, `/scripts/`)에 프로젝트 식별자 하드코딩 시도 시 — 즉시 거부하고 설정 주입 방식으로 변경
+- 본체 코드(`/.claude-plugin/`, `/plugin/`, `/app/`, `/.github/workflows/`, `/actions/`, `/scripts/`)에 프로젝트 식별자 하드코딩 시도 시 — 즉시 거부하고 설정 주입 방식으로 변경
 - 새 input/secret/output — 표준 카탈로그에 먼저 추가, yml 내에서 즉흥적으로 새 이름 만들지 않음
 - 큰 결정 시 — "큰 결정 체크리스트" 4항목을 명시적으로 평가
 

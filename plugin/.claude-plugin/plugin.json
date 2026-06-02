@@ -1,0 +1,12 @@
+{
+  "name": "pipeline",
+  "version": "0.1.0",
+  "description": "이식 가능한 AI 자동화 파이프라인 프레임워크 — 기획·실행·리뷰·머지 자동화 일꾼 에이전트",
+  "author": {
+    "name": "MKFactory"
+  },
+  "homepage": "https://github.com/j2enty/Pipeline",
+  "repository": "https://github.com/j2enty/Pipeline",
+  "license": "MIT",
+  "keywords": ["automation", "github-actions", "ai-agents", "pipeline", "code-review"]
+}
