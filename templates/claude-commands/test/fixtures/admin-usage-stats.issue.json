@@ -1,0 +1,11 @@
+{
+  "number": 13,
+  "title": "관리자 사용량 통계 대시보드",
+  "body": "## 배경\n\n운영자가 서비스 사용 추이를 한눈에 보도록 **관리자 전용** 통계 대시보드를 만든다. 일·주·월 단위 변환 건수와 실패율을 차트로 본다. 외부 공개는 하지 않으며, **관리자 로그인(세션/토큰) 인증을 통과한 사람만** 접근한다.\n\n## 하려는 것\n\n- Backend: `/admin/stats` 엔드포인트 신설 — **관리자 인증 필수**(미인증 요청은 401). 기간(from/to)을 받아 DB에서 변환 건수·실패율을 집계해 반환\n- Admin: 통계를 **보기 좋게** 카드·차트로 표시 (일·주·월 토글)\n\n## 영역\n\n- Backend: `/admin/stats` 집계 쿼리 + 인증 가드\n- Admin: 통계 차트 카드 컴포넌트\n\n## 참고\n\n- 기간은 쿼리 파라미터 `from`, `to` 로 받는다\n- 일 단위 집계의 기준 시각(어느 타임존의 자정인지)은 아직 안 정함\n- 어떤 관리자 등급까지 이 화면을 볼 수 있는지(일반 admin vs super-admin)는 추후 결정\n- 실시간 갱신·CSV 내보내기는 이번 범위 밖, 다음으로 미룬다\n",
+  "author": {
+    "login": "test-operator"
+  },
+  "assignees": [],
+  "labels": [],
+  "url": "https://github.com/EXAMPLE_ORG/EXAMPLE_PARENT/issues/13"
+}

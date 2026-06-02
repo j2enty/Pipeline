@@ -482,25 +482,33 @@
 
 ## ★ 복귀노트 (2026-06-02 기준 최신)
 
-**현재 상태**: Pipeline `main` = `9f512a2` (PR #28 G-1 머지). 작업트리 clean. 테스트 91개 통과.
+**현재 상태**: Pipeline `main` = `c399623` + G-2 픽스처 커밋(아래). Reclip `develop` = `c3f6bad`(재배포 완료). 작업트리 clean. 테스트 91개 통과.
 
-**완료: G-1 골든 픽스처 (PR #28)**
+**완료: G-1 골든 픽스처 — recall (PR #28)**
 - service-status-page 이슈로 ③⑤ critic을 처음 실제 실행 검증 (planner Agent → critic Agent 분리).
 - **발견**: sonnet critic이 핵심 함정 rate limit 누락을 놓침 / opus는 잡음 → plan.md.tmpl이 critic 모델 미명시라 운영서 약한 모델로 떨어지면 구멍 놓칠 위험.
 - **보강(이중 안전장치)**: ①③⑤ critic Agent에 `model="opus"` 명시 ②③ 체크리스트에 조건부 강제 룰(서버연산·DB·메타데이터 반환하는 인증 없는 공개 엔드포인트면 rate limit·정보노출 반드시 점검). → 보강 후 sonnet도 rate limit 잡음(robust 입증).
 - 골든 정답지: `templates/claude-commands/test/fixtures/service-status-page.expected.md` (키워드 presence 기준, 수동 판정).
 - 이중리뷰(Claude architect+Codex): 종속성제로·"메우지말고분류" 위반 없음. 과적합 3건 보정("색상구분"→일반화 / rate limit 발동조건 축소 / expected.md 과적합 가드).
 
-**다음 = Reclip 재배포 (진행 예정)**
-- `install.sh --update-commands-only` (examples/reclip config) → Reclip 워크스페이스 `.claude/commands/plan.md` 갱신 → **Reclip develop 커밋**까지 3단계.
-- 현재 운영 배포본엔 Phase B critic·G-1 보강이 **미반영** (재배포 안 했으므로). 재배포해야 `/plan`이 critic 단계를 실제로 실행.
+**완료: Reclip 재배포 (`c3f6bad`)**
+- `install.sh --update-commands-only --non-interactive` (examples/reclip config) → Reclip `.claude/commands/` 3개 갱신 → Reclip develop 커밋·push.
+- 배포본 검증: critic 5개·model=opus 4개·rate limit룰·미치환 placeholder 0. 덤으로 review·kickoff 파일명 드리프트(A1 미배포분)도 해소.
+- → 운영 `/plan`이 이제 critic 단계 실제 실행.
 
-**그 다음 후보 = Phase C** (Step 5에 `contract.md` 신설 — 영역 간 API·인터페이스 공유 계약, §3.4).
+**완료: G-2 골든 픽스처 — precision/헛다리 방지 (2026-06-02, 이 커밋)**
+- admin-usage-stats 이슈(관리자 인증 필수 통계 API, **무인증 공개 엔드포인트 0개**)로 ③ critic 실행. G-1 함정과 `인증 없는` 한정자 하나만 다른 케이스.
+- **검증 질문**: G-1 보강 룰이 "공개+DB"만으로 과발동(=헛다리)하지 않는가?
+- **결과 PASS**: 코드베이스 탐색본·hermetic(무파일) 두 실행 모두 critic이 **스스로** "인증 가드 있으므로 무인증 DoS/fingerprinting 점검 부적용(헛다리)"이라 분류하고, 대신 정당한 구멍(from/to 입력검증·기간상한·타임존·영역계약)을 잡음. **프롬프트 보강 불필요 — G-1 과적합 없음 입증.**
+- negative 정답지: `admin-usage-stats.expected.md` (🚫반드시 안떠야 N-1~3 / ✅떠도됨 P-1~6, 바닥키워드 아닌 **프레이밍**으로 판정). G-1·G-2 **동시 통과** 가드 명시.
+- 방법론 메모: ③ critic은 운영서 코드베이스 탐색이 정상(realistic)이나, precision 변수 격리 위해 무파일 재실행도 병행 → 동일 결론.
+
+**다음 = Phase C** (Step 5에 `contract.md` 신설 — 영역 간 API·인터페이스 공유 계약, §3.4). 또는 아래 큐잉.
 
 **리뷰가 남긴 후속 메모 (작업 아님, 큐잉)**:
-- 두 번째 골든 픽스처: 인증 없는 공개 엔드포인트가 *없는* 케이스(내부 배치·상태머신 등) 한 장 추가 → 조건부 가드가 헛다리 안 짚는지 실증 (D2 다음 픽스처).
+- ~~두 번째 골든 픽스처~~ ✅ G-2로 완료.
 - `model="opus"`가 §6.3 OMC 범용화 난이도 살짝 올림 → 범용화 시 model 핀을 OMC 분기 안으로 격리.
-- expected.md는 수동 체크리스트(자동 테스트 미연결) — D3 "실전 빵꾸 박제" 단계서 半자동화 검토.
+- expected.md는 수동 체크리스트(자동 테스트 미연결) — D3 "실전 빵꾸 박제" 단계서 半자동화 검토. (이제 픽스처 2장 — recall·precision 쌍이라 半자동화 가치 ↑.)
 
 **운영 주의사항**:
 - 맥미니 운영 App `.env` 건드리지 말 것. `install.sh` 풀 재실행 금지 → `--update-commands-only` / `--reapply`만.
