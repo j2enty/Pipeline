@@ -4,10 +4,10 @@
 # 검증 대상:
 #   1. 매니페스트 2개(.claude-plugin/plugin.json·marketplace.json) 존재 + JSON 유효
 #   2. claude plugin validate (claude CLI 있을 때만):
-#        - marketplace: 비-strict + --strict 둘 다 통과
-#        - plugin.json: 비-strict 통과 (--strict 는 레포 루트 CLAUDE.md 경고로
-#          실패하는 게 정상 — 의도된 동작이라 strict 적용 안 함)
-#   3. 에이전트 2개(agents/critic.md·planner.md) 존재
+#        - marketplace(레포 루트): 비-strict + --strict 둘 다 통과
+#        - plugin(plugin/ 서브디렉토리): 비-strict + --strict 둘 다 통과
+#          (플러그인 루트가 레포 루트 밖이라 CLAUDE.md 경고 없음 → strict 깨끗)
+#   3. 에이전트 2개(plugin/agents/critic.md·planner.md) 존재
 #   4. 에이전트 frontmatter 필수필드(name·description) 보유 + name 일치
 #      ← claude plugin validate 는 매니페스트만 보고 에이전트 frontmatter 는
 #        검증하지 않으므로(실측), 이 사각지대를 직접 메운다.
@@ -77,7 +77,9 @@ echo ""
 echo -e "${C_CYAN}══ Pipeline 플러그인 뼈대 테스트 (P1) ══${C_NC}"
 
 # ── 1. 매니페스트 존재 + JSON 유효 ───────────────────────────
-PLUGIN_JSON="$REPO_ROOT/.claude-plugin/plugin.json"
+# 격리 구조: 마켓플레이스는 레포 루트, 플러그인은 plugin/ 서브디렉토리.
+PLUGIN_DIR="$REPO_ROOT/plugin"
+PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
 MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
 
 for f in "$PLUGIN_JSON" "$MARKETPLACE_JSON"; do
@@ -101,7 +103,7 @@ if [ -f "$PLUGIN_JSON" ]; then
   fi
 fi
 
-# marketplace.json 이 pipeline 플러그인을 source './' 로 등록했나
+# marketplace.json 이 pipeline 플러그인을 source './plugin' 으로 등록했나
 if [ -f "$MARKETPLACE_JSON" ]; then
   src="$(python3 -c "
 import json,sys
@@ -109,24 +111,20 @@ d=json.load(open(sys.argv[1]))
 ps=[p for p in d.get('plugins',[]) if p.get('name')=='pipeline']
 print(ps[0].get('source','') if ps else 'MISSING')
 " "$MARKETPLACE_JSON" 2>/dev/null)"
-  if [ "$src" = "./" ]; then
-    pass "marketplace.json 이 pipeline 을 source './' 로 등록"
+  if [ "$src" = "./plugin" ]; then
+    pass "marketplace.json 이 pipeline 을 source './plugin' 으로 등록"
   else
-    fail "marketplace.json pipeline source == './'" "실제='$src'"
+    fail "marketplace.json pipeline source == './plugin'" "실제='$src'"
   fi
 fi
 
 # ── 2. claude plugin validate (CLI 있을 때만) ────────────────
-# 주의(실측): `claude plugin validate <레포>` 는 매니페스트가 둘 다 있으면
-#   marketplace.json 만 검증한다(plugin.json·컴포넌트는 안 봄). 따라서
-#   marketplace 와 plugin 을 각각 명시 경로로 검증한다.
-#
-# 또 plugin 검증은 레포 루트의 CLAUDE.md 를 "plugin context 로 안 실린다"고
-#   경고한다 — 레포=플러그인 루트 구조의 의도된 동작(우리 CLAUDE.md 는 프레임워크
-#   지침이지 배포 대상 컨텍스트가 아님). 따라서 plugin 은 비-strict 로 검증하고,
-#   --strict 는 그 경고가 없는 marketplace 에만 적용한다.
+# 격리 구조: 마켓플레이스(레포 루트)와 플러그인(plugin/)을 각각 검증한다.
+#   `claude plugin validate <레포>` 는 매니페스트가 둘 다 있으면 marketplace.json
+#   만 검증하므로(plugin.json·컴포넌트 안 봄), 플러그인은 plugin/ 경로로 따로 본다.
+#   플러그인 루트가 레포 루트 밖이라 CLAUDE.md 경고가 없어 --strict 까지 깨끗하다.
 if command -v claude >/dev/null 2>&1; then
-  # marketplace — 비-strict + strict 둘 다 깨끗해야 함
+  # marketplace (레포 루트) — 비-strict + --strict 둘 다 깨끗
   if claude plugin validate "$REPO_ROOT" >/dev/null 2>&1; then
     pass "claude plugin validate . (marketplace)"
   else
@@ -137,22 +135,27 @@ if command -v claude >/dev/null 2>&1; then
   else
     fail "claude plugin validate . --strict (marketplace)" "exit != 0 (미인식 필드·메타 누락)"
   fi
-  # plugin manifest — 실제 플러그인 검증(비-strict). 컴포넌트 frontmatter 는
-  #   validate 가 안 보므로 아래 3·4 항목이 보완.
-  if claude plugin validate "$PLUGIN_JSON" >/dev/null 2>&1; then
-    pass "claude plugin validate <plugin.json>"
+  # plugin (plugin/) — 비-strict + --strict 둘 다 깨끗(격리로 CLAUDE.md 경고 제거).
+  #   컴포넌트 frontmatter 는 validate 가 안 보므로 아래 3·4 항목이 보완.
+  if claude plugin validate "$PLUGIN_DIR" >/dev/null 2>&1; then
+    pass "claude plugin validate plugin/ (plugin)"
   else
-    fail "claude plugin validate <plugin.json>" "exit != 0 (CLAUDE.md 경고 외 실패)"
+    fail "claude plugin validate plugin/ (plugin)" "exit != 0"
+  fi
+  if claude plugin validate "$PLUGIN_DIR" --strict >/dev/null 2>&1; then
+    pass "claude plugin validate plugin/ --strict (plugin)"
+  else
+    fail "claude plugin validate plugin/ --strict (plugin)" "exit != 0 (격리 후엔 경고 없어야 함)"
   fi
 else
   skip "claude plugin validate" "claude CLI 미설치"
 fi
 
 # ── 3·4. 에이전트 존재 + frontmatter 필수필드 ────────────────
-# 기대: agents/<name>.md 의 frontmatter name 이 <name> 과 일치.
+# 기대: plugin/agents/<name>.md 의 frontmatter name 이 <name> 과 일치.
 for agent in critic planner; do
-  af="$REPO_ROOT/agents/$agent.md"
-  rel="agents/$agent.md"
+  af="$PLUGIN_DIR/agents/$agent.md"
+  rel="plugin/agents/$agent.md"
   if [ ! -f "$af" ]; then
     fail "$rel 존재" "파일 없음"
     continue
@@ -178,13 +181,13 @@ for agent in critic planner; do
 done
 
 # critic 은 model: opus 로 박제됐나 (골든픽스처 근거 — 약한 모델은 핵심 누락 놓침)
-CRITIC="$REPO_ROOT/agents/critic.md"
+CRITIC="$PLUGIN_DIR/agents/critic.md"
 if [ -f "$CRITIC" ]; then
   cm="$(frontmatter_value "$CRITIC" "model")"
   if [ "$cm" = "opus" ]; then
-    pass "agents/critic.md model == 'opus'"
+    pass "plugin/agents/critic.md model == 'opus'"
   else
-    fail "agents/critic.md model == 'opus'" "실제='$cm' (critic 은 모델 민감 — opus 고정 필요)"
+    fail "plugin/agents/critic.md model == 'opus'" "실제='$cm' (critic 은 모델 민감 — opus 고정 필요)"
   fi
 fi
 
