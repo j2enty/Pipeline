@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "pipeline",
+  "description": "Pipeline 프레임워크 자체 마켓플레이스 — 레포 = 플러그인 = 마켓플레이스",
+  "owner": {
+    "name": "MKFactory"
+  },
+  "plugins": [
+    {
+      "name": "pipeline",
+      "description": "이식 가능한 AI 자동화 파이프라인 프레임워크 — 기획·실행·리뷰·머지 자동화 일꾼 에이전트",
+      "source": "./",
+      "category": "development",
+      "homepage": "https://github.com/j2enty/Pipeline"
+    }
+  ]
+}
