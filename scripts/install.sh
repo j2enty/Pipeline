@@ -271,8 +271,11 @@ print(f"CMD_DOCS_CONTEXT_DIR='{get_scalar_in(cc_block, 'docs-context-dir')}'")
 
 # area-ids 매핑 (영역명 → 해시) — area-ids: 하위의 `<name>: <hash>` 들을 추출
 # CMD_AREA_ID_<UPPER> 형태로 emit (예: Backend → CMD_AREA_ID_BACKEND)
-ai = re.search(r'^\s+area-ids:\s*\n((?:\s+\S+:\s*.+\n?)*)', cc_block, re.MULTILINE)
-area_ids_block = ai.group(1) if ai else ''
+# area-ids: 의 들여쓰기를 \1 로 캡처해 더 깊게 들여쓴 항목 줄만 모은다(plan_m 과 동일 앵커).
+# 주의: 기존 `\s+...\s*.+` 는 콜론 뒤 \s* 가 개행을 넘어 다음 형제 블록(plan:)의 자식 줄까지
+# 빨아들였다 → 정크 CMD_AREA_ID_PLAN emit + 값에 따옴표 섞이면 eval 오염(선재 버그).
+ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', cc_block, re.MULTILINE)
+area_ids_block = ai.group(2) if ai else ''
 for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_block, re.MULTILINE):
     area_name = am.group(1).strip()
     area_hash = am.group(2).strip().strip("'\"")
@@ -284,13 +287,16 @@ for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_blo
 plan_m = re.search(r'^([ \t]+)plan:\s*\n(.*?)(?=^\1\S|\Z)', cc_block, re.MULTILINE | re.DOTALL)
 plan_block = plan_m.group(2) if plan_m else ''
 def get_plan_bool(key, default='true'):
-    # tracking.enabled 패턴과 동일: \w+ 캡처 → lower() → ('true','false') 검증
-    m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*(\w+)', plan_block, re.MULTILINE)
-    value = m.group(1).strip().lower() if m else default
-    return value if value in ('true', 'false') else default
+    # 따옴표 허용 + boolean 만 인정 (오타·비boolean·누락 → default).
+    # 주의: \w+ 만 쓰면 "false"(따옴표) 가 매치 실패해 opt-out 이 조용히 무력화됨(true 로 떨어짐).
+    # 그래서 값 양옆 따옴표를 선택 허용하고, true/false 만 줄 끝(주석 허용)까지 고정해 잡는다.
+    m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
+                  plan_block, re.MULTILINE | re.IGNORECASE)
+    return m.group(1).lower() if m else default
 print(f"CMD_PLAN_COMPLETENESS_CRITIC_ENABLED='{get_plan_bool('completeness-critic-enabled')}'")
 print(f"CMD_PLAN_CONSISTENCY_CRITIC_ENABLED='{get_plan_bool('consistency-critic-enabled')}'")
 print(f"CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL='{get_plan_bool('consistency-critic-dual-model')}'")
+print(f"CMD_PLAN_CONTRACT_DOC_ENABLED='{get_plan_bool('contract-doc-enabled')}'")
 
 # ── tracking 섹션 — finding 추적 라벨 자동 등록용 ───────────────────────
 # tracking: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
@@ -771,6 +777,7 @@ install_claude_commands() {
     -e "s|__PLAN_COMPLETENESS_CRITIC_ENABLED__|$(esc "${CMD_PLAN_COMPLETENESS_CRITIC_ENABLED:-true}")|g"
     -e "s|__PLAN_CONSISTENCY_CRITIC_ENABLED__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_ENABLED:-true}")|g"
     -e "s|__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL:-true}")|g"
+    -e "s|__PLAN_CONTRACT_DOC_ENABLED__|$(esc "${CMD_PLAN_CONTRACT_DOC_ENABLED:-true}")|g"
   )
 
   # 3개 템플릿 치환 → 임시 디렉토리에 생성

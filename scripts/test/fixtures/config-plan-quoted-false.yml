@@ -1,5 +1,5 @@
-# 테스트용 더미 config — plan 서브섹션 포함
-# install.sh B0 테스트 전용. 실제 프로젝트 식별자 없음.
+# 테스트용 더미 config — plan 토글 값에 따옴표 사용 (quoted boolean)
+# get_plan_bool 의 따옴표 처리 회귀 잠금용. 실제 프로젝트 식별자 없음.
 
 project:
   owner: test-org
@@ -39,10 +39,8 @@ claude-commands:
     Admin: ""
 
   plan:
-    completeness-critic-enabled: true
-    consistency-critic-enabled: false
-    consistency-critic-dual-model: false
-    contract-doc-enabled: false
+    # 따옴표로 감싼 boolean — opt-out 이 무력화되면 안 됨 (false 로 파싱돼야 함)
+    contract-doc-enabled: "false"
 
 tracking:
   enabled: false

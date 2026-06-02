@@ -1,5 +1,6 @@
-# 테스트용 더미 config — plan 서브섹션 포함
-# install.sh B0 테스트 전용. 실제 프로젝트 식별자 없음.
+# 테스트용 더미 config — plan 블록은 있으나 contract-doc-enabled 키만 누락
+# 레거시 시나리오: 기존 사용자가 critic 토글만 둔 config 를 업그레이드하지 않은 경우.
+# contract-doc-enabled 는 기본 true 로 떨어져야 한다. 실제 프로젝트 식별자 없음.
 
 project:
   owner: test-org
@@ -40,9 +41,8 @@ claude-commands:
 
   plan:
     completeness-critic-enabled: true
-    consistency-critic-enabled: false
-    consistency-critic-dual-model: false
-    contract-doc-enabled: false
+    consistency-critic-enabled: true
+    consistency-critic-dual-model: true
 
 tracking:
   enabled: false
