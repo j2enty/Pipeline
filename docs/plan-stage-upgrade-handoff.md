@@ -482,20 +482,29 @@
 
 ## ★ 복귀노트 (2026-06-02 기준 최신)
 
-**현재 상태**: Pipeline `main` = `1ce0e93` (PR #27). 작업트리 clean. 테스트 91개 통과.
+**현재 상태**: Pipeline `main` = `9f512a2` (PR #28 G-1 머지). 작업트리 clean. 테스트 91개 통과.
 
-**다음 = Phase C 또는 골든 픽스처 G-1 — 결정 필요**
+**완료: G-1 골든 픽스처 (PR #28)**
+- service-status-page 이슈로 ③⑤ critic을 처음 실제 실행 검증 (planner Agent → critic Agent 분리).
+- **발견**: sonnet critic이 핵심 함정 rate limit 누락을 놓침 / opus는 잡음 → plan.md.tmpl이 critic 모델 미명시라 운영서 약한 모델로 떨어지면 구멍 놓칠 위험.
+- **보강(이중 안전장치)**: ①③⑤ critic Agent에 `model="opus"` 명시 ②③ 체크리스트에 조건부 강제 룰(서버연산·DB·메타데이터 반환하는 인증 없는 공개 엔드포인트면 rate limit·정보노출 반드시 점검). → 보강 후 sonnet도 rate limit 잡음(robust 입증).
+- 골든 정답지: `templates/claude-commands/test/fixtures/service-status-page.expected.md` (키워드 presence 기준, 수동 판정).
+- 이중리뷰(Claude architect+Codex): 종속성제로·"메우지말고분류" 위반 없음. 과적합 3건 보정("색상구분"→일반화 / rate limit 발동조건 축소 / expected.md 과적합 가드).
 
-| 선택지 | 내용 | D5 근거 |
-|---|---|---|
-| **G-1 골든 픽스처** | service-status-page 이슈로 `/plan --dry-run` 실행해 critic이 제대로 동작하는지 검증 | D2: "착수는 G-1 1장" |
-| **Phase C** | Step 5에 `contract.md` 신설 — 영역 간 API·인터페이스 공유 계약 (§3.4) | D5: 계약문서는 critic 이후 다음 레버리지 |
+**다음 = Reclip 재배포 (진행 예정)**
+- `install.sh --update-commands-only` (examples/reclip config) → Reclip 워크스페이스 `.claude/commands/plan.md` 갱신 → **Reclip develop 커밋**까지 3단계.
+- 현재 운영 배포본엔 Phase B critic·G-1 보강이 **미반영** (재배포 안 했으므로). 재배포해야 `/plan`이 critic 단계를 실제로 실행.
 
-D2 설계: "각 기능은 자기 픽스처와 함께 출하" → Phase B critic의 픽스처(G-1)가 아직 없음. G-1을 먼저 만드는 것이 자연스러운 순서.
+**그 다음 후보 = Phase C** (Step 5에 `contract.md` 신설 — 영역 간 API·인터페이스 공유 계약, §3.4).
+
+**리뷰가 남긴 후속 메모 (작업 아님, 큐잉)**:
+- 두 번째 골든 픽스처: 인증 없는 공개 엔드포인트가 *없는* 케이스(내부 배치·상태머신 등) 한 장 추가 → 조건부 가드가 헛다리 안 짚는지 실증 (D2 다음 픽스처).
+- `model="opus"`가 §6.3 OMC 범용화 난이도 살짝 올림 → 범용화 시 model 핀을 OMC 분기 안으로 격리.
+- expected.md는 수동 체크리스트(자동 테스트 미연결) — D3 "실전 빵꾸 박제" 단계서 半자동화 검토.
 
 **운영 주의사항**:
-- `install.sh --update-commands-only` 실행 필요 (plan.md.tmpl 변경됨, Reclip develop 재배포)
-- 테스트 기준: `bash scripts/test/run-tests.sh` → 91개 통과
+- 맥미니 운영 App `.env` 건드리지 말 것. `install.sh` 풀 재실행 금지 → `--update-commands-only` / `--reapply`만.
+- 테스트 기준: `bash scripts/test/run-tests.sh` → 91개 + `templates/claude-commands/test/run-tests.sh` → 4개 스크립트.
 
 ---
 
