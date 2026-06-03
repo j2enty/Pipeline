@@ -10,6 +10,8 @@
 #   pipeline-config.sh <key>          # 값을 stdout 으로 출력 (없으면 빈 줄)
 #   pipeline-config.sh --dump         # 핵심값 요약 (사람·LLM 컨텍스트용)
 #   pipeline-config.sh --keys         # 지원 키 목록
+#   pipeline-config.sh --require <key>...   # 필수 키 검증 — 하나라도 비면 exit 1
+#                                           # (원격쓰기 전 fail-fast 게이트. dry-run 은 호출 안 함)
 #
 # config 경로 결정: 환경변수 PIPELINE_CONFIG > CWD 의 .claude/pipeline-config.yml
 #
@@ -49,7 +51,12 @@ if [ $# -lt 1 ]; then
 fi
 
 # config 부재 — fail-soft. 토글 키는 기본 true, 나머지는 빈 값.
+# 단 --require(필수 키 검증)는 config 부재 자체가 실패 → exit 1 (원격쓰기 전 게이트).
 if [ ! -f "$CONFIG_PATH" ]; then
+  if [ "${1:-}" = "--require" ]; then
+    echo "❌ pipeline-config: config 파일 없음 — 필수 키 검증 실패: $CONFIG_PATH" >&2
+    exit 1
+  fi
   echo "⚠️  pipeline-config: config 파일 없음: $CONFIG_PATH (빈 값 반환)" >&2
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
@@ -143,13 +150,37 @@ if arg == '--keys':
         'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled',
     ]))
 elif arg == '--dump':
-    keys = ['owner', 'parent-repo-name', 'project-number', 'project-name', 'project-id',
-            'status-field-id', 'area-field-id', 'local-account', 'docs-context-dir',
+    keys = ['owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
+            'project-name', 'project-id', 'status-field-id', 'area-field-id',
+            'author-login', 'local-account', 'docs-context-dir',
             'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
             'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled']
     for k in keys:
         print(f"{k} = {resolve(k)}")
+elif arg == '--require':
+    # 필수 키 검증 — 하나라도 빈 값이면 exit 1 (원격쓰기 전 fail-fast 게이트).
+    # 토글(plan.*)은 fail-soft 기본값이 있으므로 require 대상에서 제외해도 됨(호출부가 명시).
+    required = sys.argv[3:]
+    missing = [k for k in required if not resolve(k).strip()]
+    if missing:
+        sys.stderr.write("❌ pipeline-config: 필수 config 키가 비어있음: "
+                         + ", ".join(missing) + "\n")
+        sys.stderr.write("   .claude/pipeline-config.yml 의 project/claude-commands 섹션을 확인하세요.\n")
+        sys.exit(1)
 else:
     sys.stdout.write(resolve(arg))
     sys.stdout.write('\n')
 PYEOF
+rc=$?
+# python 비정상 종료 처리:
+#   - --require 의 의도적 exit 1 은 그대로 전파(원격쓰기 게이트가 막아야 함)
+#   - 그 외(파싱 크래시 등)는 fail-soft — 토글 기본 true, 나머지 빈 값
+if [ "$rc" -ne 0 ] && [ "${1:-}" != "--require" ]; then
+  echo "⚠️  pipeline-config: 파싱 실패(exit $rc) — fail-soft 처리" >&2
+  case "${1:-}" in
+    plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;
+    *) printf '\n' ;;
+  esac
+  exit 0
+fi
+exit "$rc"

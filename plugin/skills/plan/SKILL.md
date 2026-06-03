@@ -480,6 +480,8 @@ CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 # [R2 self-guard] 이 펜스는 원격 쓰기(git push·gh pr create)를 수행한다.
 # $ARGUMENTS 는 모든 펜스에 substitution되므로 DRY_RUN 변수 전파 없이도 안전하게 검사 가능.
 case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Step 6b(git/PR) 원격 반영 스킵"; exit 0 ;; esac
+# [필수 config 게이트] 빈 owner/parent-repo-name 이 gh/PR 로 흘러 엉뚱한 대상을 건드리는 것 차단(fail-fast).
+bash "$CFG" --require owner parent-repo-name || exit 1
 OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 cd Docs
@@ -500,6 +502,8 @@ gh pr create --title "[plan] <parent-issue-title>" --body "Parent: $OWNER/$PAREN
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 # [R2 self-guard] 이 펜스는 원격 쓰기(gh label create·gh issue create·sub_issues)를 수행한다.
 case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Step 7(sub-issue 생성) 원격 반영 스킵"; exit 0 ;; esac
+# [필수 config 게이트] 빈 값이 sub-issue 대상 레포·어싸이니로 흘러가는 것 차단(fail-fast).
+bash "$CFG" --require owner author-login || exit 1
 OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 
@@ -569,6 +573,8 @@ gh api --method POST \
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 # [R2 self-guard] 이 펜스는 원격 쓰기(addProjectV2ItemById·updateProjectV2ItemFieldValue)를 수행한다.
 case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Step 8(Project 세팅) 원격 반영 스킵"; exit 0 ;; esac
+# [필수 config 게이트] 빈 Project/필드 ID 로 잘못된 GraphQL mutation 을 날리는 것 차단(fail-fast).
+bash "$CFG" --require project-id area-field-id status-field-id || exit 1
 PROJECT_ID="$(bash "$CFG" project-id)"
 AREA_FIELD_ID="$(bash "$CFG" area-field-id)"
 STATUS_FIELD_ID="$(bash "$CFG" status-field-id)"
@@ -649,6 +655,8 @@ Parent 이슈 본문 하단에 "📋 Plan 산출물" 섹션 추가 (또는 코�
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 # [R2 self-guard] 이 펜스는 원격 쓰기(gh issue edit — parent 본문 업데이트)를 수행한다.
 case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Step 9(parent 본문 업데이트) 원격 반영 스킵"; exit 0 ;; esac
+# [필수 config 게이트] 빈 owner/parent-repo-name 으로 엉뚱한 parent 이슈를 건드리는 것 차단(fail-fast).
+bash "$CFG" --require owner parent-repo-name || exit 1
 OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 gh issue edit <parent-N> --repo $OWNER/$PARENT_REPO_NAME --body "<기존 본문>\n\n<위 섹션>"
@@ -662,6 +670,8 @@ gh issue edit <parent-N> --repo $OWNER/$PARENT_REPO_NAME --body "<기존 본문>
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 # [R2 self-guard] 이 펜스는 원격 쓰기(gh issue edit — 어싸이니 보정)를 수행할 수 있다.
 case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Step 9.5(자가 검증 보정) 원격 반영 스킵"; exit 0 ;; esac
+# [필수 config 게이트] 빈 owner/author-login 으로 잘못된 어싸이니 보정을 하는 것 차단(fail-fast).
+bash "$CFG" --require owner author-login || exit 1
 OWNER="$(bash "$CFG" owner)"
 # 각 sub-issue마다:
 ASSIGNEES=$(gh api /repos/$OWNER/<영역>/issues/$SUB_NUMBER --jq '[.assignees[].login] | join(",")')

@@ -50,6 +50,7 @@ claude-commands:
   project-id: PVT_blue123
   status-field-id: PVTSSF_status9
   area-field-id: PVTSSF_area9
+  author-login: test-bot
   local-account: blue-dev   # 무따옴표 값 뒤 인라인 주석 — 스트립되어야 함
   docs-context-dir: Docs/claude/context
   area-ids:
@@ -106,6 +107,35 @@ if PIPELINE_CONFIG="$FIXTURE" bash "$READER" --dump 2>/dev/null | grep -q "owner
   pass "--dump 에 owner=BlueOrg 포함"
 else
   fail "--dump 출력" "owner 줄 없음"
+fi
+# --dump 에 author-login·parent-repository·slack-channel 포함 (리뷰 보강)
+for dk in "author-login = test-bot" "parent-repository = BlueOrg/MainRepo" "slack-channel = #blue-alerts"; do
+  if PIPELINE_CONFIG="$FIXTURE" bash "$READER" --dump 2>/dev/null | grep -qF "$dk"; then
+    pass "--dump 에 '$dk' 포함"
+  else
+    fail "--dump '$dk'" "누락"
+  fi
+done
+
+# ── --require (필수 키 fail-fast 게이트) ──
+if PIPELINE_CONFIG="$FIXTURE" bash "$READER" --require owner parent-repo-name project-id author-login >/dev/null 2>&1; then
+  pass "--require: 모든 필수 키 존재 → exit 0"
+else
+  fail "--require 정상 키" "exit != 0"
+fi
+# 빈 키 포함 → exit 1 (픽스처에 없는 키)
+EMPTY_FIX="$(mktemp)"; printf 'project:\n  owner: OnlyOwner\n' > "$EMPTY_FIX"
+if PIPELINE_CONFIG="$EMPTY_FIX" bash "$READER" --require owner project-id >/dev/null 2>&1; then
+  fail "--require 빈 키" "project-id 비었는데 exit 0"
+else
+  pass "--require: 빈 필수 키(project-id) → exit 1"
+fi
+rm -f "$EMPTY_FIX"
+# config 부재 + --require → exit 1
+if PIPELINE_CONFIG="$(mktemp -u)/none.yml" bash "$READER" --require owner >/dev/null 2>&1; then
+  fail "--require config 부재" "exit 0 (게이트 무력)"
+else
+  pass "--require: config 부재 → exit 1"
 fi
 
 # ── install.sh parity — 실제 examples/reclip config 로 핵심값 ──
