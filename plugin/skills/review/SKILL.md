@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 # /review — PR 리뷰 파이프라인
 
-`/kickoff` 또는 수동으로 만들어진 PR을 받아 **code-reviewer**(품질) + **verifier**(플랜 준수) Agent로 검토하고 GitHub Review(APPROVE / REQUEST_CHANGES)로 판정해요. Parent issue 모드에서는 **Backend 선행 → 나머지 병렬 → critic 종합 리뷰**로 하이브리드 실행해요. APPROVE 판정된 PR의 sub-issue는 Prep Project Status를 **Bot Review → In Review** 로 전환해 사용자 hands-on 검증 단계로 넘겨요.
+`/kickoff` 또는 수동으로 만들어진 PR을 받아 **code-reviewer**(품질) + **verifier**(플랜 준수) Agent로 검토하고 GitHub Review(APPROVE / REQUEST_CHANGES)로 판정해요. Parent issue 모드에서는 **선행(lead) 영역 먼저 → 나머지 병렬 → critic 종합 리뷰**로 하이브리드 실행해요. APPROVE 판정된 PR의 sub-issue는 Prep Project Status를 **Bot Review → In Review** 로 전환해 사용자 hands-on 검증 단계로 넘겨요.
 
 ## 프로젝트 설정 (실행시 주입)
 
@@ -34,8 +34,8 @@ disable-model-invocation: true
 /review <url-or-number> --restart        # 상태 파일 무시, 처음부터 재리뷰
 ```
 
-예 (`<owner>`·`<parent-repo-name>` 은 위 주입된 설정값):
-- `/review https://github.com/<owner>/Frontend/pull/2`
+예 (`<owner>`·`<parent-repo-name>`·`<영역>` 은 위 주입된 설정값/모듈명):
+- `/review https://github.com/<owner>/<영역>/pull/2`
 - `/review https://github.com/<owner>/<parent-repo-name>/issues/2`
 - `/review 2` (parent issue 2 기준 parent 모드)
 - `/review 2 --restart`
@@ -73,14 +73,19 @@ bash "$CFG" docs-context-dir   # Context md 디렉토리 (parent 모드 한정)
 
 ## 영역 ↔ 레포 매핑
 
-`<owner>` 는 위 주입된 설정값. 영역 레포는 `<owner>/<영역>` 형식.
+리뷰 대상 영역은 **실행 시 config 의 모듈 동작표에서 읽는다** — 모듈 이름을 SKILL.md 에 하드코딩하지 않는다. 리더가 표를 출력하고 그 stdout 으로 판단한다 (위 `--dump` 패턴과 동일).
 
-- Backend: `<owner>/Backend`
-- Admin: `<owner>/Admin`
-- Frontend: `<owner>/Frontend` (미래 사용자 공개 웹 — 코드 도입 전엔 PR 0건이라 자동 제외)
-- iOS: `<owner>/iOS`
-- Android: `<owner>/Android`
-- Design: `<owner>/Design` (리뷰 대상 **제외** — 코드 없음)
+```bash
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+bash "$CFG" --modules-where review=true   # 리뷰 대상 모듈명 (정의순)
+bash "$CFG" --modules-table               # 전체 동작표(name·lead·review·area-id 등)
+```
+
+- 리뷰 대상 = `review=true` 인 각 모듈. 그 모듈의 레포는 `<owner>/<name>` (`<owner>` 는 위 주입된 설정값).
+- `review=false` 인 모듈(예: 코드 없는 디자인 영역)은 **자동 제외** — 카운트·수집·리포트 모두. 제외 목록은 `bash "$CFG" --modules-where review=false` 로 확인 가능 (특정 모듈명 하드코딩 금지 — 플래그로 판단).
+- 코드 도입 전이라 PR 0건인 영역은 `review=true` 라도 수집 단계에서 PR 0건이면 자연히 빠진다.
+
+> **대소문자 정확**: `module.<Name>.<flag>` 의 `<Name>` 은 표의 `name` 컬럼과 정확히 일치해야 한다 (예: `module.iOS.area-id` ≠ `module.IOS.area-id`).
 
 ## 수행 순서
 
@@ -141,7 +146,7 @@ gh pr view <N> --repo "$OWNER/<영역>" --json number,url,state,isDraft,baseRefN
      --state open --json number,url,headRefOid,isDraft,baseRefName
    ```
 
-4. 수집된 PR 중 `isDraft=true`, `state!=OPEN` 제외. Design 영역은 제외.
+4. 수집된 PR 중 `isDraft=true`, `state!=OPEN` 제외. `review=false` 모듈(`--modules-where review=false`)의 PR 도 제외.
 5. PR이 0건이면 중단 + 안내:
    > 이 parent에 리뷰 가능한 PR이 없음. `/kickoff` 실행 결과 확인 필요.
 
@@ -250,20 +255,23 @@ STATE_FILE=".omc/state/reviews/pr-<repo>-<number>.json"
 
 #### 6-a. Parent 모드 순서
 
-```
-if Backend PR 존재:
-    run_individual_review(Backend)        # 단독 실행, 완료 대기
-    # Backend 판정 결과 무관하게 계속 (G2)
+선행 모듈은 `bash "$CFG" --modules-where lead=true` (= `<lead>`). 리뷰 대상은 `review=true` 모듈 중 수집된 PR이 있는 영역.
 
-# 나머지 영역 병렬 (한 메시지 내 여러 Agent 호출)
+```
+if <lead> PR 존재:                        # <lead> = --modules-where lead=true
+    run_individual_review(<lead>)         # 단독 실행, 완료 대기 (lead 2개 이상이면 정의순 직렬)
+    # <lead> 판정 결과 무관하게 계속 (G2 — /kickoff 와 달리 lead escalated 여도 나머지 진행)
+
+# 나머지 리뷰 대상 영역 병렬 (한 메시지 내 여러 Agent 호출)
 parallel:
-    run_individual_review(Frontend)
-    run_individual_review(iOS)
-    run_individual_review(Android)
+    for area in (review=true 모듈 PR − <lead>):
+        run_individual_review(area)
 
 # 전부 완료 후 종합 리뷰
 run_aggregate_review()
 ```
+
+> lead 모듈이 없거나(미지정) 그 PR이 수집되지 않았으면 선행 단계를 건너뛰고 모든 리뷰 대상 영역을 병렬 실행한다.
 
 **`CRITIC_ONLY=true` 분기** — critic-only 모드면 위 순서에서 **개별 리뷰만 빼고 종합 단계는 그대로**:
 
@@ -725,7 +733,7 @@ Status 전환 실패가 있었다면 경고 블록을 추가:
 - **판정 + Status 전환까지가 책임** (C10, R9) — `/review`는 머지·코드 수정은 안 하지만, APPROVE 판정 시 `Bot Review → In Review` Status 전환은 수행 (M2 스테이지 분리 이후)
 - **플랜 유무로 동작 분기** (C1) — 있으면 verifier 포함, 없으면 code-reviewer 단독
 - **critic-only 모드** — `--critic-only` 면 개별 PR 재리뷰를 스킵하고 종합 critic 만 실행. **parent 모드 전용** (단일 PR엔 cross-area critic 없음)
-- **영역별 독립 실패** (G2) — 한 영역 REQUEST_CHANGES·에스컬이 다른 영역을 막지 않음 (`/kickoff`와 달리 Backend 포함)
+- **영역별 독립 실패** (G2) — 한 영역 REQUEST_CHANGES·에스컬이 다른 영역을 막지 않음 (`/kickoff` 와 달리 lead 선행 영역이 실패해도 나머지 리뷰 계속)
 - **재시도 3분류 고정** (C6) — fixing 3 / transient 3 / immediate 0. 사용자 override 없음
 - **draft PR 제외** (C1) — 명시적 차단
 - **Status 전환 범위 제한** (R9) — APPROVE 시 `Bot Review → In Review` 만 수행. REQUEST_CHANGES·에스컬·`In Review`/`Done`/다른 Status 는 건드리지 않음. 전환 실패는 에스컬로 격상하지 않음
