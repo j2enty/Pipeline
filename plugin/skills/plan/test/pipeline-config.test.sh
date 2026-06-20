@@ -44,6 +44,30 @@ project:
   project-numbers: [7, 9]
   slack-channel: "#blue-alerts"
 
+modules:
+  # Alpha — lead·전 플래그 명시. area-id 는 modules 에 명시(legacy 폴백보다 우선 검증).
+  - name: Alpha
+    role: server
+    ci-workflow-name: Alpha CI
+    area-id: alpha-modid
+    planner: true
+    review: true
+    kickoff: true
+    lead: true
+    default-status: Ready
+  # Beta — 플래그 전부 누락 → 기본값(planner/review/kickoff true·lead false·status Ready)
+  - name: Beta
+    role: client
+    ci-workflow-name: Beta CI
+    cross-area-group: client
+  # Gamma — 동작 제외 영역(planner/review/kickoff false·Backlog). area-id 는 legacy 맵 폴백.
+  - name: Gamma
+    role: design
+    planner: false
+    review: false
+    kickoff: false
+    default-status: Backlog
+
 claude-commands:
   enabled: true
   project-name: BlueProject
@@ -56,6 +80,7 @@ claude-commands:
   area-ids:
     Backend: aa11bb22
     iOS: cc33dd44
+    Gamma: gamma-legacy
   plan:
     completeness-critic-enabled: true
     consistency-critic-enabled: false
@@ -138,6 +163,128 @@ else
   pass "--require: config 부재 → exit 1"
 fi
 
+# ── modules 인터페이스 (#42 데이터층) ────────────────────────────────
+# module.<Name>.<flag> 단일값 / 기본값 / 대소문자 / area-id resolve 순서 /
+# --list-modules 순서 / --modules-where / --modules-table / lead 다중 경고.
+
+# 단일 모듈 플래그 — assert_mod <Name> <flag> <expected>
+assert_mod() {
+  local name="$1" flag="$2" expected="$3"
+  local actual
+  actual="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" "module.$name.$flag" 2>/dev/null)"
+  if [ "$actual" = "$expected" ]; then
+    pass "module.$name.$flag == '$expected'"
+  else
+    fail "module.$name.$flag == '$expected'" "실제='$actual'"
+  fi
+}
+
+# 전 플래그 명시(Alpha)
+assert_mod Alpha role server
+assert_mod Alpha ci-workflow-name "Alpha CI"
+assert_mod Alpha lead true
+assert_mod Alpha planner true
+assert_mod Alpha default-status Ready
+# area-id: modules[].area-id 우선
+assert_mod Alpha area-id alpha-modid
+
+# 기본값(Beta — 플래그 누락)
+assert_mod Beta planner true        # 누락 → 기본 true
+assert_mod Beta review true
+assert_mod Beta kickoff true
+assert_mod Beta lead false           # 누락 → 기본 false
+assert_mod Beta default-status Ready # 누락 → 기본 Ready
+assert_mod Beta cross-area-group client
+
+# 동작 제외(Gamma — false 명시 + Backlog)
+assert_mod Gamma planner false
+assert_mod Gamma review false
+assert_mod Gamma kickoff false
+assert_mod Gamma default-status Backlog
+# area-id: modules 에 없음 → legacy area-ids 맵 폴백
+assert_mod Gamma area-id gamma-legacy
+
+# 대소문자 구분 — module.Alpha 동작 / module.ALPHA 빈값
+assert_mod Alpha role server
+mismatch="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" module.ALPHA.role 2>/dev/null)"
+if [ -z "$mismatch" ]; then
+  pass "대소문자 구분: module.ALPHA.role == '' (Alpha≠ALPHA)"
+else
+  fail "대소문자 구분: module.ALPHA.role" "실제='$mismatch'"
+fi
+
+# 부재 모듈 → 빈 값(fail-soft)
+assert_mod Nonexistent planner ""
+
+# area-id.<Name> 친화 키도 동일 resolve 순서(modules 우선 → legacy 폴백)
+assert_key area-id.Alpha alpha-modid   # modules 우선
+assert_key area-id.Gamma gamma-legacy  # legacy 폴백
+assert_key area-id.Backend aa11bb22    # modules 미정의 → legacy
+
+# --list-modules — 정의(나열)순 보존
+list_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+if [ "$list_out" = "Alpha,Beta,Gamma," ]; then
+  pass "--list-modules 정의순 == 'Alpha,Beta,Gamma'"
+else
+  fail "--list-modules 정의순" "실제='$list_out'"
+fi
+
+# --modules-where lead=true → Alpha 만
+where_lead="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where lead=true 2>/dev/null | tr '\n' ',')"
+if [ "$where_lead" = "Alpha," ]; then
+  pass "--modules-where lead=true == 'Alpha'"
+else
+  fail "--modules-where lead=true" "실제='$where_lead'"
+fi
+
+# --modules-where review=true → Alpha,Beta (Gamma 는 false)
+where_review="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where review=true 2>/dev/null | tr '\n' ',')"
+if [ "$where_review" = "Alpha,Beta," ]; then
+  pass "--modules-where review=true == 'Alpha,Beta'"
+else
+  fail "--modules-where review=true" "실제='$where_review'"
+fi
+
+# --modules-where kickoff=false → Gamma
+where_kf="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where kickoff=false 2>/dev/null | tr '\n' ',')"
+if [ "$where_kf" = "Gamma," ]; then
+  pass "--modules-where kickoff=false == 'Gamma'"
+else
+  fail "--modules-where kickoff=false" "실제='$where_kf'"
+fi
+
+# --modules-table — 헤더행 + 모듈별 1줄 (Alpha lead=true 칸 확인)
+table_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-table 2>/dev/null)"
+if printf '%s\n' "$table_out" | head -1 | grep -q $'name\trole\tplanner'; then
+  pass "--modules-table 헤더행 존재"
+else
+  fail "--modules-table 헤더행" "실제 첫줄='$(printf '%s\n' "$table_out" | head -1)'"
+fi
+alpha_row="$(printf '%s\n' "$table_out" | grep '^Alpha')"
+# name role planner review kickoff lead default-status cross-area-group area-id ci-workflow-name
+if [ "$alpha_row" = $'Alpha\tserver\ttrue\ttrue\ttrue\ttrue\tReady\t\talpha-modid\tAlpha CI' ]; then
+  pass "--modules-table Alpha 행 정확"
+else
+  fail "--modules-table Alpha 행" "실제='$alpha_row'"
+fi
+
+# lead 다중 경고 — Alpha+추가 lead 픽스처로 stderr 경고 확인
+MULTI_LEAD="$(mktemp)"
+cat > "$MULTI_LEAD" <<'EOF'
+modules:
+  - name: One
+    lead: true
+  - name: Two
+    lead: true
+EOF
+ml_stderr="$(PIPELINE_CONFIG="$MULTI_LEAD" bash "$READER" --modules-table 2>&1 >/dev/null)"
+if printf '%s' "$ml_stderr" | grep -q "lead 모듈이 2개 이상"; then
+  pass "lead 다중 → stderr 경고"
+else
+  fail "lead 다중 경고" "stderr='$ml_stderr'"
+fi
+rm -f "$MULTI_LEAD"
+
 # ── install.sh parity — 실제 examples/reclip config 로 핵심값 ──
 RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"
 if [ -f "$RECLIP" ]; then
@@ -153,6 +300,18 @@ if [ -f "$RECLIP" ]; then
   else
     fail "parity: examples/reclip area-id.Backend" "실제='$beid'"
   fi
+  # 모듈 의미론 골든 — Backend lead / Design 동작제외·Backlog
+  rb_lead="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Backend.lead 2>/dev/null)"
+  [ "$rb_lead" = "true" ] && pass "parity: reclip Backend lead==true" || fail "parity: reclip Backend lead" "실제='$rb_lead'"
+  for f in planner review kickoff; do
+    v="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" "module.Design.$f" 2>/dev/null)"
+    [ "$v" = "false" ] && pass "parity: reclip Design $f==false" || fail "parity: reclip Design $f" "실제='$v'"
+  done
+  ds="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Design.default-status 2>/dev/null)"
+  [ "$ds" = "Backlog" ] && pass "parity: reclip Design default-status==Backlog" || fail "parity: reclip Design default-status" "실제='$ds'"
+  # client cross-area-group 3개
+  cg="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" --modules-where cross-area-group=client 2>/dev/null | tr '\n' ',')"
+  [ "$cg" = "Frontend,iOS,Android," ] && pass "parity: reclip client 그룹==Frontend,iOS,Android" || fail "parity: reclip client 그룹" "실제='$cg'"
 else
   printf "(parity 스킵 — %s 없음)\n" "$RECLIP"
 fi

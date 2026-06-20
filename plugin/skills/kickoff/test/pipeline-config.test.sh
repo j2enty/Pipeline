@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# pipeline-config.test.sh — kickoff skill 의 config 리더(pipeline-config.sh) 단위 테스트.
+#
+# kickoff 리더는 review 리더와 byte-identical(공통 코어 + review 전용 4키 포함).
+# 이 테스트는 (1) 스칼라/파생/area-id/plan 토글 회귀 + (2) review 전용 4키 +
+# (3) #42 modules 인터페이스(module.<Name>.<flag>·--list-modules·--modules-where·
+# --modules-table·기본값·대소문자·area-id resolve 순서·lead 다중 경고) 를 검증한다.
+#
+# 사용법: plugin/skills/kickoff/test/pipeline-config.test.sh
+# 종료코드: 전부 통과 0, 하나라도 실패 1.
+
+set -uo pipefail
+
+TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+READER="$TEST_DIR/../scripts/pipeline-config.sh"
+
+if [ -t 1 ]; then
+  C_GREEN='\033[0;32m'; C_RED='\033[0;31m'; C_CYAN='\033[0;36m'; C_NC='\033[0m'
+else
+  C_GREEN=''; C_RED=''; C_CYAN=''; C_NC=''
+fi
+
+PASS=0; FAIL=0
+pass() { PASS=$((PASS+1)); printf "${C_GREEN}✓${C_NC} %s\n" "$1"; }
+fail() { FAIL=$((FAIL+1)); printf "${C_RED}✗${C_NC} %s\n    %s\n" "$1" "${2:-}" >&2; }
+
+assert_key() {
+  local key="$1" expected="$2" cfg="${3:-$FIXTURE}"
+  local actual
+  actual="$(PIPELINE_CONFIG="$cfg" bash "$READER" "$key" 2>/dev/null)"
+  if [ "$actual" = "$expected" ]; then
+    pass "$key == '$expected'"
+  else
+    fail "$key == '$expected'" "실제='$actual'"
+  fi
+}
+
+assert_dump_absent() {
+  local pattern="$1" cfg="${2:-$FIXTURE}"
+  if PIPELINE_CONFIG="$cfg" bash "$READER" --dump 2>/dev/null | grep -qF "$pattern"; then
+    fail "--dump 에 '$pattern' 미노출" "노출됨(보안 위반)"
+  else
+    pass "--dump 에 '$pattern' 미노출"
+  fi
+}
+
+assert_mod() {
+  local name="$1" flag="$2" expected="$3"
+  local actual
+  actual="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" "module.$name.$flag" 2>/dev/null)"
+  if [ "$actual" = "$expected" ]; then
+    pass "module.$name.$flag == '$expected'"
+  else
+    fail "module.$name.$flag == '$expected'" "실제='$actual'"
+  fi
+}
+
+# ── 픽스처 config 생성 ───────────────────────────────────────
+FIXTURE="$(mktemp)"
+cat > "$FIXTURE" <<'EOF'
+project:
+  owner: BlueOrg
+  parent-repository: BlueOrg/MainRepo
+  project-numbers: [7, 9]
+  slack-channel: "#blue-alerts"
+
+modules:
+  - name: Alpha
+    role: server
+    ci-workflow-name: Alpha CI
+    area-id: alpha-modid
+    planner: true
+    review: true
+    kickoff: true
+    lead: true
+    default-status: Ready
+  - name: Beta
+    role: client
+    ci-workflow-name: Beta CI
+    cross-area-group: client
+  - name: Gamma
+    role: design
+    planner: false
+    review: false
+    kickoff: false
+    default-status: Backlog
+
+claude-commands:
+  enabled: true
+  project-name: BlueProject
+  project-id: PVT_blue123
+  status-field-id: PVTSSF_status9
+  area-field-id: PVTSSF_area9
+  reviewer-app-id: "9988776"
+  reviewer-bot-slug: blue-review-bot
+  reviewer-token-key: BLUE_REVIEW_BOT
+  slack-token-key: BLUE_SLACK_WEBHOOK
+  author-login: test-bot
+  local-account: blue-dev   # 무따옴표 값 뒤 인라인 주석 — 스트립되어야 함
+  docs-context-dir: Docs/claude/context
+  area-ids:
+    Backend: aa11bb22
+    iOS: cc33dd44
+    Gamma: gamma-legacy
+  plan:
+    completeness-critic-enabled: true
+    consistency-critic-enabled: false
+    consistency-critic-dual-model: "false"
+EOF
+
+echo ""
+echo -e "${C_CYAN}══ kickoff pipeline-config.sh 단위 테스트 ══${C_NC}"
+
+# ── (회귀) 스칼라/파생/area-id/plan 토글 ──
+assert_key owner BlueOrg
+assert_key parent-repo-name MainRepo
+assert_key project-number 7
+assert_key project-name BlueProject
+assert_key local-account blue-dev
+assert_key area-id.Backend aa11bb22
+assert_key plan.consistency-critic-dual-model false
+assert_key plan.contract-doc-enabled true
+
+# ── review 전용 4키 (kickoff 리더는 review 와 byte-identical) ──
+assert_key reviewer-app-id "9988776"
+assert_key reviewer-token-key BLUE_REVIEW_BOT
+assert_dump_absent "reviewer-app-id"
+assert_dump_absent "BLUE_REVIEW_BOT"
+
+# ── modules 인터페이스 (#42) ──
+assert_mod Alpha role server
+assert_mod Alpha ci-workflow-name "Alpha CI"
+assert_mod Alpha lead true
+assert_mod Alpha area-id alpha-modid       # modules 우선
+assert_mod Beta planner true               # 누락 → 기본 true
+assert_mod Beta lead false                 # 누락 → 기본 false
+assert_mod Beta default-status Ready       # 누락 → 기본 Ready
+assert_mod Beta cross-area-group client
+assert_mod Gamma kickoff false
+assert_mod Gamma default-status Backlog
+assert_mod Gamma area-id gamma-legacy      # legacy 폴백
+assert_mod Nonexistent planner ""
+
+# 대소문자 구분
+mismatch="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" module.ALPHA.role 2>/dev/null)"
+[ -z "$mismatch" ] && pass "대소문자 구분: module.ALPHA.role == ''" || fail "대소문자 module.ALPHA.role" "실제='$mismatch'"
+
+# area-id.<Name> resolve 순서
+assert_key area-id.Alpha alpha-modid
+assert_key area-id.Gamma gamma-legacy
+
+# --list-modules 정의순
+list_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+[ "$list_out" = "Alpha,Beta,Gamma," ] && pass "--list-modules == 'Alpha,Beta,Gamma'" || fail "--list-modules" "실제='$list_out'"
+
+# --modules-where
+wl="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where lead=true 2>/dev/null | tr '\n' ',')"
+[ "$wl" = "Alpha," ] && pass "--modules-where lead=true == 'Alpha'" || fail "--modules-where lead=true" "실제='$wl'"
+wk="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where kickoff=false 2>/dev/null | tr '\n' ',')"
+[ "$wk" = "Gamma," ] && pass "--modules-where kickoff=false == 'Gamma'" || fail "--modules-where kickoff=false" "실제='$wk'"
+
+# --modules-table 헤더 + Alpha 행
+table_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-table 2>/dev/null)"
+printf '%s\n' "$table_out" | head -1 | grep -q $'name\trole\tplanner' && pass "--modules-table 헤더행" || fail "--modules-table 헤더행" "첫줄='$(printf '%s\n' "$table_out" | head -1)'"
+alpha_row="$(printf '%s\n' "$table_out" | grep '^Alpha')"
+[ "$alpha_row" = $'Alpha\tserver\ttrue\ttrue\ttrue\ttrue\tReady\t\talpha-modid\tAlpha CI' ] && pass "--modules-table Alpha 행 정확" || fail "--modules-table Alpha 행" "실제='$alpha_row'"
+
+# lead 다중 경고
+MULTI_LEAD="$(mktemp)"
+printf 'modules:\n  - name: One\n    lead: true\n  - name: Two\n    lead: true\n' > "$MULTI_LEAD"
+ml_stderr="$(PIPELINE_CONFIG="$MULTI_LEAD" bash "$READER" --modules-table 2>&1 >/dev/null)"
+printf '%s' "$ml_stderr" | grep -q "lead 모듈이 2개 이상" && pass "lead 다중 → stderr 경고" || fail "lead 다중 경고" "stderr='$ml_stderr'"
+rm -f "$MULTI_LEAD"
+
+# modules-table 값은 --dump 에 노출 안 됨
+assert_dump_absent "Alpha CI"
+assert_dump_absent "alpha-modid"
+
+# ── config 부재 fail-soft ──
+MISSING="$(mktemp -u)/nope.yml"
+assert_key owner "" "$MISSING"
+# config 부재 + --modules-table → 헤더행만(빈 모듈)
+mt_missing="$(PIPELINE_CONFIG="$MISSING" bash "$READER" --modules-table 2>/dev/null)"
+if [ "$(printf '%s\n' "$mt_missing" | wc -l | tr -d ' ')" = "1" ] && printf '%s' "$mt_missing" | grep -q $'name\trole'; then
+  pass "config 부재 --modules-table → 헤더행만"
+else
+  fail "config 부재 --modules-table" "실제='$mt_missing'"
+fi
+
+# ── install.sh parity — 실제 examples/reclip config 모듈 의미론 골든 ──
+RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"
+if [ -f "$RECLIP" ]; then
+  rb="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Backend.lead 2>/dev/null)"
+  [ "$rb" = "true" ] && pass "parity: reclip Backend lead==true" || fail "parity: reclip Backend lead" "실제='$rb'"
+  dk="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Design.kickoff 2>/dev/null)"
+  [ "$dk" = "false" ] && pass "parity: reclip Design kickoff==false" || fail "parity: reclip Design kickoff" "실제='$dk'"
+  ds="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Design.default-status 2>/dev/null)"
+  [ "$ds" = "Backlog" ] && pass "parity: reclip Design default-status==Backlog" || fail "parity: reclip Design default-status" "실제='$ds'"
+  cg="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" --modules-where cross-area-group=client 2>/dev/null | tr '\n' ',')"
+  [ "$cg" = "Frontend,iOS,Android," ] && pass "parity: reclip client 그룹" || fail "parity: reclip client 그룹" "실제='$cg'"
+  ba="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" area-id.Backend 2>/dev/null)"
+  [ "$ba" = "7a506b5e" ] && pass "parity: reclip area-id.Backend==7a506b5e" || fail "parity: reclip area-id.Backend" "실제='$ba'"
+else
+  printf "(parity 스킵 — %s 없음)\n" "$RECLIP"
+fi
+
+rm -f "$FIXTURE"
+
+echo ""
+echo -e "${C_CYAN}── 결과 ──${C_NC}"
+printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ] && { echo -e "${C_GREEN}전부 통과${C_NC}"; exit 0; } || { echo -e "${C_RED}실패 있음${C_NC}" >&2; exit 1; }

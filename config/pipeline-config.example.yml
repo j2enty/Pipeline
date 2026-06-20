@@ -25,10 +25,30 @@ project:
 modules:
   # 자동화를 적용할 모듈 목록
   # 각 모듈은 영역 레포 하나에 대응 (예: Backend → <org>/Backend 레포)
+  #
+  # 모듈 동작 의미론은 "명시 플래그"로 표현한다. 슬래시커맨드(/plan·/review·/kickoff)는
+  # 이 플래그를 런타임에 읽어 어느 모듈을 어떻게 처리할지 결정한다(하드코딩 없음).
   - name: ""
+    # role — 순수 사람용 주석(예: server/client/design/admin). 리더·코드는 읽지 않는다.
+    #        모듈의 성격을 한눈에 보기 위한 라벨일 뿐, 동작은 아래 플래그로만 결정된다.
+    role: ""
     # 해당 모듈의 CI workflow 이름 (GHA Actions 탭에 표시되는 이름)
     # auto-merge.yml이 CI pass 여부를 확인할 때 사용
     ci-workflow-name: ""
+    # Project v2 Area 옵션 ID(해시) — kickoff 가 sub-issue 의 Area 필드를 세팅할 때 사용.
+    # (구버전 claude-commands.area-ids 맵을 대체. 리더는 이 값을 우선 읽고 없으면 맵으로 폴백.)
+    area-id: ""
+    # planner/review/kickoff — 해당 슬래시커맨드 동작 대상에 포함할지 (미지정 시 기본 true)
+    planner: true
+    review: true
+    kickoff: true
+    # lead — 선행(먼저 처리) 모듈 여부 (미지정 시 기본 false).
+    #        true 가 2개 이상이면 정의(나열)순으로 직렬 선행 처리된다.
+    lead: false
+    # default-status — kickoff 시 부여할 기본 Project Status (미지정 시 기본 Ready)
+    default-status: Ready
+    # cross-area-group — 같은 그룹끼리 묶어 처리할 때 그룹명(예: client). 미지정 시 빈 값.
+    cross-area-group: ""
     # (선택, 기본 true) Reviewer 봇 리뷰만 머지 차단 기준으로 볼지 여부
     # true: Reviewer 봇의 CHANGES_REQUESTED만 차단 기준
     # false: 봇 외 다른 리뷰어의 CHANGES_REQUESTED도 허용(완화)
@@ -37,10 +57,21 @@ modules:
 
   # 추가 모듈 예시:
   # - name: Admin
+  #   role: admin
   #   ci-workflow-name: Admin CI
+  #   area-id: ""
   #   strict-review-bot-check: false
   # - name: iOS
+  #   role: client
   #   ci-workflow-name: iOS CI
+  #   area-id: ""
+  #   cross-area-group: client
+  # - name: Design          # 디자인 영역 — 코드 동작 제외 예시
+  #   role: design
+  #   planner: false
+  #   review: false
+  #   kickoff: false
+  #   default-status: Backlog
 
 modules-ignore:
   # 자동화에서 제외할 모듈 목록 (org variables: PIPELINE_MODULES_IGNORE)
@@ -99,17 +130,19 @@ claude-commands:
   #   예: Docs/claude/context
   docs-context-dir: ""
 
+  # ── 구버전 area-ids 맵 — 이제 modules[].area-id 사용 권장 ──────────────
   # 영역(모듈)명 → Project v2 Area 옵션 ID(해시) 매핑.
-  # 커맨드가 sub-issue 의 Area 필드를 세팅할 때 사용.
+  # 리더·install.sh 는 modules[].area-id 를 우선 읽고, 없을 때만 이 맵으로 폴백한다.
+  # 신규 이식에서는 위 modules[].area-id 에 적는 것을 권장(이 맵은 하위호환 폴백용).
   # 키 이름은 모듈명과 동일하게 — install.sh가 대문자로 바꿔 placeholder 와 매칭
   #   (예: Backend → __AREA_ID_BACKEND__).
-  area-ids:
-    Backend: ""
-    Admin: ""
-    Frontend: ""
-    iOS: ""
-    Android: ""
-    Design: ""
+  # area-ids:
+  #   Backend: ""
+  #   Admin: ""
+  #   Frontend: ""
+  #   iOS: ""
+  #   Android: ""
+  #   Design: ""
 
   plan:
     # ③ 완결성 critic — AI용 명세 생성 직후 단일 모델 검사 (기본 ON)
