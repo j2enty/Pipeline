@@ -4,6 +4,9 @@
 # OMC 세션 메타데이터
 .omc/
 
+# Claude Code 로컬 상태 (scheduled_tasks.lock 등 — 커밋 대상 아님)
+.claude/
+
 # 환경 / 비밀
 .env
 .env.*
