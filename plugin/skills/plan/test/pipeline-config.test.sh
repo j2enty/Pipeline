@@ -285,6 +285,46 @@ else
 fi
 rm -f "$MULTI_LEAD"
 
+# ── 빈 스칼라 흡수 회귀 (이중리뷰 버그) ─────────────────────────────────
+# 빈 스칼라 필드(area-id/role/default-status/cross-area-group/ci-workflow-name)가
+# 다음 줄 키를 값으로 흡수하면 안 된다. (\s* 가 개행을 먹는 버그 — [ \t]* 로 수정.)
+EMPTY_ABSORB="$(mktemp)"
+cat > "$EMPTY_ABSORB" <<'EOF'
+modules:
+  - name: Alpha
+    area-id:
+    role:
+    default-status:
+    cross-area-group:
+    ci-workflow-name:
+    planner:
+    lead: false
+claude-commands:
+  area-ids:
+    Alpha: legacyfallback
+EOF
+# area-id 빈 필드 → 다음 줄 키 흡수 안 함 + legacy 맵으로 폴백
+ea_modid="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.area-id 2>/dev/null)"
+[ "$ea_modid" = "legacyfallback" ] && pass "빈 area-id → legacy 폴백(흡수 안 함)" || fail "빈 area-id legacy 폴백" "실제='$ea_modid'"
+# 친화 키 area-id.Alpha 도 동일
+ea_legacy="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" area-id.Alpha 2>/dev/null)"
+[ "$ea_legacy" = "legacyfallback" ] && pass "빈 area-id.Alpha → legacy 폴백" || fail "area-id.Alpha legacy 폴백" "실제='$ea_legacy'"
+# role/default-status/cross-area-group 빈 필드 → 다음 줄 비흡수(기본값/빈값)
+ea_role="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.role 2>/dev/null)"
+[ -z "$ea_role" ] && pass "빈 role → 빈 값(흡수 안 함)" || fail "빈 role 비흡수" "실제='$ea_role'"
+ea_ds="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.default-status 2>/dev/null)"
+[ "$ea_ds" = "Ready" ] && pass "빈 default-status → 기본 Ready(흡수 안 함)" || fail "빈 default-status 기본값" "실제='$ea_ds'"
+ea_cg="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.cross-area-group 2>/dev/null)"
+[ -z "$ea_cg" ] && pass "빈 cross-area-group → 빈 값(흡수 안 함)" || fail "빈 cross-area-group 비흡수" "실제='$ea_cg'"
+ea_ci="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.ci-workflow-name 2>/dev/null)"
+[ -z "$ea_ci" ] && pass "빈 ci-workflow-name → 빈 값(흡수 안 함)" || fail "빈 ci-workflow-name 비흡수" "실제='$ea_ci'"
+# boolean 빈 필드 → 기본값 (앵커가 (true|false) 라 원래 흡수 안 하지만 확인)
+ea_planner="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.planner 2>/dev/null)"
+[ "$ea_planner" = "true" ] && pass "빈 planner → 기본 true" || fail "빈 planner 기본값" "실제='$ea_planner'"
+ea_lead="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.lead 2>/dev/null)"
+[ "$ea_lead" = "false" ] && pass "lead: false 정상(흡수 영향 없음)" || fail "lead false" "실제='$ea_lead'"
+rm -f "$EMPTY_ABSORB"
+
 # ── install.sh parity — 실제 examples/reclip config 로 핵심값 ──
 RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"
 if [ -f "$RECLIP" ]; then

@@ -234,6 +234,40 @@ rm -f "$MULTI_LEAD"
 assert_dump_absent "Alpha CI"
 assert_dump_absent "alpha-modid"
 
+# ── 빈 스칼라 흡수 회귀 (이중리뷰 버그) ─────────────────────────────────
+# 빈 스칼라 필드(area-id/role/default-status/cross-area-group/ci-workflow-name)가
+# 다음 줄 키를 값으로 흡수하면 안 된다. (\s* 가 개행을 먹는 버그 — [ \t]* 로 수정.)
+EMPTY_ABSORB="$(mktemp)"
+cat > "$EMPTY_ABSORB" <<'EOF'
+modules:
+  - name: Zeta
+    area-id:
+    role:
+    default-status:
+    cross-area-group:
+    ci-workflow-name:
+    planner:
+    lead: false
+claude-commands:
+  area-ids:
+    Zeta: legacyfallback
+EOF
+ea_modid="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.area-id 2>/dev/null)"
+[ "$ea_modid" = "legacyfallback" ] && pass "빈 area-id → legacy 폴백(흡수 안 함)" || fail "빈 area-id legacy 폴백" "실제='$ea_modid'"
+ea_legacy="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" area-id.Zeta 2>/dev/null)"
+[ "$ea_legacy" = "legacyfallback" ] && pass "빈 area-id.Zeta → legacy 폴백" || fail "area-id.Zeta legacy 폴백" "실제='$ea_legacy'"
+ea_role="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.role 2>/dev/null)"
+[ -z "$ea_role" ] && pass "빈 role → 빈 값(흡수 안 함)" || fail "빈 role 비흡수" "실제='$ea_role'"
+ea_ds="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.default-status 2>/dev/null)"
+[ "$ea_ds" = "Ready" ] && pass "빈 default-status → 기본 Ready(흡수 안 함)" || fail "빈 default-status 기본값" "실제='$ea_ds'"
+ea_cg="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.cross-area-group 2>/dev/null)"
+[ -z "$ea_cg" ] && pass "빈 cross-area-group → 빈 값(흡수 안 함)" || fail "빈 cross-area-group 비흡수" "실제='$ea_cg'"
+ea_ci="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.ci-workflow-name 2>/dev/null)"
+[ -z "$ea_ci" ] && pass "빈 ci-workflow-name → 빈 값(흡수 안 함)" || fail "빈 ci-workflow-name 비흡수" "실제='$ea_ci'"
+ea_planner="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.planner 2>/dev/null)"
+[ "$ea_planner" = "true" ] && pass "빈 planner → 기본 true" || fail "빈 planner 기본값" "실제='$ea_planner'"
+rm -f "$EMPTY_ABSORB"
+
 # ── install.sh parity — 실제 examples/reclip config 로 신규 4키 값 ──
 # (런타임 읽은 값 == install.sh 가 치환했을 값 임을 실제 설정 파일로 확인)
 RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"

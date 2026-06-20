@@ -104,12 +104,14 @@ def section(text, name):
 
 def get_scalar_in(block, key, default=''):
     """따옴표 우선(내부 # 허용) → 무따옴표 폴백(인라인 주석 제거). install.sh 와 동일."""
-    mq = re.search(rf'^\s+{re.escape(key)}:\s*"([^"\n]*)"\s*$', block, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 python 에서 개행을 포함해, 값이 비면
+    # 다음 줄 키를 빨아들이는 버그가 있다(예: area-id 빈 필드가 다음 줄 planner: 를 흡수).
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', block, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:\s*'([^'\n]*)'\s*$", block, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", block, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
-    m = re.search(rf'^\s+{re.escape(key)}:\s*([^"#\n]*)', block, re.MULTILINE)
+    m = re.search(rf'^\s+{re.escape(key)}:[ \t]*([^"#\n]*)', block, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 
 PROJECT = section(content, 'project')
@@ -139,7 +141,8 @@ def parent_repo_name():
     return pr.rsplit('/', 1)[-1] if pr else ''
 
 def area_id(name):
-    m = re.search(rf'^\s+{re.escape(name)}:\s*"?([^"#\n]+)"?\s*$', AREA_BLOCK, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수) — get_scalar_in 과 동일 이유.
+    m = re.search(rf'^\s+{re.escape(name)}:[ \t]*"?([^"#\n]+)"?\s*$', AREA_BLOCK, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m else ''
 
 # ── modules 블록 파싱 (install.sh parse_config() 의 블록분할 방식 포팅) ──────
