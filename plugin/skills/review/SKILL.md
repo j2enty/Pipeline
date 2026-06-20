@@ -482,7 +482,7 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
 
 - 전환 대상은 **현재 `Status=Bot Review` 인 항목만**. `In Review`·`Done` 이면 이미 전환됐거나 사용자 수동 진행이므로 스킵
 - `Status=In Progress` 면 경고 로그만 남기고 전환 진행 (누락 케이스 흡수)
-- 전환 실패는 **에스컬 아님**. REQUEST_CHANGES 로 격상하지 않고, 리뷰는 APPROVE 유지. 상태 파일에 `statusTransitionError` 만 기록 + 최종 리포트에 경고 표시
+- 전환 실패는 **에스컬 아님**. REQUEST_CHANGES 로 격상하지 않고, 리뷰는 APPROVE 유지. 상태 파일의 `statusTransition` 객체(`succeeded: false` + `error` 필드)에 기록 + 최종 리포트에 경고 표시 (스키마: state-schema.md 의 `statusTransition.error`)
 - REQUEST_CHANGES 시에는 Status를 건드리지 않음 — `Bot Review` 유지 (review-blocked 라벨로 구분)
 
 #### 7-i. 상태 파일 갱신
