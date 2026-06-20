@@ -4,7 +4,9 @@
 # plan.md.tmpl → SKILL.md 변환의 불변식을 단언한다:
 #   (A) skill 변환 불변식: placeholder 0, oh-my-claudecode ref(codex 폴백 외) 0,
 #       pipeline:planner·critic(완결성·정합성 모드) 호출, 토글 config 읽기,
-#       disable-model-invocation, config 리더(--dump) 주입.
+#       disable-model-invocation, config 리더(--dump) 주입,
+#       모듈 동작은 리더 인터페이스(--modules-table/--modules-where planner, default-status·
+#       cross-area-group·area-id 플래그)로 읽음 — 모듈명·Status 하드코딩 제거(#42).
 #   (B) 이동한 내용 보존: critic 체크리스트→pipeline:critic 에이전트,
 #       인터뷰 7구간·템플릿→reference/.
 #   (C) dry-run 안전 가드: 기존 dry-run-guard.test.sh 를 SKILL.md 에 겨냥해 재사용.
@@ -66,6 +68,19 @@ has 'disable-model-invocation: true' "$SKILL" "(A-6) disable-model-invocation: t
 # A-7 config 리더 주입 (--dump) + CFG 정의
 has 'pipeline-config.sh" --dump' "$SKILL" "(A-7) --dump 주입(프로젝트 설정 인지)"
 has 'CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"' "$SKILL" "(A-7) CFG 리더 경로 정의"
+
+# A-9 모듈 동작은 리더 인터페이스로 읽음 (#42 — 모듈명·Status 하드코딩 제거).
+#   planner 스킵·Cross-area 트리거·default-status·area-id 분기가 특정 모듈명이 아니라 플래그로.
+has '"$CFG" --modules-table' "$SKILL" "(A-9) --modules-table 동작표 읽기"
+hasE '"\$CFG" --modules-where planner=false' "$SKILL" "(A-9) planner=false 모듈 placeholder 분기"
+hasE 'module\.<[^>]+>\.default-status|"\$CFG" "module\.<area>\.default-status"' "$SKILL" "(A-9) default-status 플래그로 Status 결정"
+hasE 'module\.<[^>]+>\.cross-area-group|cross-area-group 값' "$SKILL" "(A-9) Cross-area 는 cross-area-group 값 동일성으로 판정"
+hasE 'module\.<[^>]+>\.area-id|--modules-table.*area-id|area-id 컬럼' "$SKILL" "(A-9) area-id 는 모듈 동작표/플래그로"
+# A-9b area-id 개별 6종 호출(하드코딩) 부재 — 특정 모듈명에 묶인 area-id.<이름> 호출이 없어야 함.
+absentE '"\$CFG" area-id\.(Backend|Admin|Frontend|iOS|Android|Design)' "$SKILL" "(A-9b) 모듈명 area-id.<이름> 개별호출 부재(하드코딩 제거)"
+# A-9c default-status 분기에 'Backlog' 리터럴이 동작 분기로 남지 않음(샘플/주석 예시는 허용).
+#   "Design은 Backlog" 같은 모듈명-Status 하드코딩 분기 부재.
+absentE 'Design.{0,4}Backlog|Backlog.{0,4}Design' "$SKILL" "(A-9c) Design↔Backlog 하드코딩 분기 부재"
 
 # A-8 reference 4종 링크 + 파일 존재
 for rf in interview-guide contract-template requirements-template design-placeholder-template; do
