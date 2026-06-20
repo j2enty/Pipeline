@@ -18,7 +18,7 @@ disable-model-invocation: true
 
 ## 프로젝트 설정 (실행시 주입)
 
-아래는 이 프로젝트의 실제 설정값이다. 프로즈·제목·Agent 프롬프트에서 `프로젝트명`·`org`·`대표 레포`·Project ID·Area ID 등을 언급할 때는 이 값을 쓴다 (하드코딩 금지 — 전부 config 런타임 읽기).
+아래 `--dump` 출력은 이 프로젝트의 비민감 핵심 설정값이다. 프로즈·제목·Agent 프롬프트에서 `프로젝트명`·`org`·`대표 레포`·Project ID 등을 언급할 때는 이 값을 쓴다 (하드코딩 금지 — 전부 config 런타임 읽기). **단 Area ID(`area-id.*`)는 --dump 에 없다** — "Area ID 참조표" 섹션처럼 필요한 펜스에서 `bash "$CFG" area-id.<영역>` 으로 개별 읽는다.
 
 !`bash "${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh" --dump 2>/dev/null || echo "(config 없음)"`
 
@@ -124,8 +124,11 @@ bash "$CFG" area-id.Design   # (/kickoff 대상 제외 — 참조표에만 포�
 
 ### 2. Parent 이슈 조회 및 plan 산출물 확인
 
+> **fail-fast 게이트 (원격 쓰기 전 필수)**: 리더는 fail-soft 라 config 누락 시 빈 값을 반환한다. 빈 `owner`/`project-id` 등으로 `gh issue view --repo "/<repo>"` 나 빈 `projectId` GraphQL mutation 같은 잘못된 원격 호출이 나가는 것을 막기 위해, 첫 원격 작업 직전에 핵심 키를 검증한다(하나라도 비면 즉시 중단). plan·review skill 과 동일한 정지선.
+
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+bash "$CFG" --require owner parent-repo-name project-id project-number status-field-id area-field-id || exit 1
 OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 gh issue view <parent-N> --repo "$OWNER/$PARENT_REPO_NAME" --json number,title,body,url,state
