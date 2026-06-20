@@ -1,0 +1,30 @@
+# review 리더 테스트용 합성 픽스처.
+# plan 리더 픽스처 + review 전용 4키(reviewer-*·slack-token-key).
+# 실제 시크릿 아님 — App PEM·토큰·webhook URL 은 없고, env 변수 이름표/합성 식별자만.
+project:
+  owner: BlueOrg
+  parent-repository: BlueOrg/MainRepo
+  project-numbers: [7, 9]
+  slack-channel: "#blue-alerts"
+
+claude-commands:
+  enabled: true
+  project-name: BlueProject
+  project-id: PVT_blue123
+  status-field-id: PVTSSF_status9
+  area-field-id: PVTSSF_area9
+  reviewer-app-id: "9988776"
+  reviewer-bot-slug: blue-review-bot
+  reviewer-token-key: BLUE_REVIEW_BOT
+  slack-token-key: BLUE_SLACK_WEBHOOK
+  author-login: test-bot
+  local-account: blue-dev   # 무따옴표 값 뒤 인라인 주석 — 스트립되어야 함
+  docs-context-dir: Docs/claude/context
+  area-ids:
+    Backend: aa11bb22
+    iOS: cc33dd44
+  plan:
+    completeness-critic-enabled: true
+    consistency-critic-enabled: false
+    consistency-critic-dual-model: "false"
+    # contract-doc-enabled 누락 → 기본 true 여야 함
