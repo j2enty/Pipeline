@@ -1,0 +1,19 @@
+# 빈 스칼라 흡수 회귀 픽스처.
+# 빈 area-id/ci-workflow-name 필드가 다음 줄 키를 흡수하면 안 된다(\s* → [ \t]* 수정).
+# Alpha: modules area-id 비움 → legacy area-ids 맵으로 폴백돼야 함.
+# Beta:  modules area-id 채움 → 그대로.
+project:
+  owner: TestOrg
+modules:
+  - name: Alpha
+    area-id:
+    ci-workflow-name:
+    strict-review-bot-check: true
+  - name: Beta
+    area-id: beta-real
+    ci-workflow-name: Beta CI
+modules-ignore: []
+claude-commands:
+  enabled: true
+  area-ids:
+    Alpha: legacyfallback

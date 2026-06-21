@@ -1,11 +1,30 @@
 # kickoff 리더 테스트용 합성 픽스처.
-# review/plan 리더 픽스처와 동일 구조 + kickoff 가 읽는 area-id 6종 전부 채움.
+# review/plan 리더 픽스처와 동일 구조 + #42 모듈 동작표(lead·kickoff 플래그·area-id).
 # 실제 시크릿 아님 — App PEM·토큰·webhook URL 은 없고, env 변수 이름표/합성 식별자만.
+# 모듈명은 특정 프로젝트 비종속 일반명(Alpha/Beta/Gamma) — 리더 인터페이스만 검증.
 project:
   owner: BlueOrg
   parent-repository: BlueOrg/MainRepo
   project-numbers: [7, 9]
   slack-channel: "#blue-alerts"
+
+modules:
+  # Alpha — 선행(lead) 모듈
+  - name: Alpha
+    role: server
+    area-id: aa11bb22
+    lead: true
+    kickoff: true
+  # Beta — 일반 kickoff 대상
+  - name: Beta
+    role: client
+    area-id: bb22cc33
+    kickoff: true
+  # Gamma — kickoff 제외 모듈(디자인류)
+  - name: Gamma
+    role: design
+    area-id: cc33dd44
+    kickoff: false
 
 claude-commands:
   enabled: true

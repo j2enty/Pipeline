@@ -154,13 +154,14 @@ with open(path) as f:
 
 def get_scalar(key, default=''):
     # 따옴표로 감싼 값 우선 매칭 — 내부 # 허용 (예: slack-channel: "#alerts")
-    mq = re.search(rf'^\s+{re.escape(key)}:\s*"([^"\n]*)"\s*$', content, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 개행 포함이라 값이 비면 다음 줄 키를 흡수.
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', content, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:\s*'([^'\n]*)'\s*$", content, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", content, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
     # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
-    m = re.search(rf'^\s+{re.escape(key)}:\s*([^"#\n]*)', content, re.MULTILINE)
+    m = re.search(rf'^\s+{re.escape(key)}:[ \t]*([^"#\n]*)', content, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 
 # 스칼라 값
@@ -178,13 +179,14 @@ ps = re.search(r'^pipeline:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOT
 pipeline_block = ps.group(1) if ps else ''
 def get_scalar_in(block, key, default=''):
     # 따옴표로 감싼 값 우선 매칭 — 내부 # 허용
-    mq = re.search(rf'^\s+{re.escape(key)}:\s*"([^"\n]*)"\s*$', block, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 개행 포함이라 값이 비면 다음 줄 키를 흡수.
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', block, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:\s*'([^'\n]*)'\s*$", block, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", block, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
     # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
-    m = re.search(rf'^\s+{re.escape(key)}:\s*([^"#\n]*)', block, re.MULTILINE)
+    m = re.search(rf'^\s+{re.escape(key)}:[ \t]*([^"#\n]*)', block, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 print(f"PIPELINE_REPO='{get_scalar_in(pipeline_block, 'repo')}'")
 print(f"PIPELINE_REF='{get_scalar_in(pipeline_block, 'ref', 'main')}'")
@@ -217,13 +219,15 @@ modules_block = ms.group(1) if ms else ''
 # 각 `- name:` 위치를 기준으로 블록 분할
 name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+)"?\s*$', modules_block, re.MULTILINE))
 names = []
+module_area_ids = {}  # name → modules[].area-id (legacy area-ids 맵보다 우선)
 for idx, m in enumerate(name_iter):
     name = m.group(1).strip().strip("'\"")
     block_start = m.end()
     block_end = name_iter[idx + 1].start() if idx + 1 < len(name_iter) else len(modules_block)
     block = modules_block[block_start:block_end]
 
-    ci_m = re.search(r'^\s+ci-workflow-name:\s*"?([^"#\n]*)"?\s*$', block, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 ci-workflow-name 이 다음 줄 키를 흡수하는 것 방지.
+    ci_m = re.search(r'^\s+ci-workflow-name:[ \t]*"?([^"#\n]*)"?\s*$', block, re.MULTILINE)
     ci = ci_m.group(1).strip().strip("'\"") if ci_m else ''
 
     # strict-review-bot-check — 미지정 시 기본 true
@@ -232,6 +236,11 @@ for idx, m in enumerate(name_iter):
     if strict not in ('true', 'false'):
         strict = 'true'
 
+    # area-id — 모듈 블록 내부 값(있으면). 없으면 빈 값 → 아래 area-ids 맵 폴백.
+    # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-id 가 다음 줄 키를 흡수하면 legacy 폴백이 깨짐.
+    aid_m = re.search(r'^\s+area-id:[ \t]*"?([^"#\n]*)"?\s*$', block, re.MULTILINE)
+    module_area_ids[name] = aid_m.group(1).strip().strip("'\"") if aid_m else ''
+
     names.append(name)
     print(f"MODULE_{idx}_NAME='{name}'")
     print(f"MODULE_{idx}_CI='{ci}'")
@@ -239,7 +248,15 @@ for idx, m in enumerate(name_iter):
 print(f"MODULE_COUNT={len(names)}")
 
 # 영역 모듈 이름들을 JSON 배열로 (App 폴러 환경변수 MODULES 용)
-print(f"MODULES_JSON='{json.dumps(names, separators=(',', ':'))}'")
+# 주의: modules-ignore 모듈(예: Design)은 제외한다.
+#   App Status 폴러는 MODULES 에 든 모듈만 kickoff/review dispatch 대상으로 본다
+#   (status-poller.ts: modules.includes(repo) 인 아이템만 처리). Design 처럼 등록
+#   대상에서 빠지는 모듈을 MODULES 에 남기면 폴러가 dispatch 대상으로 오인한다.
+#   modules: 에는 의미론 표(--modules-table) 노출용으로 두되 여기선 걸러 정합성 유지.
+#   (ignore_set = modules-ignore 멤버. 위 items 는 modules-ignore 파싱 결과.)
+ignore_set = {i.strip() for i in items}
+poller_modules = [n for n in names if n not in ignore_set]
+print(f"MODULES_JSON='{json.dumps(poller_modules, separators=(',', ':'))}'")
 
 # ── claude-commands 섹션 — Claude 슬래시커맨드 로컬 배포용 ────────────
 # claude-commands: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
@@ -274,11 +291,19 @@ print(f"CMD_DOCS_CONTEXT_DIR='{get_scalar_in(cc_block, 'docs-context-dir')}'")
 # area-ids: 의 들여쓰기를 \1 로 캡처해 더 깊게 들여쓴 항목 줄만 모은다(plan_m 과 동일 앵커).
 # 주의: 기존 `\s+...\s*.+` 는 콜론 뒤 \s* 가 개행을 넘어 다음 형제 블록(plan:)의 자식 줄까지
 # 빨아들였다 → 정크 CMD_AREA_ID_PLAN emit + 값에 따옴표 섞이면 eval 오염(선재 버그).
+# resolve 순서: modules[].area-id 우선 → 없으면 legacy claude-commands.area-ids.<Name> 폴백.
+# (리더 pipeline-config.sh 의 area-id resolve 와 동일한 우선순위로 parity 유지.)
 ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', cc_block, re.MULTILINE)
 area_ids_block = ai.group(2) if ai else ''
-for am in re.finditer(r'^\s+([A-Za-z0-9_]+):\s*"?([^"#\n]+)"?\s*$', area_ids_block, re.MULTILINE):
-    area_name = am.group(1).strip()
-    area_hash = am.group(2).strip().strip("'\"")
+resolved_area_ids = {}  # name → hash (legacy 먼저 채우고 modules 값으로 덮어씀)
+# 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-ids 항목이 다음 줄 항목 값을 흡수하는 것 방지.
+for am in re.finditer(r'^\s+([A-Za-z0-9_]+):[ \t]*"?([^"#\n]+)"?\s*$', area_ids_block, re.MULTILINE):
+    resolved_area_ids[am.group(1).strip()] = am.group(2).strip().strip("'\"")
+# modules[].area-id 우선 — 비어있지 않은 값만 덮어씀(빈 값은 legacy 폴백 유지)
+for mname, mhash in module_area_ids.items():
+    if mhash:
+        resolved_area_ids[mname] = mhash
+for area_name, area_hash in resolved_area_ids.items():
     print(f"CMD_AREA_ID_{area_name.upper()}='{area_hash}'")
 
 # plan 서브섹션 — critic 토글 (claude-commands 블록 내부에서만 탐색)
@@ -315,6 +340,28 @@ print(f"TRACKING_ENABLED={tk_enabled}")
 print(f"TRACKING_MAJOR_LABEL='{get_scalar_in(tk_block, 'major-label', 'major-issue')}'")
 print(f"TRACKING_MINOR_LABEL='{get_scalar_in(tk_block, 'minor-label', 'minor-issue')}'")
 
+PYEOF
+}
+
+# ── modules-ignore 멤버 판정 ─────────────────────────────────
+# 주어진 모듈명이 MODULES_IGNORE_JSON(형태 ["Design"]) 에 들어있으면 0(true).
+# 영역 레포 등록 루프에서 제외 모듈(예: Design)을 걸러내는 데 사용한다.
+#   - 정확(exact) 비교: "Design" 이 "DesignSystem" 같은 다른 모듈을 매칭하지 않도록
+#     python 으로 JSON 파싱 후 고정문자열 멤버십 비교(부분일치·정규식 함정 없음).
+#   - MODULES_IGNORE_JSON 미설정/빈 배열/파싱 실패 → false(아무것도 제외 안 함, 안전 기본값).
+is_ignored_module() {
+  local name="$1"
+  python3 - "$name" "${MODULES_IGNORE_JSON:-[]}" <<'PYEOF'
+import sys, json
+name = sys.argv[1]
+try:
+    ignored = json.loads(sys.argv[2])
+    if not isinstance(ignored, list):
+        ignored = []
+except (json.JSONDecodeError, ValueError):
+    ignored = []
+# 고정문자열 정확 비교 — 부분일치 방지(Design ≠ DesignSystem)
+sys.exit(0 if name in ignored else 1)
 PYEOF
 }
 
@@ -894,6 +941,13 @@ main() {
       MOD_CI="${!local_ci_var}"
       STRICT="${!local_strict_var}"
       REPO="$OWNER/$MOD_NAME"
+      # modules-ignore 모듈(예: Design)은 의미론 표(--modules-table)엔 나오되
+      # 영역 레포 등록(variable/caller-yml/label) 대상에선 제외 — 기존 동작 유지.
+      if is_ignored_module "$MOD_NAME"; then
+        echo ""
+        echo -e "${YELLOW}⊘${NC} $REPO — modules-ignore, 등록 스킵" >&2
+        continue
+      fi
       echo ""
       echo -e "${CYAN}▶ $REPO${NC}"
       # 매 레포마다 환경변수 원본으로 리셋 후 결정 — 이전 레포의 기존값이 오염 안 되도록.
@@ -963,6 +1017,14 @@ main() {
     MOD_NAME="${!local_name_var}"
     MOD_CI="${!local_ci_var}"
     REPO="$OWNER/$MOD_NAME"
+
+    # modules-ignore 모듈(예: Design)은 의미론 표(--modules-table)엔 나오되
+    # 영역 레포 등록(secret/variable/caller-yml/label) 대상에선 제외 — 기존 동작 유지.
+    if is_ignored_module "$MOD_NAME"; then
+      echo ""
+      echo -e "${YELLOW}⊘${NC} $REPO — modules-ignore, 등록 스킵" >&2
+      continue
+    fi
 
     # strict-review-bot-check — config에서 주입 (미지정 모듈은 parse_config가 true로 emit)
     STRICT="${!local_strict_var}"

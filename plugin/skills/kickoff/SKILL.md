@@ -46,7 +46,7 @@ disable-model-invocation: true
 
 - Parent 이슈에 **`/plan` 이미 실행 완료** (본문에 "📋 Plan 산출물" 섹션 존재)
 - 처리 대상 sub-issue가 **Prep Project에서 `Status=In Progress`**로 이동되어 있어야 함 (G1)
-- Backend sub-issue가 존재하면 Backend도 `In Progress`여야 함 (G1-a)
+- 선행(lead) 모듈의 sub-issue가 존재하면 그 모듈도 `In Progress`여야 함 (G1-a — lead 모듈은 `--modules-where lead=true`)
 - 로컬 `gh auth status` 통과, config `local-account` PAT 활성 (M1)
 - Docs 레포가 `Docs/` 하위에 클론되어 있어야 함 (없으면 Context md 커밋만 자동 스킵 — Docs 미사용 프로젝트도 지원)
 
@@ -77,30 +77,41 @@ bash "$CFG" docs-context-dir   # Context md 디렉토리
 | 상태 파일 | `.omc/state/sessions/<slug>.json` |
 | 컨텍스트 문서 | `<docs-context-dir>/<slug>-status.md` |
 
-## Area ID 참조표 (Prep Project Area 필드)
+## 모듈 동작표 (Area ID · 동작 의미론)
 
-영역별 Area 옵션 ID는 **실행 시 config 의 `area-id.<영역>` 키로 읽는다** (대소문자 정확히 — `area-id.iOS`, `area-id.Backend` 등). 리더의 `area-id.<Name>` 키로 가져온다 (`bash "$CFG" --keys` 로 지원 확인).
+영역별 동작 의미론(어느 영역이 선행인지·kickoff 대상인지·Area 옵션 ID 등)은 **실행 시 config 에서 모듈 동작표를 1회 읽어** 판단한다. 모듈 이름·동작 분기를 SKILL.md 에 하드코딩하지 않는다 — 리더가 표를 출력하고 그 stdout 을 읽어 분기한다 (위 `--dump` 패턴과 동일).
 
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
-bash "$CFG" area-id.Backend
-bash "$CFG" area-id.Admin
-bash "$CFG" area-id.Frontend
-bash "$CFG" area-id.iOS
-bash "$CFG" area-id.Android
-bash "$CFG" area-id.Design   # (/kickoff 대상 제외 — 참조표에만 포함)
+bash "$CFG" --modules-table   # TSV(헤더행 포함): name·role·planner·review·kickoff·lead·default-status·cross-area-group·area-id·ci-workflow-name
 ```
 
-- Backend: `area-id.Backend`
-- Admin: `area-id.Admin`
-- Frontend: `area-id.Frontend`
-- iOS: `area-id.iOS`
-- Android: `area-id.Android`
-- Design: `area-id.Design` (`/kickoff` 대상 제외)
+표 컬럼 의미:
+
+| 컬럼 | 용도 |
+|---|---|
+| `name` | 영역(모듈)명 — sub-issue `repository.name` 과 매칭 |
+| `kickoff` | `/kickoff` 대상 여부. `false` 인 모듈은 카운트·실행·리포트에서 제외 |
+| `lead` | 선행 영역 여부. `true` 인 모듈을 먼저 실행하고 PR 생성 후 나머지 병렬 (8-b) |
+| `area-id` | Prep Project Area 옵션 ID — sub-issue 의 Area 필드 세팅에 사용 |
+| `default-status` | 참고용(plan 단계 Status 부여 기준). kickoff 분기엔 직접 안 씀 |
+| `role`·`cross-area-group` | 사람용 라벨/그룹핑 — kickoff 동작 분기엔 안 씀 |
+
+조회 보조 인터페이스 (표를 직접 파싱하기 번거로울 때):
+
+```bash
+bash "$CFG" --list-modules                 # 알려진 모듈명 정의순 1줄씩
+bash "$CFG" --modules-where lead=true       # 선행(lead) 모듈명
+bash "$CFG" --modules-where kickoff=false    # /kickoff 제외 모듈명
+bash "$CFG" module.<Name>.area-id           # 특정 모듈의 Area ID (대소문자 정확)
+bash "$CFG" module.<Name>.kickoff            # 특정 모듈의 kickoff 대상 여부
+```
+
+> **대소문자 정확**: `module.<Name>.<flag>` 의 `<Name>` 은 표의 `name` 과 정확히 일치해야 한다 (예: `module.iOS.area-id` ≠ `module.IOS.area-id`). 표(`--modules-table`)의 `name` 컬럼을 그대로 쓴다.
 
 ## 런타임 추천 룰 + OMC degrade
 
-영역 수 `G`(= In Progress 대상 수, Design 제외, Backend 포함)별 추천 런타임과, OMC(oh-my-claudecode) 부재 시 폴백 규칙은 [런타임 결정 + OMC degrade](reference/runtime-degrade.md) 참조. 요지:
+영역 수 `G`(= In Progress 대상 수 — `kickoff=false` 모듈 제외, lead 모듈 포함)별 추천 런타임과, OMC(oh-my-claudecode) 부재 시 폴백 규칙은 [런타임 결정 + OMC degrade](reference/runtime-degrade.md) 참조. 요지:
 
 - `--serial`·`--agent` 는 **`pipeline:executor` 직접 실행 — OMC 무관 (항상 가능)**.
 - `--team`·`--ultra` 는 OMC `oh-my-claudecode:team`/`oh-my-claudecode:ultrawork` 에 의존하되, **OMC 가 없으면 `--agent`(= `pipeline:executor` 병렬 N개)로 자동 degrade**. degrade 의 종착지는 항상 `--agent` 라, 이 skill 의 정상 동작은 OMC 설치 여부와 무관하다.
@@ -151,9 +162,9 @@ gh api /repos/$OWNER/$PARENT_REPO_NAME/issues/<parent-N>/sub_issues
 ```
 
 각 sub-issue에 대해:
-- `repository.name`으로 영역 판별 (`Backend`/`Admin`/`Frontend`/`iOS`/`Android`/`Design`)
-- **Design sub-issue는 즉시 대상에서 분리** (카운트·실행·리포트 모두 제외) — C6
-- Prep Project의 Status·Area 필드 값 조회
+- `repository.name` 을 모듈 동작표(`--modules-table`)의 `name` 컬럼과 매칭해 영역 판별. `--list-modules` 에 없는 repo 면 알 수 없는 영역으로 스킵(리포트 표기).
+- **`kickoff=false` 인 모듈의 sub-issue 는 즉시 대상에서 분리** (카운트·실행·리포트 모두 제외) — C6. 제외 모듈 목록은 `bash "$CFG" --modules-where kickoff=false` 로 얻는다 (특정 모듈명 하드코딩 금지 — 플래그로 판단).
+- Prep Project의 Status·Area 필드 값 조회 (Area 옵션 ID 는 표의 `area-id` 컬럼 또는 `module.<name>.area-id`)
 
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
@@ -196,14 +207,16 @@ query($owner: String!, $number: Int!, $issueId: ID!) {
 
 > 처리할 In Progress sub-issue 없음. Prep Project에서 대상 카드를 In Progress로 이동 후 재실행.
 
-### 5. Backend 게이트 체크 (G1-a)
+### 5. 선행(lead) 게이트 체크 (G1-a)
 
-- Backend sub-issue 존재 + `Status=Ready` + 다른 영역 중 `In Progress` 존재 → **중단 + 안내**:
+선행 모듈은 `bash "$CFG" --modules-where lead=true` 로 얻는다 (config 가 정하는 값 — 보통 1개, 2개 이상이면 정의순 직렬 선행). 아래에서 `<lead>` 는 그 모듈명.
 
-  > Backend sub-issue(`<owner>/Backend#<N>`)가 Ready 상태. 인터페이스 계약 문제 방지 위해 Backend도 In Progress로 올리고 재실행 권장. 의도적 우회는 향후 `--skip-backend-gate` 플래그로 지원 예정(M3+).
+- `<lead>` sub-issue 존재 + `Status=Ready` + 다른 영역 중 `In Progress` 존재 → **중단 + 안내**:
 
-- Backend sub-issue 자체가 없음 → 게이트 생략, 모든 In Progress 영역 동시 시작 (스펙 C1)
-- Backend `In Progress` → Backend를 **선행 영역**으로 표시 (8단계에서 먼저 실행)
+  > `<lead>` sub-issue(`<owner>/<lead>#<N>`)가 Ready 상태. 인터페이스 계약 문제 방지 위해 선행 영역도 In Progress로 올리고 재실행 권장. 의도적 우회는 향후 `--skip-lead-gate` 플래그로 지원 예정(M3+).
+
+- `<lead>` sub-issue 자체가 없음(또는 lead 모듈 미지정) → 게이트 생략, 모든 In Progress 영역 동시 시작 (스펙 C1)
+- `<lead>` `In Progress` → 그 모듈을 **선행 영역**으로 표시 (8단계에서 먼저 실행)
 
 ### 6. 상태 파일 감지 + 재개 분기 (G4)
 
@@ -248,7 +261,7 @@ STATE_FILE=".omc/state/sessions/${SLUG}.json"
 
 ### 7. 런타임 결정 및 사용자 승인
 
-- **영역 수 `G`** = In Progress 대상 수 (Design 제외, Backend 포함)
+- **영역 수 `G`** = In Progress 대상 수 (`kickoff=false` 모듈 제외, lead 모듈 포함)
 - 플래그가 있으면 그걸 사용 (override)
 - 플래그가 없으면 위 런타임 추천 룰로 `RECOMMENDED` 계산
 - `--bot` 플래그 있으면 `RECOMMENDED` 런타임으로 자동 진행 (AskUserQuestion 스킵)
@@ -259,7 +272,7 @@ STATE_FILE=".omc/state/sessions/${SLUG}.json"
 
 **OMC degrade 결정 (시작 시 1회 고정)** — 결정된 런타임이 `--team`/`--ultra` 면, 8-b 실행 시 OMC skill 호출을 시도하고 불가하면 `--agent` 로 폴백한다. 상세 분기는 [런타임 결정 + OMC degrade](reference/runtime-degrade.md) 참조. `--bot` 모드면 OMC 부재 시 조용히 `--agent` 로 진행.
 
-**G12 주의**: Backend 선행 + 병렬 전환 시점에도 런타임 모드는 변경하지 않음 (시작 시 결정된 모드 유지). Backend 단독 기간엔 단일 실행, Backend PR 생성 후 나머지 N-1개를 같은 모드로 병렬 실행.
+**G12 주의**: lead 선행 + 병렬 전환 시점에도 런타임 모드는 변경하지 않음 (시작 시 결정된 모드 유지). lead 단독 기간엔 단일 실행, lead PR 생성 후 나머지 N-1개를 같은 모드로 병렬 실행.
 
 ### 8. Executor 오케스트레이션 (G8 하이브리드)
 
@@ -294,13 +307,15 @@ STATE_FILE=".omc/state/sessions/${SLUG}.json"
 
 #### 8-b. 실행 단계 (영역별)
 
-**Backend 선행 (있을 때)**:
-1. Backend executor 1회 실행 (아래 `8-c` 영역 단위 실행 블록)
-2. Backend 상태가 `pr_created`가 되면 → 나머지 In Progress 영역 병렬 기동
-3. Backend가 `escalated`로 끝나면 → Backend만 에스컬 발송, **나머지 영역은 실행 안 함**
-   (Backend 계약 없이 FE/iOS/Android 진행하면 G1-a 근거가 깨짐)
+선행 모듈은 `bash "$CFG" --modules-where lead=true` (= `<lead>`). lead 모듈이 In Progress 대상에 있을 때:
 
-**Backend 없음**:
+**lead 선행 (있을 때)**:
+1. `<lead>` executor 1회 실행 (아래 `8-c` 영역 단위 실행 블록). lead 가 2개 이상이면 정의순으로 직렬 선행.
+2. `<lead>` 상태가 `pr_created`가 되면 → 나머지 In Progress 영역 병렬 기동
+3. `<lead>`가 `escalated`로 끝나면 → 그 lead 만 에스컬 발송, **나머지 영역은 실행 안 함**
+   (선행 계약 없이 후행 영역을 진행하면 G1-a 근거가 깨짐)
+
+**lead 없음** (lead 모듈 미지정 또는 In Progress 대상에 없음):
 - In Progress 영역 모두 런타임 플래그에 따라 병렬/직렬 실행
 
 **런타임별 호출 형태** (OMC degrade 포함 — 상세는 [reference/runtime-degrade.md](reference/runtime-degrade.md)):
@@ -504,7 +519,7 @@ executor가 `status=escalated`로 반환했거나, fixing/transient 상한을 �
 핵심:
 - **개별 PR/sub-issue 실패** → 해당 sub-issue 에 `blocked` 라벨 + 에스컬 코멘트.
 - **Slack 이중 발송** — GitHub 코멘트가 1차, `"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh"` 가 그 뒤(순서 고정). config `slack-token-key`(가 가리키는 env webhook) 미설정 시 헬퍼가 graceful skip → 파이프라인 차단 없음.
-- **영역별 독립** (G3) — 한 영역 에스컬돼도 나머지 영역은 계속(Backend 선행 제외 — 8-b).
+- **영역별 독립** (G3) — 한 영역 에스컬돼도 나머지 영역은 계속(lead 선행 제외 — 8-b).
 
 ### 10. `/review` 자동 체이닝 (G18)
 
@@ -522,7 +537,7 @@ executor가 `status=escalated`로 반환했거나, fixing/transient 상한을 �
 아래 경우에는 **체이닝 생략**하고 이유 로그 + 최종 리포트에 안내:
 
 - 모든 영역이 `escalated` 또는 `skipped` → 리뷰 대상 PR 없음
-- Backend 선행이 `escalated` → 8-b에 따라 나머지 영역 실행 안 됐고 Backend만 에스컬. 리뷰할 PR 0~1개지만 cross-area critic 무의미. 단일 Backend PR만 있는 경우엔 체이닝 진행 (10-a 1번 조건 충족)
+- lead 선행이 `escalated` → 8-b에 따라 나머지 영역 실행 안 됐고 lead 만 에스컬. 리뷰할 PR 0~1개지만 cross-area critic 무의미. 단일 lead PR만 있는 경우엔 체이닝 진행 (10-a 1번 조건 충족)
 
 #### 10-b. Skill 호출
 
@@ -633,14 +648,14 @@ Context 문서:
 - **Status `In Progress → Bot Review`는 PR 생성 직후 자동 전환** (G1) — `/kickoff` 가 담당. `Bot Review → In Review` 전환은 `/review` APPROVE 후 `/review` 가 담당
 - **Sub-issue AC 체크박스 자동 체크** (G17) — verifier=pass + PR 생성 확정 후 `## AC` 섹션의 `- [ ]`를 전부 `- [x]`로 갱신. 다른 섹션 영향 없음. 실패해도 Status 전환은 계속
 - **원격 동기화 가드 보존** (G15) — PR 생성 직전 `rev-list` 로 로컬-원격 동기화 확인. executor 가 push 실패하고도 ready 반환하는 케이스(2026-04-20) 차단
-- **Backend 게이트는 계약 문제** (G1-a) — Ready Backend + In Progress 타 영역이면 중단
-- **영역별 독립 실패** (G3) — 한 영역 에스컬돼도 다른 영역은 계속 (Backend 선행 제외)
+- **선행(lead) 게이트는 계약 문제** (G1-a) — Ready lead 모듈 + In Progress 타 영역이면 중단 (lead 모듈은 config `--modules-where lead=true`)
+- **영역별 독립 실패** (G3) — 한 영역 에스컬돼도 다른 영역은 계속 (lead 선행 제외)
 - **실패 시 자동 복구 금지 (C7)** — 중간 단계 실패 시 즉시 중단 + 상태 저장 + 에스컬
 - **재시도 3분류 고정** (C3) — 수정 5회 / 일시 3회+백오프 / 즉시 에스컬. 사용자 override 없음
 - **PR 생성 ≠ 머지** — `/kickoff`는 "PR 생성 + `Bot Review` 전환 + `/review` 체이닝까지"가 책임. 머지는 사용자 hands-on 검증 후 (G4-a, G18)
 - **`/review` 자동 체이닝** (G18) — 모든 영역 `run_area` 종료 후 리뷰 가능한 PR이 1개 이상이면 `pipeline:review` 자동 호출. 체이닝 실패는 `/kickoff` 자체 실패로 취급하지 않음
 - **OMC degrade** — `--team`/`--ultra` 는 OMC 있을 때만, 없으면 `--agent`(pipeline:executor 병렬)로 폴백. `--serial`/`--agent` 는 OMC 무관. 정상 동작은 OMC 설치 여부와 무관
-- **Design 영역은 항상 제외** (C6) — 카운트·실행·리포트 모두
+- **`kickoff=false` 모듈은 항상 제외** (C6) — 카운트·실행·리포트 모두. 제외 대상은 config `--modules-where kickoff=false` 가 정함 (특정 모듈명 하드코딩 안 함)
 - **Parent Status는 건드리지 않음** — 사용자 소유 (plan 과 일관)
 - **상태 파일 원자적 쓰기** — temp + `mv`, partial write 방지
 

@@ -3,7 +3,8 @@
 #
 # kickoff.md.tmpl → SKILL.md 변환의 불변식을 단언한다:
 #   (A) skill 변환 불변식: placeholder 0, pipeline:executor·verifier 호출,
-#       disable-model-invocation, config 리더(--dump + CFG) 주입, area-id.* 개별 읽기.
+#       disable-model-invocation, config 리더(--dump + CFG) 주입,
+#       모듈 동작은 리더 인터페이스(--modules-table/--modules-where)로 읽음(모듈명 비종속, #42).
 #   (B) OMC degrade: oh-my-claudecode 참조는 degrade(--agent 폴백) 컨텍스트에서만 허용,
 #       그 외 0. degrade 분기 문구 존재.
 #   (C) review 자동 체이닝: Skill(skill="pipeline:review") 존재.
@@ -58,15 +59,19 @@ has 'disable-model-invocation: true' "$SKILL" "(A-3) disable-model-invocation: t
 has 'pipeline-config.sh" --dump' "$SKILL" "(A-4) --dump 주입(프로젝트 설정 인지)"
 has 'CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"' "$SKILL" "(A-4) CFG 리더 경로 정의"
 
-# A-5 config 키 개별 읽기 — 상수 + area-id.* 6종 (대소문자 정확)
+# A-5 config 키 개별 읽기 — 상수
 for k in owner parent-repo-name project-id project-number status-field-id area-field-id docs-context-dir; do
   has "\"\$CFG\" $k" "$SKILL" "(A-5) config 키 개별 읽기: $k"
 done
-for area in Backend Admin Frontend iOS Android Design; do
-  has "\"\$CFG\" area-id.$area" "$SKILL" "(A-5) area-id 개별 읽기: area-id.$area"
-done
-# A-5b 대소문자 함정 — area-id.IOS (잘못된 철자) 가 없어야 함
-absentE 'area-id\.IOS' "$SKILL" "(A-5b) area-id.IOS(오타) 부재 — area-id.iOS 만 사용"
+# A-5a 모듈 동작은 리더 인터페이스(--modules-table 등)로 읽는다 (#42 — 모듈명 하드코딩 제거).
+#   area-id 개별 6종 호출(area-id.Backend 등)이 동작 분기에서 사라지고 표 1회 읽기로 대체됐는지 검증.
+has '"$CFG" --modules-table' "$SKILL" "(A-5a) --modules-table 1회 읽기로 모듈표 주입"
+hasE '\-\-modules-where (lead|kickoff)' "$SKILL" "(A-5a) --modules-where 로 lead/kickoff 분기"
+# A-5b 모듈명 area-id 개별호출(하드코딩) 부재 — 특정 모듈명에 묶인 area-id.<이름> 호출이 없어야 함.
+#   (리더는 여전히 area-id.<Name>·module.<Name> 키를 지원하지만, SKILL.md 동작이 특정
+#    모듈명으로 area-id 를 개별 호출하면 종속성 회귀. 예시 토큰 <Name>·<name> 은 허용.)
+absentE '"\$CFG" area-id\.(Backend|Admin|Frontend|iOS|Android|Design)' "$SKILL" "(A-5b) 모듈명 area-id.<이름> 개별호출 부재(하드코딩 제거)"
+absentE 'area-id\.IOS' "$SKILL" "(A-5b) area-id.IOS(오타) 부재"
 
 echo -e "\n${C_CYAN}── (B) OMC degrade (oh-my-claudecode 참조 통제) ──${C_NC}"
 # B-1 SKILL.md 의 oh-my-claudecode 참조는 전부 team/ultra degrade 컨텍스트(폴백 prose)
@@ -123,9 +128,10 @@ hasE 'updateProjectV2ItemFieldValue' "$SKILL" "(D-4) Project Status GraphQL muta
 # D-5 Backend 게이트 + sub-issue 발견
 hasE 'Backend 게이트|G1-a' "$SKILL" "(D-5) Backend 게이트 보존"
 hasE 'sub_issues' "$SKILL" "(D-5) sub-issue 발견(GitHub native API) 보존"
-# D-6 Status 필터 / Design 제외 / restart 재개
+# D-6 Status 필터 / kickoff=false 제외(모듈명 비종속) / restart 재개
 hasE 'In Progress만 처리|Status 필터' "$SKILL" "(D-6) Status 필터 보존"
-hasE 'Design.*제외|Design 영역은 항상 제외' "$SKILL" "(D-6) Design 제외 보존"
+# 제외 분기는 모듈명이 아니라 kickoff 플래그로 — #42 일반화. (구버전 'Design.*제외' 리터럴 대체)
+hasE 'kickoff=false|module\..*\.kickoff' "$SKILL" "(D-6) kickoff=false 모듈 제외(플래그 기반)"
 hasE '재개|--restart' "$SKILL" "(D-6) restart/이어서 로직 보존"
 # D-7 에스컬 + Slack 이중 발송
 hasE '에스컬' "$SKILL" "(D-7) 에스컬레이션 보존"

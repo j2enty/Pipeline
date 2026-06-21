@@ -396,6 +396,28 @@ examples/
 2. 자기 프로젝트 값 채워넣기
 3. `install.sh`에 파일 경로 전달 → org variables·secrets 자동 등록
 
+### 모듈 동작 플래그 카탈로그 (`modules:` 항목)
+
+슬래시커맨드(`/plan`·`/review`·`/kickoff`)는 모듈 동작을 **하드코딩하지 않고** config의 동작 플래그를
+런타임에 읽어 결정한다. 리더(`pipeline-config.sh`)의 `--modules-table`·`--modules-where`·`module.<Name>.<flag>`로 노출.
+새 동작 축이 필요하면 yml/SKILL에서 즉흥적으로 만들지 말고 이 카탈로그에 먼저 추가한다.
+
+| 필드 | 타입 | 기본값(미지정) | 의미 |
+|---|---|---|---|
+| `name` | string | (필수) | 모듈 이름 = 영역 레포명 (`<owner>/<name>`) |
+| `role` | string | 빈 값 | **순수 사람용 라벨**(server/client/design/admin). 리더·코드는 읽지 않음 — 동작은 아래 플래그로만 결정 |
+| `area-id` | string | 빈 값 → legacy `area-ids.<Name>` 폴백 | Project v2 Area 옵션 ID. kickoff 가 sub-issue Area 세팅에 사용 |
+| `planner` | boolean | `true` | `/plan` 이 planner 호출 대상에 포함할지. `false` 면 placeholder 처리 |
+| `review` | boolean | `true` | `/review` 대상에 포함할지. `false` 면 리뷰 제외 |
+| `kickoff` | boolean | `true` | `/kickoff` 대상에 포함할지. `false` 면 실행 제외 |
+| `lead` | boolean | `false` | 선행(먼저 처리) 모듈. `true` 가 2개 이상이면 정의순 직렬 선행 |
+| `default-status` | string | `Ready` | kickoff 시 부여할 기본 Project Status (예: `Backlog`) |
+| `cross-area-group` | string | 빈 값 | 같은 비어있지 않은 값을 가진 모듈이 2개 이상 선택되면 `/plan` 이 Cross-area 일관성 섹션 추가 |
+| `ci-workflow-name` | string | 빈 값 | auto-merge 가 CI pass 확인 시 참조할 워크플로 이름 |
+| `strict-review-bot-check` | boolean | `true` | Reviewer 봇 CHANGES_REQUESTED만 차단 기준으로 볼지 |
+
+- **레포 등록 제외**: `modules-ignore`에 있는 모듈은 `modules:`에 있어도 `install.sh`가 레포 등록(secret/variable/yml)·폴러 dispatch에서 제외한다. "config는 알지만 자동화 레포 관리는 안 하는 모듈"(예: Design)을 표현.
+
 
 ## 동작 컨벤션
 

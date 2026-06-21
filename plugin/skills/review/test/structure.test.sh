@@ -4,7 +4,8 @@
 # review.md.tmpl → SKILL.md 변환의 불변식을 단언한다:
 #   (A) skill 변환 불변식: placeholder 0, oh-my-claudecode ref 0,
 #       pipeline:code-reviewer·verifier·critic 호출, disable-model-invocation,
-#       config 리더(--dump + CFG) 주입.
+#       config 리더(--dump + CFG) 주입,
+#       모듈 동작은 리더 인터페이스(--modules-where review/lead, --modules-table)로 읽음(#42).
 #   (B) 보안: 민감 4키 개별 읽기 + --dump 미노출, 실제 시크릿 패턴 부재.
 #   (C) self-approve 회피 게이트 + 헬퍼 경로(${CLAUDE_SKILL_DIR}/scripts).
 #   (D) 핵심 동작 보존: self-approve 회피·Status 전환·에스컬·상태파일 sentinel 등.
@@ -63,6 +64,16 @@ has 'disable-model-invocation: true' "$SKILL" "(A-4) disable-model-invocation: t
 # A-5 config 리더 주입 (--dump) + CFG 정의
 has 'pipeline-config.sh" --dump' "$SKILL" "(A-5) --dump 주입(프로젝트 설정 인지)"
 has 'CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"' "$SKILL" "(A-5) CFG 리더 경로 정의"
+
+# A-6 모듈 동작은 리더 인터페이스로 읽음 (#42 — 모듈명 하드코딩 제거).
+#   영역↔레포 매핑·리뷰 대상 분기가 특정 모듈명이 아니라 review/lead 플래그로 표현됐는지 검증.
+has '"$CFG" --modules-where review=true' "$SKILL" "(A-6) --modules-where review=true 로 리뷰 대상 선정"
+hasE '--modules-where review=false' "$SKILL" "(A-6) review=false 모듈 자동 제외(플래그 기반)"
+hasE '--modules-where lead=true' "$SKILL" "(A-6) lead 선행도 --modules-where lead=true 로"
+has '"$CFG" --modules-table' "$SKILL" "(A-6) --modules-table 동작표 읽기"
+# A-6b 동작 분기에 모듈 식별자 리터럴 부재 — 영역↔레포 매핑이 특정 모듈명으로 하드코딩되지 않음.
+#   (예시 데이터/대소문자 설명/샘플 리포트는 허용. 여기선 "<owner>/Backend" 같은 매핑 리터럴만 검사.)
+absentE '<owner>/(Backend|Admin|Android|Design)' "$SKILL" "(A-6b) <owner>/<모듈명> 매핑 하드코딩 부재"
 
 echo -e "\n${C_CYAN}── (B) 보안: 민감 4키 + 시크릿 부재 ──${C_NC}"
 # B-1 런타임에 실제 읽는 민감키는 개별 키 읽기($(bash "$CFG" <key>))로만 접근.

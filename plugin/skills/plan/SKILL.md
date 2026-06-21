@@ -57,10 +57,43 @@ bash "$CFG" parent-repo-name # 대표 레포
 bash "$CFG" project-number   # Project 번호 (Prep)
 bash "$CFG" project-id       # Project ID
 bash "$CFG" status-field-id  # Status 필드 ID (Backlog/Planning/Ready/In Progress/In Review/Done)
-bash "$CFG" area-field-id    # Area 필드 ID (Backend/Admin/Frontend/iOS/Android/Design)
+bash "$CFG" area-field-id    # Area 필드 ID (영역별 옵션)
+bash "$CFG" --list-modules   # config 에 정의된 영역(모듈) 목록 — 동작 분기는 이 목록 + 플래그로
 ```
 
-- 영역 레포(일반 설명용): Backend, Admin, Frontend, iOS, Android, Design
+- 영역(모듈) 목록은 **실행 시 config 에서 읽는다** (`--list-modules`). 모듈명을 SKILL.md 에 하드코딩하지 않는다 — 어느 모듈이 선행(lead)인지·planner 대상인지·기본 Status 가 무엇인지는 전부 모듈 동작표(`--modules-table`)의 플래그로 판단한다.
+
+## 모듈 동작표 (실행시 주입)
+
+영역별 동작 의미론은 **실행 시 config 의 모듈 동작표를 1회 읽어** 판단한다. 표를 출력하고 그 stdout 으로 분기한다 (위 `--dump` 패턴과 동일 — LLM 임의 루프 금지).
+
+```bash
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+bash "$CFG" --modules-table   # TSV(헤더행 포함): name·role·planner·review·kickoff·lead·default-status·cross-area-group·area-id·ci-workflow-name
+```
+
+표 컬럼 중 `/plan` 이 쓰는 것:
+
+| 컬럼 | 용도 |
+|---|---|
+| `name` | 영역(모듈)명 — sub-issue 레포·Area 옵션 매칭 |
+| `planner` | planner 호출 대상 여부. `false` 면 planner 호출 없이 placeholder 산출물로 처리 |
+| `lead` | 선행 영역 표시(`/plan` 은 모든 영역 sub-issue 를 동시 생성하므로 정보 표기용. 선행 실행은 `/kickoff` 소관) |
+| `default-status` | 이 모듈 sub-issue 에 부여할 Project Status (예: `Ready` / `Backlog`) |
+| `cross-area-group` | 같은 그룹값을 가진 모듈이 2개 이상 선택되면 'Cross-area 일관성' 섹션 추가 트리거 |
+| `area-id` | Prep Project Area 옵션 ID |
+
+조회 보조 인터페이스:
+
+```bash
+bash "$CFG" --modules-where planner=false     # planner 스킵(placeholder) 모듈명
+bash "$CFG" --modules-where lead=true          # 선행(lead) 모듈명
+bash "$CFG" module.<Name>.default-status       # 특정 모듈의 기본 Status (대소문자 정확)
+bash "$CFG" module.<Name>.area-id              # 특정 모듈의 Area 옵션 ID
+bash "$CFG" module.<Name>.cross-area-group     # 특정 모듈의 그룹값(빈 값일 수 있음)
+```
+
+> **대소문자 정확**: `module.<Name>.<flag>` 의 `<Name>` 은 표의 `name` 컬럼과 정확히 일치해야 한다 (예: `module.iOS.area-id` ≠ `module.IOS.area-id`).
 
 ## 수행 순서
 
@@ -321,7 +354,27 @@ echo "contract-doc-enabled = $TOGGLE"
 
 #### ②c. 영역별 플래닝
 
-선택된 영역마다 Agent 호출:
+**planner 대상 판별** — 선택된 영역 중 `planner=false` 인 모듈은 planner 호출 없이 placeholder 로 처리한다. 대상/스킵 분류는 모듈 동작표로 한다 (특정 모듈명 하드코딩 금지 — 플래그로 판단):
+
+```bash
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+# planner 스킵(placeholder) 모듈 — 선택 영역 중 이 목록에 든 것은 planner 호출 안 함
+bash "$CFG" --modules-where planner=false
+```
+
+**Cross-area 일관성 트리거** — 선택된 영역들의 `cross-area-group` 값을 보고, **같은 그룹값을 가진 모듈이 2개 이상이면** 그 그룹의 각 영역 플랜에 'Cross-area 일관성' 섹션을 추가한다. 그룹 이름(예: 무엇이든)·의미 라벨은 하드코딩하지 않고, 오직 그룹값 동일성으로만 판정한다:
+
+```bash
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+# 선택 영역마다 cross-area-group 값을 읽어, 같은 값이 2개 이상인 그룹을 찾는다.
+#   예) module.<sel1>.cross-area-group == module.<sel2>.cross-area-group (빈 값 제외) → 그 그룹은 Cross-area 대상.
+for area in <선택된 영역들>; do
+  bash "$CFG" "module.$area.cross-area-group"
+done
+# → 동일 비어있지 않은 값이 2개 이상인 그룹의 영역들에 한해 'Cross-area 일관성' 섹션 추가.
+```
+
+선택된 `planner=true` 영역마다 Agent 호출:
 
 ```
 Agent(
@@ -330,16 +383,16 @@ Agent(
   prompt="Parent issue title/body + 선택 영역 + 다른 영역과의 의존성을 받아 <영역> 구현 플랜을 작성.
           출력 섹션: 목표 / 구현 태스크 리스트 / 인수 기준 / 예상 난이도 / 다른 영역과의 인터페이스
           [계약 참조] ②b 계약 문서(contract.md)가 있으면, 영역 간 인터페이스(API 필드명·타입·규약)는 **다시 정의하지 말고 계약을 참조**한다('계약 §API 스키마의 X 필드를 소비' 식). 계약과 어긋나는 서술 금지.
-          [추가] 사용자 면(Frontend·iOS·Android 중 2개 이상) 동시 작업이면 'Cross-area 일관성' 섹션도 추가:
+          [추가] 이 영역이 'Cross-area 일관성' 트리거 그룹(같은 cross-area-group 값을 가진 영역이 2개 이상)에 속하면 'Cross-area 일관성' 섹션도 추가:
             - 비동기·타이머 취소 정책 (cancel/cleanup 패턴)
             - 미주입·에러 값 fallback 리터럴 (예: '-')
             - 접근성 라벨 전략 (merge vs override vs hint 분리)"
 )
 ```
 
-- Design 영역은 planner 호출 없이 "TBD placeholder" 고정 내용으로 처리
+- `planner=false` 모듈은 planner 호출 없이 "TBD placeholder" 고정 내용으로 처리 (산출물 경로는 6a 참조)
 - 여러 영역은 **병렬 실행**
-- **Cross-area 3축 명시 룰**: Frontend·iOS·Android 중 2개 이상 영역이 선택된 경우, 각 영역 플랜에 위 3축을 미리 명시해 격차 예방.
+- **Cross-area 3축 명시 룰**: 같은 `cross-area-group` 값을 가진 영역이 2개 이상 선택된 경우, 그 그룹 각 영역 플랜에 위 3축을 미리 명시해 격차 예방.
 
 ### 5.5. ③ 완결성 critic
 
@@ -393,12 +446,9 @@ Agent(
 
 **또한 생성:**
 - `Docs/claude/plans/<parent-N>-<slug>-contract.md` — **영역 간 공유 계약. ②b에서 실제로 작성된 경우에만 저장한다 (②b가 토글 off·단일 영역으로 스킵됐으면 이 파일은 없음 — 여기서 새로 만들지 말 것).**
-- `Docs/claude/plans/<parent-N>-<slug>-backend.md` (해당되면)
-- `Docs/claude/plans/<parent-N>-<slug>-admin.md` (해당되면)
-- `Docs/claude/plans/<parent-N>-<slug>-frontend.md` (해당되면 — 미래 사용자 공개 웹)
-- `Docs/claude/plans/<parent-N>-<slug>-ios.md` (해당되면)
-- `Docs/claude/plans/<parent-N>-<slug>-android.md` (해당되면)
-- `Docs/claude/plans/<parent-N>-<slug>-design.md` (Design 선택 시, [Design placeholder 템플릿](reference/design-placeholder-template.md) 사용 — Parent 줄의 `<owner>/<parent-repo-name>` 은 위 주입된 설정값으로 채운다)
+- **선택된 각 영역마다** `Docs/claude/plans/<parent-N>-<slug>-<영역소문자>.md` (영역명 = `--list-modules` 의 이름을 소문자화). 예: 영역 `Backend` → `...-backend.md`.
+  - `planner=true` 영역 → ②c planner 산출물을 저장.
+  - `planner=false` 영역 → planner 호출 없이 [placeholder 템플릿](reference/design-placeholder-template.md) 으로 채운 placeholder 산출물 저장 (Parent 줄의 `<owner>/<parent-repo-name>` 은 위 주입된 설정값으로 채운다).
 
 #### 6.5. ⑤ 정합성 critic
 
@@ -492,7 +542,7 @@ git push -u origin plan/<parent-N>-<slug>
 gh pr create --title "[plan] <parent-issue-title>" --body "Parent: $OWNER/$PARENT_REPO_NAME#<N>"
 ```
 
-**Docs 영역 정책 (2026-05-07 확정):** plan PR(`plan/<parent-N>-<slug>` 브랜치) 만으로 기획·플랜 작업을 추적한다. **Docs 레포에 sub-issue를 만들지 않으며 Prep Project 칸반에도 Docs 카드를 만들지 않는다.** Step 7의 sub-issue 생성 대상은 코드 영역(Backend/Admin/Frontend/iOS/Android/Design)에 한정.
+**Docs 영역 정책 (2026-05-07 확정):** plan PR(`plan/<parent-N>-<slug>` 브랜치) 만으로 기획·플랜 작업을 추적한다. **Docs 레포에 sub-issue를 만들지 않으며 Prep Project 칸반에도 Docs 카드를 만들지 않는다.** Step 7의 sub-issue 생성 대상은 config 에 정의된 코드 영역(`--list-modules`)에 한정 — Docs 는 모듈 목록에 없으므로 자연히 제외.
 
 ### 7. Sub-issue 생성 (영역 레포에)
 
@@ -602,28 +652,32 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   -f fieldId="$AREA_FIELD_ID" \
   -f optionId="<area-option-id>"
 
-# 8-c. Status="Ready" 세팅 (Design은 Backlog 유지)
+# 8-c. Status 세팅 — 모듈의 default-status 플래그를 따른다 (Status 이름 하드코딩 금지)
+#   <area> = 이 sub-issue 의 영역명. 기본 Status 는 module.<area>.default-status (기본 Ready).
+#   예: 디자인류 영역은 config 에서 default-status=Backlog → 그 값으로 세팅됨.
 gh api graphql -f query='...updateProjectV2ItemFieldValue...' \
   -f fieldId="$STATUS_FIELD_ID" \
-  -f optionId="<Ready-option-id>"
+  -f optionId="<default-status-option-id>"
 ```
 
-**Area option ID 참조표 (실행 시 config에서 읽음 — `area-id.<Name>`):**
+**Area option ID (실행 시 config 에서 읽음 — 모듈 동작표의 `area-id` 컬럼):**
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
-bash "$CFG" area-id.Backend
-bash "$CFG" area-id.Admin
-bash "$CFG" area-id.Frontend
-bash "$CFG" area-id.iOS
-bash "$CFG" area-id.Android
-bash "$CFG" area-id.Design
+# <area> = 이 sub-issue 의 영역명 (표의 name 컬럼과 정확히 일치 — 대소문자 주의)
+bash "$CFG" "module.<area>.area-id"
+# 전체 영역의 area-id 를 한 번에 보려면:
+bash "$CFG" --modules-table   # area-id 컬럼 참조
 ```
 
-**Status option ID는 동적 조회:**
+**기본 Status 결정 — 모듈의 `default-status` 플래그 (Status 이름 하드코딩 금지):**
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+# 이 영역의 기본 Status 이름 (미지정 모듈은 Ready, 예: 디자인류는 Backlog)
+DEFAULT_STATUS="$(bash "$CFG" "module.<area>.default-status")"   # 빈 값이면 Ready 로 간주
+[ -n "$DEFAULT_STATUS" ] || DEFAULT_STATUS="Ready"
+# 위 이름으로 option ID 동적 조회
 gh project field-list "$(bash "$CFG" project-number)" --owner "$(bash "$CFG" owner)" --format json \
-  | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="Ready") | .id'
+  | jq -r --arg s "$DEFAULT_STATUS" '.fields[] | select(.name=="Status") | .options[] | select(.name==$s) | .id'
 ```
 
 ### 9. Parent 이슈 본문 업데이트
@@ -685,7 +739,7 @@ fi
 - [ ] `assignees` 비어있지 않음 (기본: config의 `author-login`)
 - [ ] `labels`에 `plan` 포함됨 — 없으면 `gh issue edit <N> --repo ... --add-label plan`으로 보정
 - [ ] sub-issue가 parent(대표 레포#N)의 `sub_issues`에 링크됨 — `gh api /repos/<owner>/<parent-repo-name>/issues/<N>/sub_issues`로 확인
-- [ ] Prep Project에 등록됨 + `Area` = 해당 영역 + `Status` = Ready (Design은 Backlog)
+- [ ] Prep Project에 등록됨 + `Area` = 해당 영역 + `Status` = 해당 모듈의 `default-status` (`module.<area>.default-status`, 기본 Ready)
 
 **체크리스트 (공통):**
 - [ ] Docs PR 생성됨
@@ -717,10 +771,10 @@ Slug: <parent-N>-<slug>
 
 - **Parent Status는 건드리지 않음** — 사용자 소유
 - **영역 선택 안 된 건 건너뜀** — 불필요한 sub-issue 생성 금지
-- **Backend 선행 규칙은 `/kickoff`에서 처리** — `/plan`은 모든 영역의 sub-issue를 동시 생성
+- **lead(선행) 모듈의 선행 실행 규칙은 `/kickoff`에서 처리** — `/plan`은 모든 영역의 sub-issue를 동시 생성 (lead 여부는 정보 표기일 뿐 `/plan` 동작에 영향 없음)
 - **실패 시 자동 복구 금지** — 중간 단계 실패 시 즉시 중단하고 현재까지 상태 리포트 후 사용자에게 이관
 - **멱등성: 중복 생성 금지** — 이미 `/plan` 산출물이 연결된 parent 혹은 이미 존재하는 slug 산출물이 있으면 Step 3.5에서 중단 (덮어쓰기 없음, `--force` 없음)
-- **Design은 TBD placeholder만** — planner 호출하지 않음, sub-issue는 만들되 Status=Backlog 유지
+- **`planner=false` 모듈은 TBD placeholder만** — planner 호출하지 않고 placeholder 산출물로 처리. sub-issue 는 만들되 Status 는 그 모듈의 `default-status`(예: Backlog) 를 따른다. 대상은 `--modules-where planner=false` 가 정함 (특정 모듈명 하드코딩 금지)
 
 ## 자주 하는 실수 (주의!)
 

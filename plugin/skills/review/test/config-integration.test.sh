@@ -61,6 +61,38 @@ for key in $ALL_KEYS; do
   fi
 done
 
+# ── 모듈 동작표 인터페이스 검증 (#42 — 모듈명 비종속) ────────────────
+# SKILL.md 가 영역↔레포 매핑·리뷰 대상 분기를 리더 인터페이스로 하는지 +
+# 그 인터페이스가 픽스처에서 실제 동작(빈 출력 아님)하는지.
+if grep -qF -- '"$CFG" --modules-where review=true' "$SKILL"; then
+  ok "SKILL.md 가 --modules-where review=true 로 리뷰 대상 선정"
+else
+  bad "SKILL.md 가 --modules-where review=true 를 참조 안 함"
+fi
+if grep -qF -- '"$CFG" --modules-table' "$SKILL"; then
+  ok "SKILL.md 가 --modules-table 동작표 읽기"
+else
+  bad "SKILL.md 가 --modules-table 를 참조 안 함"
+fi
+rev_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where review=true 2>/dev/null)"
+if [ -n "$rev_out" ]; then
+  ok "리더 --modules-where review=true 매칭 존재: $(printf '%s' "$rev_out" | tr '\n' ' ')"
+else
+  bad "리더 --modules-where review=true 결과 빈 값 (review 모듈 픽스처 누락)"
+fi
+revfalse_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where review=false 2>/dev/null)"
+if [ -n "$revfalse_out" ]; then
+  ok "리더 --modules-where review=false 매칭 존재(제외 대상): $(printf '%s' "$revfalse_out" | tr '\n' ' ')"
+else
+  bad "리더 --modules-where review=false 결과 빈 값 (제외 모듈 픽스처 누락)"
+fi
+table_head="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-table 2>/dev/null | head -1)"
+if printf '%s' "$table_head" | grep -q $'name\trole'; then
+  ok "리더 --modules-table 헤더행 출력"
+else
+  bad "리더 --modules-table 헤더행 없음"
+fi
+
 # ── --require 게이트 키는 픽스처에서 비어있지 않아야 (fail-fast 의미 유지) ──
 for key in $require_keys; do
   [ -z "$key" ] && continue

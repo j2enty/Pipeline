@@ -172,6 +172,102 @@ else
   pass "--require: config 부재 → exit 1"
 fi
 
+# ── modules 인터페이스 (#42 데이터층) ────────────────────────────────
+# (plan 리더 테스트와 동일 검증 — 공통 코어가 byte-identical 임을 행동으로도 확인)
+assert_mod() {
+  local name="$1" flag="$2" expected="$3"
+  local actual
+  actual="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" "module.$name.$flag" 2>/dev/null)"
+  if [ "$actual" = "$expected" ]; then
+    pass "module.$name.$flag == '$expected'"
+  else
+    fail "module.$name.$flag == '$expected'" "실제='$actual'"
+  fi
+}
+
+assert_mod Alpha role server
+assert_mod Alpha ci-workflow-name "Alpha CI"
+assert_mod Alpha lead true
+assert_mod Alpha area-id alpha-modid       # modules 우선
+assert_mod Beta planner true               # 누락 → 기본 true
+assert_mod Beta lead false                 # 누락 → 기본 false
+assert_mod Beta default-status Ready       # 누락 → 기본 Ready
+assert_mod Beta cross-area-group client
+assert_mod Gamma kickoff false
+assert_mod Gamma default-status Backlog
+assert_mod Gamma area-id gamma-legacy      # legacy 폴백
+assert_mod Nonexistent planner ""
+
+# 대소문자 구분
+mismatch="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" module.ALPHA.role 2>/dev/null)"
+[ -z "$mismatch" ] && pass "대소문자 구분: module.ALPHA.role == ''" || fail "대소문자 module.ALPHA.role" "실제='$mismatch'"
+
+# area-id.<Name> 친화 키 resolve 순서
+assert_key area-id.Alpha alpha-modid
+assert_key area-id.Gamma gamma-legacy
+assert_key area-id.Backend aa11bb22
+
+# --list-modules 정의순
+list_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+[ "$list_out" = "Alpha,Beta,Gamma," ] && pass "--list-modules == 'Alpha,Beta,Gamma'" || fail "--list-modules" "실제='$list_out'"
+
+# --modules-where
+wl="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where lead=true 2>/dev/null | tr '\n' ',')"
+[ "$wl" = "Alpha," ] && pass "--modules-where lead=true == 'Alpha'" || fail "--modules-where lead=true" "실제='$wl'"
+wr="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-where review=true 2>/dev/null | tr '\n' ',')"
+[ "$wr" = "Alpha,Beta," ] && pass "--modules-where review=true == 'Alpha,Beta'" || fail "--modules-where review=true" "실제='$wr'"
+
+# --modules-table 헤더 + Alpha 행
+table_out="$(PIPELINE_CONFIG="$FIXTURE" bash "$READER" --modules-table 2>/dev/null)"
+printf '%s\n' "$table_out" | head -1 | grep -q $'name\trole\tplanner' && pass "--modules-table 헤더행" || fail "--modules-table 헤더행" "첫줄='$(printf '%s\n' "$table_out" | head -1)'"
+alpha_row="$(printf '%s\n' "$table_out" | grep '^Alpha')"
+[ "$alpha_row" = $'Alpha\tserver\ttrue\ttrue\ttrue\ttrue\tReady\t\talpha-modid\tAlpha CI' ] && pass "--modules-table Alpha 행 정확" || fail "--modules-table Alpha 행" "실제='$alpha_row'"
+
+# lead 다중 경고
+MULTI_LEAD="$(mktemp)"
+printf 'modules:\n  - name: One\n    lead: true\n  - name: Two\n    lead: true\n' > "$MULTI_LEAD"
+ml_stderr="$(PIPELINE_CONFIG="$MULTI_LEAD" bash "$READER" --modules-table 2>&1 >/dev/null)"
+printf '%s' "$ml_stderr" | grep -q "lead 모듈이 2개 이상" && pass "lead 다중 → stderr 경고" || fail "lead 다중 경고" "stderr='$ml_stderr'"
+rm -f "$MULTI_LEAD"
+
+# 신규 modules 인터페이스는 --dump 에 노출되지 않아야 함(modules-table 은 별도 경로)
+assert_dump_absent "Alpha CI"
+assert_dump_absent "alpha-modid"
+
+# ── 빈 스칼라 흡수 회귀 (이중리뷰 버그) ─────────────────────────────────
+# 빈 스칼라 필드(area-id/role/default-status/cross-area-group/ci-workflow-name)가
+# 다음 줄 키를 값으로 흡수하면 안 된다. (\s* 가 개행을 먹는 버그 — [ \t]* 로 수정.)
+EMPTY_ABSORB="$(mktemp)"
+cat > "$EMPTY_ABSORB" <<'EOF'
+modules:
+  - name: Zeta
+    area-id:
+    role:
+    default-status:
+    cross-area-group:
+    ci-workflow-name:
+    planner:
+    lead: false
+claude-commands:
+  area-ids:
+    Zeta: legacyfallback
+EOF
+ea_modid="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.area-id 2>/dev/null)"
+[ "$ea_modid" = "legacyfallback" ] && pass "빈 area-id → legacy 폴백(흡수 안 함)" || fail "빈 area-id legacy 폴백" "실제='$ea_modid'"
+ea_legacy="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" area-id.Zeta 2>/dev/null)"
+[ "$ea_legacy" = "legacyfallback" ] && pass "빈 area-id.Zeta → legacy 폴백" || fail "area-id.Zeta legacy 폴백" "실제='$ea_legacy'"
+ea_role="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.role 2>/dev/null)"
+[ -z "$ea_role" ] && pass "빈 role → 빈 값(흡수 안 함)" || fail "빈 role 비흡수" "실제='$ea_role'"
+ea_ds="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.default-status 2>/dev/null)"
+[ "$ea_ds" = "Ready" ] && pass "빈 default-status → 기본 Ready(흡수 안 함)" || fail "빈 default-status 기본값" "실제='$ea_ds'"
+ea_cg="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.cross-area-group 2>/dev/null)"
+[ -z "$ea_cg" ] && pass "빈 cross-area-group → 빈 값(흡수 안 함)" || fail "빈 cross-area-group 비흡수" "실제='$ea_cg'"
+ea_ci="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.ci-workflow-name 2>/dev/null)"
+[ -z "$ea_ci" ] && pass "빈 ci-workflow-name → 빈 값(흡수 안 함)" || fail "빈 ci-workflow-name 비흡수" "실제='$ea_ci'"
+ea_planner="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.planner 2>/dev/null)"
+[ "$ea_planner" = "true" ] && pass "빈 planner → 기본 true" || fail "빈 planner 기본값" "실제='$ea_planner'"
+rm -f "$EMPTY_ABSORB"
+
 # ── install.sh parity — 실제 examples/reclip config 로 신규 4키 값 ──
 # (런타임 읽은 값 == install.sh 가 치환했을 값 임을 실제 설정 파일로 확인)
 RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"

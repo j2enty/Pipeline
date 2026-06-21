@@ -28,7 +28,13 @@
 #   author-login                   claude-commands.author-login
 #   local-account                  claude-commands.local-account
 #   docs-context-dir               claude-commands.docs-context-dir
-#   area-id.<Name>                 claude-commands.area-ids.<Name> (예: area-id.Backend)
+#   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
+#   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
+#                                  planner·review·kickoff·lead·default-status·cross-area-group)
+#   --list-modules                 모듈명을 정의순으로 1줄씩
+#   --modules-where <flag>=<val>   조건 매칭 모듈명 1줄씩(정의순). 예: --modules-where lead=true
+#   --modules-table                TSV 표(헤더행 포함): name⇥role⇥planner⇥review⇥kickoff⇥lead⇥
+#                                  default-status⇥cross-area-group⇥area-id⇥ci-workflow-name
 #   plan.completeness-critic-enabled       claude-commands.plan.* (기본 true)
 #   plan.consistency-critic-enabled        (기본 true)
 #   plan.consistency-critic-dual-model     (기본 true)
@@ -42,7 +48,7 @@ set -uo pipefail
 CONFIG_PATH="${PIPELINE_CONFIG:-.claude/pipeline-config.yml}"
 
 usage() {
-  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 if [ $# -lt 1 ]; then
@@ -61,6 +67,9 @@ if [ ! -f "$CONFIG_PATH" ]; then
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
     --keys|--dump) : ;;
+    # modules 인터페이스 — config 부재 시 모듈 없음(빈 출력). 단 표는 헤더행만.
+    --list-modules|--modules-where) : ;;
+    --modules-table) printf 'name\trole\tplanner\treview\tkickoff\tlead\tdefault-status\tcross-area-group\tarea-id\tci-workflow-name\n' ;;
     *) printf '\n' ;;
   esac
   exit 0
@@ -82,12 +91,14 @@ def section(text, name):
 
 def get_scalar_in(block, key, default=''):
     """따옴표 우선(내부 # 허용) → 무따옴표 폴백(인라인 주석 제거). install.sh 와 동일."""
-    mq = re.search(rf'^\s+{re.escape(key)}:\s*"([^"\n]*)"\s*$', block, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 python 에서 개행을 포함해, 값이 비면
+    # 다음 줄 키를 빨아들이는 버그가 있다(예: area-id 빈 필드가 다음 줄 planner: 를 흡수).
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', block, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:\s*'([^'\n]*)'\s*$", block, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", block, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
-    m = re.search(rf'^\s+{re.escape(key)}:\s*([^"#\n]*)', block, re.MULTILINE)
+    m = re.search(rf'^\s+{re.escape(key)}:[ \t]*([^"#\n]*)', block, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 
 PROJECT = section(content, 'project')
@@ -117,8 +128,70 @@ def parent_repo_name():
     return pr.rsplit('/', 1)[-1] if pr else ''
 
 def area_id(name):
-    m = re.search(rf'^\s+{re.escape(name)}:\s*"?([^"#\n]+)"?\s*$', AREA_BLOCK, re.MULTILINE)
+    # 값 앞 공백은 [ \t]* (개행 비흡수) — get_scalar_in 과 동일 이유.
+    m = re.search(rf'^\s+{re.escape(name)}:[ \t]*"?([^"#\n]+)"?\s*$', AREA_BLOCK, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m else ''
+
+# ── modules 블록 파싱 (install.sh parse_config() 의 블록분할 방식 포팅) ──────
+# 주의: positional 추출 금지. 각 `- name:` 부터 다음 `- name:` 직전까지를 한
+#       블록으로 잘라 블록 내부에서만 플래그를 찾아 모듈↔값 정렬을 보장한다.
+#       (install.sh L208-238 의 블록분할 정규식과 동일 — strict-review-bot-check
+#        가 일부 모듈에만 있어 전체 positional 추출이 어긋나는 문제를 막기 위함.)
+MODULES = section(content, 'modules')
+
+# 모듈 플래그 기본값 (미지정 시 fail-soft). boolean 은 true/false 만 인정.
+MODULE_BOOL_DEFAULTS = {'planner': 'true', 'review': 'true', 'kickoff': 'true', 'lead': 'false'}
+MODULE_SCALAR_DEFAULTS = {'default-status': 'Ready', 'role': '', 'area-id': '',
+                          'cross-area-group': '', 'ci-workflow-name': ''}
+
+def module_blocks():
+    """[(name, block), ...] 를 정의(나열)순으로 반환."""
+    name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+)"?\s*$', MODULES, re.MULTILINE))
+    out = []
+    for idx, m in enumerate(name_iter):
+        name = m.group(1).strip().strip("'\"")
+        block_start = m.end()
+        block_end = name_iter[idx + 1].start() if idx + 1 < len(name_iter) else len(MODULES)
+        out.append((name, MODULES[block_start:block_end]))
+    return out
+
+def module_bool_in(block, flag, default):
+    """블록 내 boolean 플래그 — true/false 만 인정(따옴표 허용). 오타·누락 → default."""
+    m = re.search(r'^[ \t]+' + re.escape(flag) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
+                  block, re.MULTILINE | re.IGNORECASE)
+    return m.group(1).lower() if m else default
+
+def resolve_module_flag(name, flag):
+    """module.<Name>.<flag> — 정의 블록에서 flag 값 추출(대소문자 구분 name 매칭)."""
+    block = None
+    for mname, mblock in module_blocks():
+        if mname == name:
+            block = mblock
+            break
+    if block is None:
+        # 모듈 부재 — area-id 만은 legacy area-ids 맵으로 폴백(친화 키 area-id.<Name>
+        # 하위호환: 모듈을 modules 에 안 적고 legacy 맵에만 둔 구성 지원). 나머지는 빈 값.
+        return area_id(name) if flag == 'area-id' else ''
+    if flag in MODULE_BOOL_DEFAULTS:
+        return module_bool_in(block, flag, MODULE_BOOL_DEFAULTS[flag])
+    if flag == 'area-id':
+        # modules[name].area-id 우선 → 없으면 legacy claude-commands.area-ids.<name> 폴백
+        v = get_scalar_in(block, 'area-id')
+        return v if v else area_id(name)
+    if flag in MODULE_SCALAR_DEFAULTS:
+        return get_scalar_in(block, flag, MODULE_SCALAR_DEFAULTS[flag])
+    sys.stderr.write(f"⚠️  pipeline-config: 알 수 없는 모듈 플래그 '{flag}' (빈 값)\n")
+    return ''
+
+def lead_warn_if_multiple():
+    """lead=true 가 2개 이상이면 stderr 경고(동작은 정의순 직렬)."""
+    leads = [n for n, _ in module_blocks() if resolve_module_flag(n, 'lead') == 'true']
+    if len(leads) >= 2:
+        sys.stderr.write("⚠️  pipeline-config: lead 모듈이 2개 이상 — 정의순 직렬 선행 처리 ("
+                         + ", ".join(leads) + ")\n")
+
+MODULE_TABLE_FLAGS = ['role', 'planner', 'review', 'kickoff', 'lead',
+                      'default-status', 'cross-area-group', 'area-id', 'ci-workflow-name']
 
 def resolve(key):
     # 파생 키
@@ -127,7 +200,16 @@ def resolve(key):
     if key == 'project-number':
         return project_number()
     if key.startswith('area-id.'):
-        return area_id(key.split('.', 1)[1])
+        # 레거시 친화 키 — modules.area-id 우선 → legacy area-ids 폴백
+        return resolve_module_flag(key.split('.', 1)[1], 'area-id')
+    if key.startswith('module.'):
+        # module.<Name>.<flag> — name 에 '.' 이 없다고 가정(모듈명 규칙). 마지막 '.' 로 flag 분리.
+        rest = key.split('.', 1)[1]
+        if '.' not in rest:
+            sys.stderr.write(f"⚠️  pipeline-config: 잘못된 module 키 '{key}' (module.<Name>.<flag> 형식 필요)\n")
+            return ''
+        mname, flag = rest.rsplit('.', 1)
+        return resolve_module_flag(mname, flag)
     if key.startswith('plan.'):
         return plan_bool(key.split('.', 1)[1])
     # project 섹션 스칼라
@@ -141,13 +223,38 @@ def resolve(key):
     sys.stderr.write(f"⚠️  pipeline-config: 알 수 없는 키 '{key}' (빈 값)\n")
     return ''
 
-if arg == '--keys':
+if arg == '--list-modules':
+    # 모듈명을 정의(나열)순으로 1줄씩
+    for name, _ in module_blocks():
+        print(name)
+elif arg == '--modules-where':
+    # --modules-where <flag>=<val> — 조건 매칭 모듈명 1줄씩(정의순)
+    cond = sys.argv[3] if len(sys.argv) > 3 else ''
+    if '=' not in cond:
+        sys.stderr.write("⚠️  pipeline-config: --modules-where 는 <flag>=<val> 형식이 필요합니다\n")
+    else:
+        flag, _, val = cond.partition('=')
+        flag = flag.strip(); val = val.strip()
+        for name, _block in module_blocks():
+            if resolve_module_flag(name, flag) == val:
+                print(name)
+elif arg == '--modules-table':
+    # TSV — 헤더행 포함. SKILL.md 가 표 1회 흡수용.
+    lead_warn_if_multiple()
+    header = ['name'] + MODULE_TABLE_FLAGS
+    print('\t'.join(header))
+    for name, _block in module_blocks():
+        row = [name] + [resolve_module_flag(name, f) for f in MODULE_TABLE_FLAGS]
+        print('\t'.join(row))
+elif arg == '--keys':
     print('\n'.join([
         'owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
         'project-name', 'project-id', 'status-field-id', 'area-field-id',
         'author-login', 'local-account', 'docs-context-dir', 'area-id.<Name>',
         'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
         'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled',
+        # modules 인터페이스 — 모듈 동작 의미론(planner/review/kickoff/lead 등)
+        '--list-modules', 'module.<Name>.<flag>', '--modules-where <flag>=<val>', '--modules-table',
     ]))
 elif arg == '--dump':
     keys = ['owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',

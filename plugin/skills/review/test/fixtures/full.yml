@@ -7,6 +7,30 @@ project:
   project-numbers: [7, 9]
   slack-channel: "#blue-alerts"
 
+modules:
+  # Alpha — lead·전 플래그 명시. area-id 는 modules 에 명시(legacy 폴백보다 우선 검증).
+  - name: Alpha
+    role: server
+    ci-workflow-name: Alpha CI
+    area-id: alpha-modid
+    planner: true
+    review: true
+    kickoff: true
+    lead: true
+    default-status: Ready
+  # Beta — 플래그 전부 누락 → 기본값(planner/review/kickoff true·lead false·status Ready)
+  - name: Beta
+    role: client
+    ci-workflow-name: Beta CI
+    cross-area-group: client
+  # Gamma — 동작 제외 영역(planner/review/kickoff false·Backlog). area-id 는 legacy 맵 폴백.
+  - name: Gamma
+    role: design
+    planner: false
+    review: false
+    kickoff: false
+    default-status: Backlog
+
 claude-commands:
   enabled: true
   project-name: BlueProject
@@ -23,6 +47,7 @@ claude-commands:
   area-ids:
     Backend: aa11bb22
     iOS: cc33dd44
+    Gamma: gamma-legacy
   plan:
     completeness-critic-enabled: true
     consistency-critic-enabled: false
