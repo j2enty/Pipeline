@@ -728,6 +728,7 @@ install_caller_ymls() {
     tmp_file=$(mktemp)
     # 모든 yml 공통: Pipeline 레포 경로·ref placeholder 치환
     #   값에 '/' 가 들어가므로(레포 경로) sed 구분자를 '|' 로 사용
+    # shellcheck disable=SC2153  # PIPELINE_REF 는 parse_config 가 emit → `eval "$(parse_config)"`(L952)로 동적 할당. PIPELINE_REPO 와 동일 경로, 오타 아님(오탐).
     sed -e "s|__PIPELINE_REPO__|$PIPELINE_REPO|g" \
         -e "s|__PIPELINE_REF__|$PIPELINE_REF|g" \
         "$src/$yml" > "$tmp_file"

@@ -19,7 +19,6 @@ CODE_REVIEWER="$AGENTS_DIR/code-reviewer.md"
 VERIFIER="$AGENTS_DIR/verifier.md"
 CRITIC="$AGENTS_DIR/critic.md"
 EXECUTOR="$AGENTS_DIR/executor.md"
-PLANNER="$AGENTS_DIR/planner.md"
 
 if [ -t 1 ]; then
   C_GREEN='\033[0;32m'; C_RED='\033[0;31m'; C_CYAN='\033[0;36m'; C_NC='\033[0m'

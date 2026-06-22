@@ -144,7 +144,7 @@ setup_install_env() {
 
 # ── 러너 ─────────────────────────────────────────────────────
 filter="${1:-}"
-printf "${C_CYAN}══ install.sh 테스트 ══${C_NC}\n"
+printf '%s══ install.sh 테스트 ══%s\n' "$C_CYAN" "$C_NC"
 
 for test_file in "$TEST_DIR"/test-*.sh; do
   [ -f "$test_file" ] || continue
@@ -162,7 +162,7 @@ for test_file in "$TEST_DIR"/test-*.sh; do
   ( source "$test_file" )
 done
 
-printf "\n${C_CYAN}══════════════════════════════${C_NC}\n"
+printf '\n%s══════════════════════════════%s\n' "$C_CYAN" "$C_NC"
 tests_run="$(grep -c '^RUN$' "$RESULTS_FILE" 2>/dev/null)"; tests_run="${tests_run:-0}"
 tests_failed="$(grep -c '^FAIL$' "$RESULTS_FILE" 2>/dev/null)"; tests_failed="${tests_failed:-0}"
 rm -f "$RESULTS_FILE"
