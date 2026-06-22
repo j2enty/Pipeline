@@ -217,7 +217,10 @@ ms = re.search(r'^modules:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTA
 modules_block = ms.group(1) if ms else ''
 
 # 각 `- name:` 위치를 기준으로 블록 분할
-name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+)"?\s*$', modules_block, re.MULTILINE))
+# 값 캡처 non-greedy + 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `- name: Backend  # 주석`
+# 에서 모듈이 통째로 사라져 MODULE_COUNT 가 어긋나는 footgun 방지(#52).
+# 모듈명에 '#' 없다는 전제(값 밖 # 만 주석). 리더 pipeline-config.sh 와 동일 패턴.
+name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+?)"?\s*(?:#.*)?$', modules_block, re.MULTILINE))
 names = []
 module_area_ids = {}  # name → modules[].area-id (legacy area-ids 맵보다 우선)
 for idx, m in enumerate(name_iter):
@@ -227,7 +230,9 @@ for idx, m in enumerate(name_iter):
     block = modules_block[block_start:block_end]
 
     # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 ci-workflow-name 이 다음 줄 키를 흡수하는 것 방지.
-    ci_m = re.search(r'^\s+ci-workflow-name:[ \t]*"?([^"#\n]*)"?\s*$', block, re.MULTILINE)
+    # 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `ci-workflow-name: Backend CI  # 주석`
+    # 에서 값이 사라지는 것 방지(#52). 캡처는 비탐욕 *? (빈 값 정상 동작 유지).
+    ci_m = re.search(r'^\s+ci-workflow-name:[ \t]*"?([^"#\n]*?)"?\s*(?:#.*)?$', block, re.MULTILINE)
     ci = ci_m.group(1).strip().strip("'\"") if ci_m else ''
 
     # strict-review-bot-check — 미지정 시 기본 true
@@ -238,7 +243,8 @@ for idx, m in enumerate(name_iter):
 
     # area-id — 모듈 블록 내부 값(있으면). 없으면 빈 값 → 아래 area-ids 맵 폴백.
     # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-id 가 다음 줄 키를 흡수하면 legacy 폴백이 깨짐.
-    aid_m = re.search(r'^\s+area-id:[ \t]*"?([^"#\n]*)"?\s*$', block, re.MULTILINE)
+    # 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `area-id: be11  # 주석` 에서 값이 사라지는 것 방지(#52).
+    aid_m = re.search(r'^\s+area-id:[ \t]*"?([^"#\n]*?)"?\s*(?:#.*)?$', block, re.MULTILINE)
     module_area_ids[name] = aid_m.group(1).strip().strip("'\"") if aid_m else ''
 
     names.append(name)
@@ -297,7 +303,9 @@ ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', cc_
 area_ids_block = ai.group(2) if ai else ''
 resolved_area_ids = {}  # name → hash (legacy 먼저 채우고 modules 값으로 덮어씀)
 # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-ids 항목이 다음 줄 항목 값을 흡수하는 것 방지.
-for am in re.finditer(r'^\s+([A-Za-z0-9_]+):[ \t]*"?([^"#\n]+)"?\s*$', area_ids_block, re.MULTILINE):
+# 값 캡처 non-greedy + 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `Backend: be11  # 주석`
+# 에서 값이 사라지는 것 방지(#52). 리더 area_id() 와 동일 패턴(parity).
+for am in re.finditer(r'^\s+([A-Za-z0-9_]+):[ \t]*"?([^"#\n]+?)"?\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
     resolved_area_ids[am.group(1).strip()] = am.group(2).strip().strip("'\"")
 # modules[].area-id 우선 — 비어있지 않은 값만 덮어씀(빈 값은 legacy 폴백 유지)
 for mname, mhash in module_area_ids.items():

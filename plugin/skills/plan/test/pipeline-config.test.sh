@@ -358,6 +358,39 @@ fi
 
 rm -f "$FIXTURE"
 
+
+# ── 인라인 주석 내성 회귀 (#52) ─────────────────────────────────────
+# modules 블록의 줄끝 강제(\s*$) 추출이 인라인 주석에서 값을 통째로 잃지 않는지.
+# 점검 필드: - name / ci-workflow-name / area-id(modules) / area-ids(legacy 맵).
+# (이 fail 은 수정 전 패턴 `"?([^"#\n]+)"?\s*$` 에서 모듈/값이 사라지는 footgun.)
+INLINE_FIX="$(mktemp)"
+cat > "$INLINE_FIX" <<'EOF'
+project:
+  owner: RedOrg
+modules:
+  - name: Backend  # 인라인 주석
+    ci-workflow-name: Backend CI  # 인라인 주석
+    area-id: be-mod  # 주석
+  - name: iOS
+    ci-workflow-name: iOS CI
+claude-commands:
+  enabled: true
+  area-ids:
+    Frontend: fe-legacy  # 주석
+EOF
+# name 인라인 주석 → 모듈 비소실 (--list-modules 에 Backend·iOS 둘 다)
+ic_list="$(PIPELINE_CONFIG="$INLINE_FIX" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+[ "$ic_list" = "Backend,iOS," ] && pass "인라인주석 name → 모듈 비소실(--list-modules)" || fail "인라인주석 name 모듈 소실" "실제='$ic_list'"
+# ci-workflow-name 인라인 주석 → 값 보존
+assert_key module.Backend.ci-workflow-name "Backend CI" "$INLINE_FIX"
+# modules area-id 인라인 주석 → 값 보존
+assert_key module.Backend.area-id be-mod "$INLINE_FIX"
+assert_key area-id.Backend be-mod "$INLINE_FIX"
+# legacy area-ids 맵 인라인 주석 → 값 보존(폴백)
+assert_key area-id.Frontend fe-legacy "$INLINE_FIX"
+# 대조군: 주석 없는 iOS 정상
+assert_key module.iOS.ci-workflow-name "iOS CI" "$INLINE_FIX"
+rm -f "$INLINE_FIX"
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"

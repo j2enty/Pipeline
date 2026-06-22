@@ -142,7 +142,9 @@ def parent_repo_name():
 
 def area_id(name):
     # 값 앞 공백은 [ \t]* (개행 비흡수) — get_scalar_in 과 동일 이유.
-    m = re.search(rf'^\s+{re.escape(name)}:[ \t]*"?([^"#\n]+)"?\s*$', AREA_BLOCK, re.MULTILINE)
+    # 값 캡처는 non-greedy([^"#\n]+?) + 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 —
+    # `Backend: be11  # 주석` 같은 인라인 주석에서 값이 통째로 사라지는 것을 막는다(#52).
+    m = re.search(rf'^\s+{re.escape(name)}:[ \t]*"?([^"#\n]+?)"?\s*(?:#.*)?$', AREA_BLOCK, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m else ''
 
 # ── modules 블록 파싱 (install.sh parse_config() 의 블록분할 방식 포팅) ──────
@@ -159,7 +161,9 @@ MODULE_SCALAR_DEFAULTS = {'default-status': 'Ready', 'role': '', 'area-id': '',
 
 def module_blocks():
     """[(name, block), ...] 를 정의(나열)순으로 반환."""
-    name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+)"?\s*$', MODULES, re.MULTILINE))
+    # 값 캡처 non-greedy + 줄끝 선택적 인라인 주석 허용 — `- name: Backend  # 주석`
+    # 에서 모듈이 통째로 사라지는 footgun 방지(#52). 모듈명에 '#' 없다는 전제(값 밖 # 만 주석).
+    name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+?)"?\s*(?:#.*)?$', MODULES, re.MULTILINE))
     out = []
     for idx, m in enumerate(name_iter):
         name = m.group(1).strip().strip("'\"")
