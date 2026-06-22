@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(shellcheck:*)",
+      "Bash(actionlint:*)",
+      "Bash(python3 *pipeline-config*)",
+      "Bash(bash scripts/test/*.sh)",
+      "Bash(bash plugin/skills/*/test/*.sh)",
+      "Bash(bash plugin/agents/test/*.sh)",
+      "Bash(npm test:*)",
+      "Bash(npm run lint:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/lint-on-edit.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
