@@ -118,17 +118,25 @@ def get_scalar_in(block, key, default=''):
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 
 # 따옴표 분기 우선 값 캡처 조각 — 따옴표 안 # 보존(#57). get_scalar_in 과 동일 철학:
-#   "..."  → 그룹1(닫는 따옴표까지, # 포함)
-#   '...'  → 그룹2(동일)
+#   "..."  → 그룹1(닫는 따옴표까지, # 포함. * 라 빈 따옴표 ""→빈문자열)
+#   '...'  → 그룹2(동일. ''→빈문자열)
 #   무따옴표 → 그룹3([^"#\n]+? 비탐욕, # 이후는 인라인 주석으로 폴백)
 # 줄끝 선택적 인라인 주석((?:#.*)?$)은 호출부 패턴이 붙인다. pick_quoted_value() 로 그룹 선택.
-QUOTED_VALUE = r'''(?:"([^"\n]+)"|'([^'\n]+)'|([^"#\n]+?))'''
+# 빈 따옴표 처리(#57 후속): 두 따옴표 분기를 * 로 둬 ""/'' 가 빈 문자열로 캡처되게 한다.
+#   (+ 였으면 빈 따옴표가 분기 미매치 → 무따옴표 폴백이 두 따옴표 `''` 자체를 캡처해 리터럴
+#    '' 가 새고 install↔reader parity 가 깨졌다. is not None 기준이라 빈 문자열도 반환됨.)
+QUOTED_VALUE = r'''(?:"([^"\n]*)"|'([^'\n]*)'|([^"#\n]+?))'''
 
 def pick_quoted_value(m):
-    """QUOTED_VALUE 3분기 중 매칭된 그룹 값을 strip 해 반환(없으면 '')."""
-    v = m.group(1) if m.group(1) is not None else (
-        m.group(2) if m.group(2) is not None else m.group(3))
-    return v.strip() if v is not None else ''
+    """QUOTED_VALUE 3분기 중 매칭 그룹 반환(없으면 ''). 따옴표 분기는 .strip() 만(내용 보존),
+       무따옴표 폴백 그룹은 추가로 .strip(\"'\\\"\") — 폴백으로 샌 따옴표를 벗겨 빈값 통일(belt&suspenders)."""
+    if m.group(1) is not None:
+        return m.group(1).strip()
+    if m.group(2) is not None:
+        return m.group(2).strip()
+    if m.group(3) is not None:
+        return m.group(3).strip().strip("'\"")
+    return ''
 
 PROJECT = section(content, 'project')
 CC = section(content, 'claude-commands')
@@ -174,10 +182,20 @@ MODULE_BOOL_DEFAULTS = {'planner': 'true', 'review': 'true', 'kickoff': 'true', 
 MODULE_SCALAR_DEFAULTS = {'default-status': 'Ready', 'role': '', 'area-id': '',
                           'cross-area-group': '', 'ci-workflow-name': ''}
 
+def warn_malformed_module_names(text):
+    """`- name:` 행 중 값 추출에 실패하는 것(예: 미종결 따옴표 `name: "ab`)을 stderr 경고.
+       조용한 누락(#52 footgun 재현)을 막기 위함 — 동작은 그대로(해당 모듈만 빠짐)."""
+    for lm in re.finditer(r'^\s+-\s+name:.*$', text, re.MULTILINE):
+        line = lm.group(0)
+        if not re.match(rf'^\s+-\s+name:\s*{QUOTED_VALUE}\s*(?:#.*)?$', line):
+            sys.stderr.write(f"⚠️  pipeline-config: 모듈 name 파싱 실패(미종결 따옴표 등) — "
+                             f"해당 모듈 누락: {line.strip()}\n")
+
 def module_blocks():
     """[(name, block), ...] 를 정의(나열)순으로 반환."""
     # 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52).
     # 무따옴표 모듈명에 # 가 오면 주석 경계로 본다(값 밖 # 만 주석). 따옴표로 감싸면 보존.
+    warn_malformed_module_names(MODULES)
     name_iter = list(re.finditer(rf'^\s+-\s+name:\s*{QUOTED_VALUE}\s*(?:#.*)?$', MODULES, re.MULTILINE))
     out = []
     for idx, m in enumerate(name_iter):

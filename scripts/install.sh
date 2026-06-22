@@ -194,13 +194,22 @@ def get_scalar_in(block, key, default=''):
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
 
 # 따옴표 분기 우선 값 캡처 조각 — 따옴표 안 # 보존(#57). get_scalar_in 과 동일 철학:
-#   "..."  → 그룹1(닫는 따옴표까지, # 포함) / '...'  → 그룹2 / 무따옴표 → 그룹3([^"#\n]+? 비탐욕).
-# 줄끝 선택적 인라인 주석((?:#.*)?$)은 호출부 패턴이 붙인다. 리더 pipeline-config.sh 와 동일.
-QUOTED_VALUE = r'''(?:"([^"\n]+)"|'([^'\n]+)'|([^"#\n]+?))'''
+#   "..."  → 그룹1(닫는 따옴표까지, # 포함. * 라 ""→빈문자열) / '...'  → 그룹2(''→빈문자열) /
+#   무따옴표 → 그룹3([^"#\n]+? 비탐욕). 줄끝 선택적 인라인 주석은 호출부가 붙인다. 리더와 동일.
+# 빈 따옴표(#57 후속): 두 따옴표 분기 * 로 ""/'' 가 빈 문자열로 캡처되게 한다. (+ 였으면
+#   빈 따옴표가 미매치 → 무따옴표 폴백이 `''` 자체를 리터럴 캡처 → install↔reader parity 깨짐
+#   + 모듈 area-id '' 가 truthy 라 legacy 폴백을 덮어쓰는 config 오염.)
+QUOTED_VALUE = r'''(?:"([^"\n]*)"|'([^'\n]*)'|([^"#\n]+?))'''
 def pick_quoted_value(m):
-    v = m.group(1) if m.group(1) is not None else (
-        m.group(2) if m.group(2) is not None else m.group(3))
-    return v.strip() if v is not None else ''
+    # 따옴표 분기는 .strip() 만(내용 보존), 무따옴표 폴백 그룹은 추가로 .strip("'\"")
+    # — 폴백으로 샌 따옴표를 벗겨 빈값 통일(belt&suspenders). 리더 pick_quoted_value 와 동일.
+    if m.group(1) is not None:
+        return m.group(1).strip()
+    if m.group(2) is not None:
+        return m.group(2).strip()
+    if m.group(3) is not None:
+        return m.group(3).strip().strip("'\"")
+    return ''
 print(f"PIPELINE_REPO='{get_scalar_in(pipeline_block, 'repo')}'")
 print(f"PIPELINE_REF='{get_scalar_in(pipeline_block, 'ref', 'main')}'")
 
@@ -233,6 +242,11 @@ modules_block = ms.group(1) if ms else ''
 # 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52).
 # 무따옴표 모듈명에 # 가 오면 주석 경계(값 밖 # 만 주석). 따옴표로 감싸면 보존.
 # 리더 pipeline-config.sh module_blocks 와 동일 패턴(parity).
+# 미종결 따옴표 등 name 파싱 실패 행은 stderr 경고(조용한 누락 = #52 footgun 방지). 리더와 동일.
+for lm in re.finditer(r'^\s+-\s+name:.*$', modules_block, re.MULTILINE):
+    if not re.match(rf'^\s+-\s+name:\s*{QUOTED_VALUE}\s*(?:#.*)?$', lm.group(0)):
+        sys.stderr.write(f"⚠️  parse_config: 모듈 name 파싱 실패(미종결 따옴표 등) — "
+                         f"해당 모듈 누락: {lm.group(0).strip()}\n")
 name_iter = list(re.finditer(rf'^\s+-\s+name:\s*{QUOTED_VALUE}\s*(?:#.*)?$', modules_block, re.MULTILINE))
 names = []
 module_area_ids = {}  # name → modules[].area-id (legacy area-ids 맵보다 우선)
@@ -321,10 +335,18 @@ resolved_area_ids = {}  # name → hash (legacy 먼저 채우고 modules 값으�
 # 키 패턴: 리더 area_id() 는 re.escape(name) 으로 임의 모듈명(하이픈 포함 Frontend-1 등)을
 # 매칭한다 → install 키 집합도 동일하게 [^\s:#]+ 로 일반화(공백·콜론·# 만 제외)해 비대칭 제거.
 # 값은 QUOTED_VALUE 가 그룹 2·3·4 로 캡처(키가 그룹1) — 매칭된 분기를 직접 고른다.
+# 따옴표 분기(2·3)는 .strip() 만, 무따옴표 폴백(4)은 .strip("'\"") 추가 — pick_quoted_value 동일 규칙
+# (빈 따옴표 K: '' → 그룹3 이 빈 문자열로 매치 → 빈값. 리터럴 '' 누출/legacy 오염 방지, #57 후속).
 for am in re.finditer(rf'^\s+([^\s:#]+):[ \t]*{QUOTED_VALUE}\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
-    val = am.group(2) if am.group(2) is not None else (
-        am.group(3) if am.group(3) is not None else am.group(4))
-    resolved_area_ids[am.group(1).strip()] = val.strip() if val is not None else ''
+    if am.group(2) is not None:
+        val = am.group(2).strip()
+    elif am.group(3) is not None:
+        val = am.group(3).strip()
+    elif am.group(4) is not None:
+        val = am.group(4).strip().strip("'\"")
+    else:
+        val = ''
+    resolved_area_ids[am.group(1).strip()] = val
 # modules[].area-id 우선 — 비어있지 않은 값만 덮어씀(빈 값은 legacy 폴백 유지)
 for mname, mhash in module_area_ids.items():
     if mhash:
