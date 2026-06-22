@@ -65,6 +65,16 @@ if [ -z "$JQ_FILTER" ]; then
 fi
 pass "(VW-0) SKILL 8-c-bis jq write 명령 추출 성공"
 
+# VW-0a STATE_FILE 와이어링 정적 확인 (#54 후속 [major]) — jq 필터 외 와이어링 갭 일부 메움.
+#   functional 테스트는 jq 필터만 떼어 검증하므로 STATE_FILE 경로 치환 누락을 못 잡는다.
+#   8-c-bis 의 STATE_FILE 대입이 라이브 변수 ${SLUG} 인지(리터럴 <slug> 금지) 여기서 막는다.
+STATE_ASSIGN="$(printf '%s\n' "$SKILL_8CBIS" | grep -E 'STATE_FILE=' | grep -E 'reviews/')"
+if printf '%s' "$STATE_ASSIGN" | grep -qF '${SLUG}.json' && ! printf '%s' "$STATE_ASSIGN" | grep -qF '<slug>.json'; then
+  pass "(VW-0a) SKILL 8-c-bis STATE_FILE 라이브 변수 \${SLUG}(리터럴 <slug> 부재)"
+else
+  fail "(VW-0a) SKILL 8-c-bis STATE_FILE 라이브 변수 \${SLUG}(리터럴 <slug> 부재)"
+fi
+
 # 추출한 명령에서 실제 실행할 jq 필터 본문만 뽑는다(문서의 <placeholder> 변수는 우리가 주입).
 #   문서 명령의 jq 필터(작은따옴표 안)를 그대로 쓰되, 입력/출력은 테스트가 제어한다.
 JQ_BODY="$(printf '%s\n' "$JQ_FILTER" | sed -n "s/.*jq.*'\(.*\)'.*/\1/p")"

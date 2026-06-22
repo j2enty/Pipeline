@@ -565,9 +565,20 @@ gh pr comment <N> --repo "$OWNER/<영역>" \
 # 8-b critic Agent 가 반환한 verdict(pass|concerns|blocker)·findings 를 캡처해 변수에 둔다.
 #   CRITIC_VERDICT  : 8-b 반환 JSON 의 .verdict (반드시 pass|concerns|blocker 중 하나)
 #   CRITIC_FINDINGS : 8-b 반환 JSON 의 .findings 배열(JSON 문자열, 0건이면 '[]')
-STATE_FILE=".omc/state/reviews/<slug>.json"
+# STATE_FILE 은 Step4/5 와 동일한 라이브 변수 컨벤션(${SLUG})을 따른다.
+#   리터럴 angle-bracket(<slug>)을 박으면 별개 셸에서 치환 누락 시 존재하지 않는 경로가 되어
+#   jq 가 "no such file" → `&& mv` 스킵 → verdict 미기록 → #54(fail-closed) 회귀한다.
+STATE_FILE=".omc/state/reviews/${SLUG}.json"
 CRITIC_VERDICT="<8-b critic 반환 verdict: pass|concerns|blocker>"
 CRITIC_FINDINGS='<8-b critic 반환 findings[] JSON, 0건이면 []>'
+
+# fail-fast: verdict 가 allowlist(pass|concerns|blocker) 밖이면(빈값/이상치) 즉시 중단.
+#   critic.yml 도 allowlist 밖이면 fail-closed 하지만, 여기서 먼저 막아 잘못된 값이
+#   상태파일에 기록되는 것 자체를 방지한다.
+case "$CRITIC_VERDICT" in
+  pass|concerns|blocker) ;;
+  *) echo "::error::critic verdict 이상치('$CRITIC_VERDICT') — 8-c-bis write 중단. 8-b 반환 JSON 의 .verdict 확인 필요." >&2; exit 1 ;;
+esac
 
 # verdict·criticFindings 를 한 jq 트랜잭션으로 기록. 원자적 temp + mv (L250 규칙 준수).
 TEMP="$STATE_FILE.tmp.$$"

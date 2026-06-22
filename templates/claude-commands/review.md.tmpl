@@ -708,9 +708,17 @@ gh pr comment <N> --repo __ORG__/<영역> \
 verdict·criticFindings 를 한 jq 트랜잭션으로 원자적(temp + `mv`) 기록한다:
 ```bash
 # 8-b critic Agent 가 반환한 verdict(pass|concerns|blocker)·findings 를 캡처해 변수에 둔다.
-STATE_FILE=".omc/state/reviews/<slug>.json"
+# STATE_FILE 은 Step4/5 와 동일한 라이브 변수 컨벤션(${SLUG})을 따른다 — 리터럴 <slug> 금지
+#   (별개 셸에서 치환 누락 시 존재하지 않는 경로 → jq no-such-file → mv 스킵 → #54 회귀).
+STATE_FILE=".omc/state/reviews/${SLUG}.json"
 CRITIC_VERDICT="<8-b critic 반환 verdict: pass|concerns|blocker>"
 CRITIC_FINDINGS='<8-b critic 반환 findings[] JSON, 0건이면 []>'
+
+# fail-fast: verdict 가 allowlist 밖이면 즉시 중단(잘못된 값 기록 방지).
+case "$CRITIC_VERDICT" in
+  pass|concerns|blocker) ;;
+  *) echo "::error::critic verdict 이상치('$CRITIC_VERDICT') — 8-c-bis write 중단. 8-b 반환 .verdict 확인." >&2; exit 1 ;;
+esac
 
 TEMP="$STATE_FILE.tmp.$$"
 jq --arg cv "$CRITIC_VERDICT" --argjson cf "$CRITIC_FINDINGS" \
