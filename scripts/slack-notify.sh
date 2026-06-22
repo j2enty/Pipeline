@@ -41,8 +41,12 @@ WEBHOOK="${SLACK_WEBHOOK_URL:-}"
 if [ -n "${SLACK_TOKEN_KEY:-}" ] && [ -n "${!SLACK_TOKEN_KEY:-}" ]; then
   WEBHOOK="${!SLACK_TOKEN_KEY}"
 fi
+# 앞뒤 공백 trim — env 값이 공백뿐(" ")이면 -z 가 통과해 쓰레기 URL 로 curl 하는 것 방지.
+#   bash 패턴제거(extglob 불필요)로 leading/trailing whitespace 제거(URL 내부는 안 건드림).
+WEBHOOK="${WEBHOOK#"${WEBHOOK%%[![:space:]]*}"}"   # leading whitespace 제거
+WEBHOOK="${WEBHOOK%"${WEBHOOK##*[![:space:]]}"}"   # trailing whitespace 제거
 if [ -z "$WEBHOOK" ]; then
-  echo "SLACK_TOKEN_KEY 역참조·SLACK_WEBHOOK_URL 모두 미설정 — Slack 발송 스킵 (GitHub 코멘트는 이미 발송됨)" >&2
+  echo "SLACK_TOKEN_KEY 역참조·SLACK_WEBHOOK_URL 모두 미설정(또는 공백) — Slack 발송 스킵 (GitHub 코멘트는 이미 발송됨)" >&2
   exit 0
 fi
 

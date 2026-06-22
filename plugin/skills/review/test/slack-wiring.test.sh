@@ -128,10 +128,22 @@ else
 fi
 
 # SW-6 정적 가드(zsh 회귀 차단): 펜스에 ${! 간접확장 0건.
-FENCE_HITS="$(grep -rn '${!' \
-  "$REPO_ROOT"/plugin/skills/*/SKILL.md \
-  "$REPO_ROOT"/plugin/skills/*/reference/*.md \
-  "$REPO_ROOT"/templates/claude-commands/*.tmpl 2>/dev/null || true)"
+#   ⚠️ '${!' 패턴은 grep 구현/모드에 따라 매치 여부가 갈린다:
+#      - BRE 에서 '$' 가 패턴 끝이 아니면 보통 literal 이지만(BSD grep 은 매치),
+#        ugrep -G 등 일부 구현은 '${!' 를 매치 안 함(미탐지 = 가짜 안전망).
+#      - 이 레포 셸 환경(zsh)의 grep 래퍼는 ugrep 으로, '${!' 를 BRE 로 못 잡았다.
+#      → 구현 무관 결정적 탐지를 위해 반드시 -F(fixed-string) 로 리터럴 매치한다.
+#   레드입증(SW-6r)은 두 축으로: (a) 정적 — 스캔이 grep -F 를 쓰는지 소스 단언(구현 무관),
+#                              (b) 기능 — 프로브 주입→탐지/제거→통과(이 러너에서 실제 동작).
+scan_fences() {
+  # $1 = 추가로 스캔할 프로브 파일(옵션). 본체 펜스 + 프로브에서 '${!' 리터럴 검색(-F 필수).
+  grep -rFn '${!' \
+    "$REPO_ROOT"/plugin/skills/*/SKILL.md \
+    "$REPO_ROOT"/plugin/skills/*/reference/*.md \
+    "$REPO_ROOT"/templates/claude-commands/*.tmpl \
+    ${1:+"$1"} 2>/dev/null || true
+}
+FENCE_HITS="$(scan_fences)"
 if [ -z "$FENCE_HITS" ]; then
   pass "(SW-6) SKILL·reference·tmpl 펜스에 \${!} 간접확장 0건(zsh 호환)"
 else
@@ -139,11 +151,52 @@ else
   printf '%s\n' "$FENCE_HITS" | sed 's/^/    ↳ /' >&2
 fi
 
+# SW-6r(a) 정적 레드입증 — 스캔이 grep -F(fixed-string)를 쓰는지 소스에서 단언.
+#   grep 구현에 무관하게 -F 누락(=앵커/메타문자 함정 재도입)을 결정적으로 잡는다.
+#   ⚠️ 파일 전체가 아니라 scan_fences() 함수 본문만 검사한다(이 단언문 자신의 패턴 문자열에
+#      self-match 해서 항상 통과하는 가짜 안전망 방지). awk 로 함수 본문만 떼어 grep.
+SELF="${BASH_SOURCE[0]}"
+SCAN_BODY="$(awk '/^scan_fences\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$SELF")"
+# 주석이 아닌 실제 grep 호출 줄만(앞공백 후 'grep -r' 로 시작).
+SCAN_GREP_LINE="$(printf '%s\n' "$SCAN_BODY" | grep -E '^[[:space:]]*grep -r' || true)"
+if printf '%s' "$SCAN_GREP_LINE" | grep -Eq 'grep -r[A-Za-z]*F'; then
+  pass "(SW-6r-a) 정적: scan_fences 가 grep -F(fixed-string) 사용(구현 무관 탐지)"
+else
+  fail "(SW-6r-a) 정적: scan_fences 에 grep -F 누락 — '\${!' 가 grep 구현 따라 미탐지될 위험 (line='$SCAN_GREP_LINE')"
+fi
+
+# SW-6r(b) 기능 레드입증 — 프로브에 ${!VAR} 주입 시 탐지, 깨끗하면 미탐지(이 러너에서 동작 확인).
+PROBE="$WORK/fence-probe.md"
+printf 'fence with ${!SLACK_TOKEN_KEY} indirect expansion\n' > "$PROBE"
+injected="$(scan_fences "$PROBE")"
+printf 'clean fence line, no indirect expansion here\n' > "$PROBE"
+cleaned="$(scan_fences "$PROBE")"
+if printf '%s' "$injected" | grep -qF "$PROBE" && ! printf '%s' "$cleaned" | grep -qF "$PROBE"; then
+  pass "(SW-6r-b) 기능: \${!VAR} 주입 시 탐지·제거 시 통과"
+else
+  fail "(SW-6r-b) 기능 실패: 주입 탐지='$injected' / 제거 후='$cleaned'"
+fi
+
 # SW-7 헬퍼 shebang 이 bash(역참조 ${!} 의 안전 근거).
 if head -1 "$HELPER" | grep -qE '^#!.*bash'; then
   pass "(SW-7) 헬퍼 shebang 이 bash(역참조 \${!} 안전 보장)"
 else
   fail "(SW-7) 헬퍼 shebang 이 bash 아님 — \${!} 안전 근거 상실"
+fi
+
+# SW-8 공백뿐인 webhook(역참조 값이 "   ")이면 trim 후 graceful skip(쓰레기 URL 로 curl 안 함).
+run_helper "MY_HOOK" "" "   "
+if [ "$HELPER_EXIT" -eq 0 ] && [ -z "$CURL_URL" ]; then
+  pass "(SW-8) 공백뿐 webhook → trim 후 graceful skip(발송 안 함)"
+else
+  fail "(SW-8) 공백뿐 webhook 처리 실패: exit=$HELPER_EXIT curl-url='$CURL_URL'(빈 기대)"
+fi
+# SW-8b SLACK_WEBHOOK_URL 이 공백뿐인 폴백 경로도 동일하게 skip.
+run_helper "" "   " ""
+if [ "$HELPER_EXIT" -eq 0 ] && [ -z "$CURL_URL" ]; then
+  pass "(SW-8b) 공백뿐 SLACK_WEBHOOK_URL → trim 후 graceful skip"
+else
+  fail "(SW-8b) 공백뿐 SLACK_WEBHOOK_URL 처리 실패: exit=$HELPER_EXIT curl-url='$CURL_URL'"
 fi
 
 echo ""
