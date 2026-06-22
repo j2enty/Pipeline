@@ -60,10 +60,6 @@ set -uo pipefail
 
 CONFIG_PATH="${PIPELINE_CONFIG:-.claude/pipeline-config.yml}"
 
-usage() {
-  sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//'
-}
-
 if [ $# -lt 1 ]; then
   echo "❌ 키가 필요합니다. 사용법: pipeline-config.sh <key>|--dump|--keys" >&2
   exit 2

@@ -1,0 +1,216 @@
+# Pipeline 컨벤션 레퍼런스
+
+> CLAUDE.md에서 분리한 **참조 문서**. 매 세션 로드되지 않으며, 다음 작업 시 펴본다:
+> 새 input/secret/output 추가 · 변수/파일 이름 결정 · 코드 배치 위치 결정 · config(`pipeline-config.yml`) 작성.
+> **새 input/secret/output·모듈 동작 플래그는 yml/SKILL에서 즉흥적으로 만들지 말고 아래 카탈로그에 먼저 추가한다.**
+
+## 인터페이스 컨벤션
+
+### 1. input vs secret 분류 원칙
+
+**누설 영향 기준**:
+
+| 분류 | 정의 | 예시 |
+|---|---|---|
+| input | 누설돼도 보안 영향 없음 | `module`, `owner`, `working-directory` |
+| secret | 누설되면 권한·리소스 도난 가능 | `AUTHOR_APP_ID`, `AUTHOR_PRIVATE_KEY`, `SLACK_WEBHOOK_URL` |
+
+App ID·Installation ID는 공식적으로 공개 가능하지만, fingerprinting 위험이 있어 **보수적으로 secret**으로 분류.
+
+### 2. 전달 모델: 개별 input
+
+GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config나 vars fallback은 사용 안 함 (외부 사용자에게 명시성 ↓).
+
+### 3. 변수명 케이스
+
+| 종류 | 케이스 | 이유 |
+|---|---|---|
+| input | **kebab-case** | GHA 표준 |
+| job ID / step ID / output | **kebab-case** | 일관성 |
+| secret | **SCREAMING_SNAKE_CASE** | 환경변수 표준과 묶임 |
+
+### 4. 표준 input 카탈로그
+
+새 input은 이 카탈로그에 먼저 추가. yml 내에서 즉흥적으로 새 이름 만들지 않음.
+
+| input | 타입 | 사용 시점 | 의미 |
+|---|---|---|---|
+| `module` | string | module 동작 yml | 어느 모듈 (`Backend`, `iOS` 등) |
+| `owner` | string | 거의 모든 yml | GitHub 조직/사용자 |
+| `parent-repository` | string | parent 추적 yml | `<owner>/<repo>` 형식 |
+| `modules-ignore` | string | multi-module yml | JSON 배열. 제외 모듈 (예: `'["Design"]'`) |
+| `working-directory` | string | slash command 실행 yml | runner 작업 디렉토리 |
+| `slack-channel` | string | 알림 yml (옵션) | 슬랙 채널 |
+| `ci-workflow-name` | string | auto-merge yml | 해당 모듈의 CI workflow 이름 (예: `Backend CI`) |
+| `reviewer-bot-login` | string | review·critic yml | Reviewer 봇 GitHub 로그인 이름 (예: `reclip-review-bot[bot]`) |
+| `verdict-state-dir` | string | critic yml | verdict 상태 파일 디렉토리 (예: `.omc/state/reviews`) |
+| `strict-review-bot-check` | boolean | review·critic yml | `true`: 누구의 CHANGES_REQUESTED든 차단 / `false`: Reviewer 봇 것만 확인 |
+| `project-owner` | string | merge yml (옵션) | Project v2 소유자 (org/user 로그인). 미설정 시 머지 후 Status 전환 스킵 |
+| `project-number` | string | merge yml (옵션) | Project v2 번호. 미설정 시 머지 후 Status 전환 스킵 |
+| `tracking-enabled` | boolean | review·critic yml | finding 추적 이슈 생성 on/off |
+| `major-label` | string | review·critic yml | major finding 추적 라벨명 (기본 `major-issue`) |
+| `minor-label` | string | review·critic yml | minor finding 추적 라벨명 (기본 `minor-issue`) |
+
+### 5. 표준 secret 카탈로그
+
+**Author / Reviewer 봇 분리** — AI 자동화는 봇이 PR 생성 + 봇이 리뷰함. self-approve 차단 회피 위한 entity 분리.
+
+| secret | 필수도 | 의미 |
+|---|---|---|
+| `AUTHOR_APP_ID` | 모든 자동화 yml 필수 | PR 작성 봇의 App ID |
+| `AUTHOR_PRIVATE_KEY` | 동일 | PEM |
+| `AUTHOR_INSTALLATION_ID` | 동일 | Installation ID |
+| `REVIEWER_APP_ID` | review 부착 yml에서만 필수 | PR 리뷰 봇의 App ID |
+| `REVIEWER_PRIVATE_KEY` | 동일 | PEM |
+| `REVIEWER_INSTALLATION_ID` | 동일 | Installation ID |
+| `SLACK_WEBHOOK_URL` | 옵션 | 슬랙 인커밍 웹훅 — 미설정 시 알림 자동 스킵 |
+
+옵셔널 동작:
+- Reviewer secret 미설정 + AI 리뷰 yml 미호출 → 정상 (사람이 리뷰하는 일반 자동화)
+- Reviewer secret 미설정 + AI 리뷰 yml 호출 → secret 누락으로 적절히 fail
+- Slack webhook 미설정 → notify 스크립트 자동 스킵
+
+### 6. output 컨벤션
+
+두 가지 메커니즘이 역할 분리되어 공존:
+
+- **명시적 outputs** (workflow_call) — 단일 yml의 결과 노출. 같은 run 안에서 후속 job이 사용
+- **chain은 App에서 처리** — yml에서 `repository_dispatch`로 chain 트리거하지 않음. App이 webhook 수신 후 다음 단계 dispatch
+
+표준 output 카탈로그:
+
+| output | 타입 | 노출 yml | 의미 |
+|---|---|---|---|
+| `pr-number` | string | PR 생성 yml | PR 번호 |
+| `pr-url` | string | PR 생성 yml | PR HTML URL |
+| `merged-sha` | string | 머지 yml | 머지된 commit SHA |
+| `verdict` | string | review/critic yml | `approved` / `changes-requested` / `escalated` |
+| `escalated` | boolean | review/critic yml | 에스컬레이션 발생 여부 |
+
+---
+
+## 명명 컨벤션
+
+> **yml 파일명** 규칙은 `.claude/rules/workflows.md`로 이동(워크플로 작성 시 자동 로드).
+
+### Org Variables
+
+`PIPELINE_*` prefix 사용. 이름 확정 후 일괄 치환 가능 (grep + find & replace).
+
+| 변수명 | input 매핑 | 의미 |
+|---|---|---|
+| `PIPELINE_OWNER` | `owner` | GitHub 조직명 |
+| `PIPELINE_PARENT_REPOSITORY` | `parent-repository` | `<owner>/<repo>` |
+| `PIPELINE_MODULES_IGNORE` | `modules-ignore` | 제외 모듈 JSON 배열 |
+| `PIPELINE_WORKING_DIRECTORY` | `working-directory` | runner 작업 경로 |
+| `PIPELINE_SLACK_CHANNEL` | `slack-channel` | 슬랙 채널 |
+| `PIPELINE_REVIEWER_BOT_LOGIN` | `reviewer-bot-login` | Reviewer 봇 로그인 이름 (예: `review-bot[bot]`) |
+| `PIPELINE_VERDICT_DIR` | `verdict-state-dir` | critic verdict 상태 파일 디렉토리 |
+| `PIPELINE_PROJECT_OWNER` | `project-owner` | Project v2 소유자 (머지 후 Status=Done 전환용) |
+| `PIPELINE_PROJECT_NUMBER` | `project-number` | Project v2 번호 (머지 후 Status=Done 전환용) |
+| `PIPELINE_TRACKING_ENABLED` | `tracking-enabled` | finding 추적 on/off |
+| `PIPELINE_TRACKING_MAJOR_LABEL` | `major-label` | major 추적 라벨명 |
+| `PIPELINE_TRACKING_MINOR_LABEL` | `minor-label` | minor 추적 라벨명 |
+
+### App 환경변수
+
+App 인증·자동화 동작 두 그룹.
+
+**인증** — secret 카탈로그와 동일 이름 (GHA secret ↔ App 환경변수 1:1 매핑):
+
+```env
+AUTHOR_APP_ID=
+AUTHOR_PEM=                # PEM 파일 절대경로 (App 은 파일을 읽음)
+AUTHOR_INSTALLATION_ID=
+REVIEWER_APP_ID=           # 옵션 (AI 리뷰 미사용 시 비워둠)
+REVIEWER_PEM=              # 옵션
+REVIEWER_INSTALLATION_ID=  # 옵션
+SLACK_WEBHOOK_URL=         # 옵션
+WEBHOOK_SECRET=            # GitHub App webhook secret
+```
+
+**자동화 동작** — App-내 결정 로직(폴러·핸들러)이 사용:
+
+```env
+OWNER=                          # 조직명 (Project v2 폴링 대상)
+PROJECT_NUMBERS=[3,5]           # 폴러가 동시 모니터링할 Project v2 번호 배열
+MODULES=["Backend","iOS"]       # 영역 모듈 이름 (폴러 dispatch 대상 식별)
+MODULES_IGNORE=["Design"]       # sibling 집계 시 제외할 모듈
+REVIEWER_BOT_LOGIN=             # Reviewer 봇 로그인 prefix (review 핸들러 검증용)
+STATUS_POLLER_INTERVAL_MS=300000  # 폴링 간격 (옵션, 기본 5분)
+```
+
+---
+
+## 구조 컨벤션
+
+"어떤 코드를 어디에 둘지" 기준.
+
+| 상황 | 도구 | 위치 |
+|---|---|---|
+| GitHub 이벤트 받고 다음 단계 결정 (chain 로직) | **App 코드** | `app/src/` |
+| GitHub API 복잡하게 다루기 (sub-issue 조회·sibling 추적·GraphQL) | **App 코드** | `app/src/` |
+| 영역 레포가 호출하는 단위 작업 (kickoff·review·merge 한 번) | **Reusable workflow** | `.github/workflows/*.yml` |
+| 여러 yml에서 반복되는 step 묶음 | **Composite action** | `actions/<name>/action.yml` |
+| 단순 쉘 명령 묶음 (Slack 알림·token 발급 등) | **Script** | `scripts/*.sh` |
+
+**기준 한 줄**: 결정하면 App, 실행하면 Reusable workflow, 단계 묶으면 Composite action, 순수 명령이면 Script.
+
+**경계선**:
+- token 발급 → Script (순수 쉘 명령)
+- Slack 알림 → Script (curl 한 방)
+- sub-issue 조회·sibling 추적 → App 코드 (복잡한 상태 판단 포함)
+- App과 Script의 경계: GHA 기능(secrets·matrix·outputs) 필요 없고 순수 명령이면 Script
+
+---
+
+## 설정 컨벤션
+
+### 설정 파일 형태
+
+**YAML** — GHA와 동일 포맷, 주석 가능, 읽기 쉬움.
+
+### 디렉토리 역할
+
+| 디렉토리 | 역할 | 내용 |
+|---|---|---|
+| `config/` | 스키마·템플릿 | 빈 껍데기 — 어떤 값을 채워야 하는지 주석으로 안내 |
+| `examples/<project>/` | 실제 적용 사례 | 채워진 예시 — 새 프로젝트 이식 시 참고용 |
+
+```
+config/
+└── pipeline-config.example.yml     # 빈 껍데기 + 항목별 설명 주석
+
+examples/
+└── reclip/
+    ├── pipeline-config.yml          # Reclip 설정 (채워진 버전)
+    └── .github/workflows/           # 영역 레포 호출자 yml 예시
+```
+
+### 이식 흐름
+
+1. `config/pipeline-config.example.yml` 복사
+2. 자기 프로젝트 값 채워넣기
+3. `install.sh`에 파일 경로 전달 → org variables·secrets 자동 등록
+
+### 모듈 동작 플래그 카탈로그 (`modules:` 항목)
+
+슬래시커맨드(`/plan`·`/review`·`/kickoff`)는 모듈 동작을 **하드코딩하지 않고** config의 동작 플래그를
+런타임에 읽어 결정한다. 리더(`pipeline-config.sh`)의 `--modules-table`·`--modules-where`·`module.<Name>.<flag>`로 노출.
+새 동작 축이 필요하면 yml/SKILL에서 즉흥적으로 만들지 말고 이 카탈로그에 먼저 추가한다.
+
+| 필드 | 타입 | 기본값(미지정) | 의미 |
+|---|---|---|---|
+| `name` | string | (필수) | 모듈 이름 = 영역 레포명 (`<owner>/<name>`) |
+| `role` | string | 빈 값 | **순수 사람용 라벨**(server/client/design/admin). 리더·코드는 읽지 않음 — 동작은 아래 플래그로만 결정 |
+| `area-id` | string | 빈 값 → legacy `area-ids.<Name>` 폴백 | Project v2 Area 옵션 ID. kickoff 가 sub-issue Area 세팅에 사용 |
+| `planner` | boolean | `true` | `/plan` 이 planner 호출 대상에 포함할지. `false` 면 placeholder 처리 |
+| `review` | boolean | `true` | `/review` 대상에 포함할지. `false` 면 리뷰 제외 |
+| `kickoff` | boolean | `true` | `/kickoff` 대상에 포함할지. `false` 면 실행 제외 |
+| `lead` | boolean | `false` | 선행(먼저 처리) 모듈. `true` 가 2개 이상이면 정의순 직렬 선행 |
+| `default-status` | string | `Ready` | kickoff 시 부여할 기본 Project Status (예: `Backlog`) |
+| `cross-area-group` | string | 빈 값 | 같은 비어있지 않은 값을 가진 모듈이 2개 이상 선택되면 `/plan` 이 Cross-area 일관성 섹션 추가 |
+| `ci-workflow-name` | string | 빈 값 | auto-merge 가 CI pass 확인 시 참조할 워크플로 이름 |
+| `strict-review-bot-check` | boolean | `true` | Reviewer 봇 CHANGES_REQUESTED만 차단 기준으로 볼지 |
+
+- **레포 등록 제외**: `modules-ignore`에 있는 모듈은 `modules:`에 있어도 `install.sh`가 레포 등록(secret/variable/yml)·폴러 dispatch에서 제외한다. "config는 알지만 자동화 레포 관리는 안 하는 모듈"(예: Design)을 표현.

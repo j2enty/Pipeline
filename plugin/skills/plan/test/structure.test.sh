@@ -19,7 +19,6 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$TEST_DIR/../SKILL.md"
 REF="$TEST_DIR/../reference"
 CRITIC_AGENT="$TEST_DIR/../../../agents/critic.md"
-PLANNER_AGENT="$TEST_DIR/../../../agents/planner.md"
 DRY_RUN_GUARD="$TEST_DIR/../../../../templates/claude-commands/test/dry-run-guard.test.sh"
 
 if [ -t 1 ]; then
