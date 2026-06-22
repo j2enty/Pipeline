@@ -14,22 +14,35 @@
 #     context     — 컨텍스트 1~3줄 (실패 유형·원인 요약 등 — 줄바꿈 \n 허용)
 #
 # 환경변수:
-#   SLACK_WEBHOOK_URL — Slack Incoming Webhook URL
-#                       미설정이면 발송 스킵 + exit 0 (파이프라인 중단 안 함)
+#   SLACK_TOKEN_KEY   — (옵션) webhook 이 담긴 env 변수의 "이름표" (예: RECLIP_SLACK_WEBHOOK).
+#                       config slack-token-key 가 가리키는 env 이름. 주어지고 그 env 에 값이
+#                       있으면 그것을 webhook 으로 사용한다. 이 역참조(${!VAR})는 이 스크립트가
+#                       bash shebang(#!/usr/bin/env bash)이라 안전하다 — 호출 펜스의 셸(zsh 가능)과
+#                       무관하게 여기서만 간접확장하므로 zsh "bad substitution" 함정을 피한다.
+#   SLACK_WEBHOOK_URL — Slack Incoming Webhook URL (직접 주입 경로 / 폴백).
+#                       GHA 는 이 값을 secret 으로 직접 주입한다. SLACK_TOKEN_KEY 역참조가
+#                       값을 못 주면 이 값으로 폴백.
+#                       둘 다 비면 발송 스킵 + exit 0 (파이프라인 중단 안 함).
 #                       GitHub 코멘트가 이미 발송된 후 호출되므로 알림 누락만 발생.
 #
 # 예:
+#   # (a) 토큰키 이름표 전달 — 헬퍼가 역참조:
+#   SLACK_TOKEN_KEY=RECLIP_SLACK_WEBHOOK RECLIP_SLACK_WEBHOOK=https://hooks.slack.com/... \
+#   ./scripts/slack-notify.sh "kickoff 중단 — Frontend" "<github-url>" "<context>"
+#   # (b) webhook 직접 주입(GHA):
 #   SLACK_WEBHOOK_URL=https://hooks.slack.com/... \
-#   ./scripts/slack-notify.sh \
-#     "kickoff 중단 — Frontend" \
-#     "https://github.com/org/repo/issues/12#issuecomment-..." \
-#     "실패 유형: fixing 3/3\n에러: 컴파일 실패"
+#   ./scripts/slack-notify.sh "kickoff 중단 — Frontend" "<github-url>" "<context>"
 
 set -euo pipefail
 
+# webhook 결정: SLACK_TOKEN_KEY(env 이름표) 역참조 우선, 없으면 SLACK_WEBHOOK_URL 폴백.
+#   ${!VAR} 간접확장은 bash-ism — 이 스크립트는 bash shebang 이라 안전.
 WEBHOOK="${SLACK_WEBHOOK_URL:-}"
+if [ -n "${SLACK_TOKEN_KEY:-}" ] && [ -n "${!SLACK_TOKEN_KEY:-}" ]; then
+  WEBHOOK="${!SLACK_TOKEN_KEY}"
+fi
 if [ -z "$WEBHOOK" ]; then
-  echo "SLACK_WEBHOOK_URL 미설정 — Slack 발송 스킵 (GitHub 코멘트는 이미 발송됨)" >&2
+  echo "SLACK_TOKEN_KEY 역참조·SLACK_WEBHOOK_URL 모두 미설정 — Slack 발송 스킵 (GitHub 코멘트는 이미 발송됨)" >&2
   exit 0
 fi
 

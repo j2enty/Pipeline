@@ -76,8 +76,18 @@ absentE 'area-id\.IOS' "$SKILL" "(A-5b) area-id.IOS(오타) 부재"
 echo -e "\n${C_CYAN}── (B) OMC degrade (oh-my-claudecode 참조 통제) ──${C_NC}"
 # B-1 SKILL.md 의 oh-my-claudecode 참조는 전부 team/ultra degrade 컨텍스트(폴백 prose)
 #     또는 혼동 금지(네임스페이스 구분) 주의 줄에만 있어야 한다.
-#     각 매치 줄에 team|ultra|degrade|폴백|fallback|agent|혼동|네임스페이스 중 하나가
-#     함께 있는지 검사.
+#     #49-2: 화이트리스트에서 generic 토큰(agent·bare team·bare ultra)을 제거하고
+#     강한 degrade/disambiguation 컨텍스트 토큰만 허용한다. generic 'agent' 는 일반 산문
+#     어디에나 등장해서 진짜 잘못된 primary OMC 참조("…를 주 오케스트레이터로 쓴다" 류)도
+#     통과시켜 버린다. 'team'·'ultra' 도 bare 로는 너무 흔하므로 OMC 전용 플래그
+#     '--team'·'--ultra' 또는 명시 네임스페이스 'oh-my-claudecode:' 형태일 때만 인정.
+#     각 매치 줄에 다음 중 하나가 함께 있어야 한다:
+#       degrade·폴백·fallback (degrade 컨텍스트)
+#       혼동·네임스페이스      (disambiguation 컨텍스트)
+#       부재                   (OMC 부재 = degrade 트리거 컨텍스트)
+#       --team·--ultra         (OMC 전용 플래그 — bare team/ultra 아님)
+#       oh-my-claudecode:      (명시 OMC 네임스페이스 — 대안 경로 표기)
+OMC_CTX_RE='degrade|폴백|fallback|혼동|네임스페이스|부재|--team|--ultra|oh-my-claudecode:'
 OMC_LINES="$(grep -nE 'oh-my-claudecode' "$SKILL" || true)"
 if [ -z "$OMC_LINES" ]; then
   # kickoff 은 degrade 를 설명해야 하므로 oh-my-claudecode 가 0이면 오히려 degrade 누락 의심.
@@ -85,7 +95,7 @@ if [ -z "$OMC_LINES" ]; then
 else
   bad_ctx=0
   while IFS= read -r line; do
-    if printf '%s' "$line" | grep -qE 'team|ultra|degrade|폴백|fallback|agent|혼동|네임스페이스'; then :; else
+    if printf '%s' "$line" | grep -qE "$OMC_CTX_RE"; then :; else
       bad_ctx=$((bad_ctx+1)); printf "    ↳ degrade 무관 oh-my-claudecode 줄: %s\n" "$line" >&2
     fi
   done <<EOF
