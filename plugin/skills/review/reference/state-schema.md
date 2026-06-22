@@ -106,7 +106,7 @@
 
 ```json
 "aggregate": {
-  "verdict": "approved" | "changes-requested" | "escalated",
+  "verdict": "pass" | "concerns" | "blocker",
   "parentCommentUrl": "<PARENT_COMMENT_URL>",
   "criticFindings": [
     {"severity": "...", "area": "...", "title": "...", "description": "...", "affected_prs": []}
@@ -117,7 +117,8 @@
 
 - `aggregate.criticFindings[]`: 8-b 의 critic 반환 `findings[]` 각 항목을 그대로 기록. 각 항목은 `severity, area, title, description, affected_prs` 5개 필드(critic 스키마엔 `file`/`line` 이 없다 — area/affected_prs 만으로 식별).
 - critic findings 가 0건이면 빈 배열(`[]`).
-- **8-c-bis 는 `criticFindings` 만 추가**한다. `aggregate.verdict`(전체 리뷰 verdict — 후속 GHA 가 읽음)는 critic 값으로 덮지 않는다. `aggregate.verdict` 의 enum 은 전체 리뷰 판정인 `approved`/`changes-requested`/`escalated` 이며, critic 자체의 반환 verdict(`pass`/`concerns`/`blocker`)와는 별개다.
+- 기존 `aggregate.verdict`(후속 GHA 가 읽음)·`parentCommentUrl` 기록은 그대로 유지하고, `criticFindings` 만 추가한다.
+- `aggregate.verdict` 는 **critic 종합 verdict**(`pass`/`concerns`/`blocker`)이며 `.github/workflows/critic.yml` 이 이 값을 읽어 머지 분기한다(allowlist 밖 값은 fail-closed 로 머지 차단). 개별 PR verdict(`prs.<area>.verdict`: `approved`/`request_changes`)와는 별개다 — 혼동 금지.
 
 ## 9-d. 에스컬 시 상태 파일 업데이트
 
