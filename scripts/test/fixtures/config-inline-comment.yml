@@ -1,0 +1,21 @@
+# 인라인 주석 회귀 픽스처(#52).
+# modules 블록의 줄끝 강제(\s*$) 추출들이 인라인 주석에서 값을 통째로 잃지 않는지 검증.
+#   - name / ci-workflow-name / area-id(modules) / area-ids(legacy 맵) 전부 인라인 주석 동반.
+#   - Backend: 전 필드에 인라인 주석 → 모듈 자체가 사라지면 안 되고 값도 보존돼야 함.
+#   - iOS:     주석 없는 정상 모듈(대조군).
+#   - Frontend: modules 엔 없고 legacy area-ids 맵에만(인라인 주석 동반) → 폴백 검증.
+project:
+  owner: RedOrg
+modules:
+  - name: Backend  # 인라인 주석
+    ci-workflow-name: Backend CI  # 인라인 주석
+    area-id: be-mod  # 주석
+    strict-review-bot-check: false  # 인라인 주석
+  - name: iOS
+    ci-workflow-name: iOS CI
+    area-id: ios-mod
+modules-ignore: []
+claude-commands:
+  enabled: true
+  area-ids:
+    Frontend: fe-legacy  # 주석
