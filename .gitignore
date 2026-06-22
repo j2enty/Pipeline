@@ -10,6 +10,9 @@
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+# hooks 디렉토리는 열되, 그 안에선 .sh 스크립트만 추적(로컬 임시파일 실수 커밋 방지)
+.claude/hooks/*
+!.claude/hooks/*.sh
 
 # 환경 / 비밀
 .env
