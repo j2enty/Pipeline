@@ -692,11 +692,11 @@ gh pr comment <N> --repo __ORG__/<영역> \
 
 #### 8-c-bis. critic findings 상태 파일 기록 (schemaVersion 1.1)
 
-위 8-c 의 parent 코멘트 렌더와 **별개로**, critic 이 반환한 finding 을 상태 파일에 구조화 기록한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용):
+위 8-c 의 parent 코멘트 렌더와 **별개로**, critic 이 반환한 finding 을 상태 파일에 구조화 기록한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용). 이때 `criticFindings` 만 기록하고 `aggregate.verdict`(전체 리뷰 verdict — 후속 GHA 가 읽음)는 critic 값으로 덮지 않는다:
 
 ```json
 "aggregate": {
-  "verdict": "pass" | "concerns" | "blocker",
+  "verdict": "approved" | "changes-requested" | "escalated",
   "parentCommentUrl": "<PARENT_COMMENT_URL>",
   "criticFindings": [
     {"severity": "...", "area": "...", "title": "...", "description": "...", "affected_prs": []}
@@ -707,7 +707,7 @@ gh pr comment <N> --repo __ORG__/<영역> \
 
 - `aggregate.criticFindings[]`: 8-b 의 critic 반환 `findings[]` 각 항목을 그대로 기록. 각 항목은 `severity, area, title, description, affected_prs` 5개 필드(critic 스키마엔 `file`/`line` 이 없다 — area/affected_prs 만으로 식별).
 - critic findings 가 0건이면 빈 배열(`[]`).
-- 기존 `aggregate.verdict`(후속 GHA 가 읽음)·`parentCommentUrl` 기록은 그대로 유지하고, `criticFindings` 만 추가한다.
+- **8-c-bis 는 `criticFindings` 만 추가**한다. `aggregate.verdict`(전체 리뷰 verdict — 후속 GHA 가 읽음)는 critic 값으로 덮지 않는다. `aggregate.verdict` 의 enum 은 전체 리뷰 판정인 `approved`/`changes-requested`/`escalated` 이며, critic 자체의 반환 verdict(`pass`/`concerns`/`blocker`)와는 별개다.
 
 #### 8-d. Critic 실패 처리
 
@@ -856,6 +856,7 @@ __DOCS_CONTEXT_DIR__/<slug>-status.md
 - (a) 한 영역 이상 `verdict=escalated` 또는 `request_changes`
 - (b) SIGINT 캡처로 중단
 - (c) 혼합 상태 (approved + request_changes · escalated 동시 존재)
+- (d) `aggregate.criticFindings` 가 비어있지 않으면 (R11 — 개별 모두 approved 라도 critic 이 짚은 cross-area finding 을 영구 보존. critic 반환 규칙상 `findings 1건 이상` ⟺ verdict 가 pass 가 아님 이므로 blocker/major/minor 전부 포착. 하위호환: 구버전(1.0) 상태 파일은 `criticFindings` 키 부재 → "부재=빈 배열"로 간주해 트리거 off)
 
 ```bash
 # Docs 가 "독립 git 레포 루트"인지 판정. rev-parse --git-dir 은 부모로 거슬러 올라가
@@ -998,4 +999,4 @@ Status 전환 실패가 있었다면 경고 블록을 추가:
   - 호출은 7-f 의 REST API 단일 POST 패턴 (review + line comments atomic)
   - GraphQL `addPullRequestReviewComment` 는 `line` 인자 미지원이라 사용 금지 (이전 명세 잘못)
   - M3 GHA 도입 시 `.pem` 을 GHA Secret 으로 이전 → 로컬 사본 폐기 가능 (이전 자동화 봇과 같은 보안 모델)
-- **R11** (도입 · 2026-05-03) Docs 커밋 트리거에 `critic verdict=concerns` 추가 — 기존 10-a 트리거 (a)(b)(c) 는 개별 verdict (escalated/request_changes) 또는 SIGINT/혼합 상태만 감지. 개별 모두 approved + critic concerns 케이스가 빠져 있어 cross-area finding 이 영구 보존되지 않는 문제 발견 (관찰 사례: 2026-05-03 `m2-scaffolding` — 두 PR APPROVE 인데 critic 이 blocker 1건 + major 2건 짚음). 해결: 트리거에 (d) `aggregate.criticVerdict == "concerns"` 추가. critic finding 이 있으면 __DOCS_CONTEXT_DIR__/&lt;slug&gt;-status.md 자동 push 해서 M3 작업자가 진입 시 컨텍스트 로드 가능하게.
+- **R11** (도입 · 2026-05-03) Docs 커밋 트리거에 `critic verdict=concerns` 추가 — 기존 10-a 트리거 (a)(b)(c) 는 개별 verdict (escalated/request_changes) 또는 SIGINT/혼합 상태만 감지. 개별 모두 approved + critic concerns 케이스가 빠져 있어 cross-area finding 이 영구 보존되지 않는 문제 발견 (관찰 사례: 2026-05-03 `m2-scaffolding` — 두 PR APPROVE 인데 critic 이 blocker 1건 + major 2건 짚음). 해결: 트리거에 (d) `aggregate.criticFindings 가 비어있지 않으면` 추가. critic finding 이 있으면 __DOCS_CONTEXT_DIR__/&lt;slug&gt;-status.md 자동 push 해서 M3 작업자가 진입 시 컨텍스트 로드 가능하게. (#47: 최초 도입 시 `aggregate.criticVerdict == "concerns"` 로 적었으나 그 필드는 상태 파일 어디에도 기록되지 않는 死문이라 트리거가 영영 안 걸렸고, `concerns` 한정이라 blocker 케이스도 놓쳤음 → `criticFindings` 비어있지 않음 으로 정정.)

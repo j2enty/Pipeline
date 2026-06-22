@@ -23,6 +23,8 @@ SCRIPTS="$TEST_DIR/../scripts"
 CR_AGENT="$TEST_DIR/../../../agents/code-reviewer.md"
 VF_AGENT="$TEST_DIR/../../../agents/verifier.md"
 CRITIC_AGENT="$TEST_DIR/../../../agents/critic.md"
+# tmpl 배포 SSOT (드리프트 동기 검증용 — plugin ⟺ tmpl 쌍)
+TMPL="$TEST_DIR/../../../../templates/claude-commands/review.md.tmpl"
 
 if [ -t 1 ]; then
   C_GREEN='\033[0;32m'; C_RED='\033[0;31m'; C_CYAN='\033[0;36m'; C_NC='\033[0m'
@@ -153,6 +155,36 @@ has '"codeReview"' "$REF/state-schema.md" "(E-2) state-schema: findings.codeRevi
 has 'severity' "$CR_AGENT" "(E-3) severity 분류 → code-reviewer 에이전트"
 has '인수 기준' "$VF_AGENT" "(E-3) 인수 기준 체크 → verifier 에이전트"
 hasE '모드 C' "$CRITIC_AGENT" "(E-3) 모드 C → critic 에이전트"
+
+echo -e "\n${C_CYAN}── (D-6b~e) critic verdict 死문 정정 (#47) ──${C_NC}"
+CTX_MD="$REF/context-md.md"
+SCHEMA_MD="$REF/state-schema.md"
+# D-6b 死문 필드 criticVerdict 재유입 차단 (context-md.md R11 트리거)
+absentE 'criticVerdict' "$CTX_MD" "(D-6b) context-md.md criticVerdict 死문 필드 부재"
+# D-6c 정정된 트리거 (d) — criticFindings 가 비어있지 않으면
+hasE 'criticFindings.* 가 비어있지 않' "$CTX_MD" "(D-6c) context-md.md 트리거 (d) criticFindings 비어있지 않음"
+# D-6d state-schema.md 8-c-bis 오염 차단: 死문 필드 부재 + verdict 예시가 critic enum(concerns) 으로 오염 안 됨.
+#   8-c-bis 블록(### 8-c-bis ~ ## 9-d)만 추출해 검사.
+SCHEMA_8CBIS="$(awk '/^## 8-c-bis/{f=1} f{print} f&&/^## 9-d/{exit}' "$SCHEMA_MD")"
+if printf '%s' "$SCHEMA_8CBIS" | grep -q 'criticVerdict'; then
+  fail "(D-6d) state-schema 8-c-bis criticVerdict 死문 부재"; else pass "(D-6d) state-schema 8-c-bis criticVerdict 死문 부재"; fi
+# aggregate.verdict 예시가 critic 값(pass/concerns/blocker)으로 오염되지 않았는지 — concerns/blocker 표기 부재
+if printf '%s' "$SCHEMA_8CBIS" | grep -qE '"verdict":\s*"pass"\s*\|\s*"concerns"\s*\|\s*"blocker"'; then
+  fail "(D-6d) state-schema 8-c-bis aggregate.verdict critic enum 오염 부재"; else pass "(D-6d) state-schema 8-c-bis aggregate.verdict critic enum 오염 부재"; fi
+# 전체 verdict enum(approved/changes-requested/escalated)으로 정정됐는지
+if printf '%s' "$SCHEMA_8CBIS" | grep -qE 'approved.*changes-requested.*escalated'; then
+  pass "(D-6d) state-schema 8-c-bis aggregate.verdict 전체 enum 정정"; else fail "(D-6d) state-schema 8-c-bis aggregate.verdict 전체 enum 정정"; fi
+# D-6e Phase 3 동기 — plugin context-md.md ⟺ tmpl 둘 다 정정 트리거 (d) 문구 존재(드리프트 재발 차단)
+if [ -f "$TMPL" ]; then
+  hasE 'criticFindings.* 가 비어있지 않' "$TMPL" "(D-6e) tmpl 트리거 (d) criticFindings 비어있지 않음(드리프트 동기)"
+  # 死문 필드 criticVerdict 재유입 차단은 라이브 영역(10-a 트리거 블록)에 한정.
+  #   R11 이력 노트(minor-gaps)는 死문 정정 블레임으로 그 단어를 정당히 인용하므로 제외한다.
+  TMPL_10A="$(awk '/^#### 10-a\./{f=1} f{print} f&&/클린 성공/{exit}' "$TMPL")"
+  if printf '%s' "$TMPL_10A" | grep -q 'criticVerdict'; then
+    fail "(D-6e) tmpl 10-a 트리거 criticVerdict 死문 부재"; else pass "(D-6e) tmpl 10-a 트리거 criticVerdict 死문 부재"; fi
+else
+  fail "(D-6e) tmpl 파일 존재: $TMPL"
+fi
 
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
