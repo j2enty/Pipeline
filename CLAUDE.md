@@ -105,7 +105,7 @@ Pipeline/
 │   ├── .claude-plugin/
 │   │   └── plugin.json     # 플러그인 정의 (name: pipeline)
 │   ├── agents/             # 플러그인 일꾼 에이전트 (pipeline:critic·planner 등)
-│   └── skills/             # 플러그인 슬래시커맨드(skill) — P2 예정 (명령어 이전)
+│   └── skills/             # 플러그인 슬래시커맨드(skill — plan·kickoff·review)
 ├── app/                    # GitHub App 코드 (webhook 수신 + chain orchestrator)
 │   ├── src/                # App 본체 — 일반화된 코드
 │   ├── Dockerfile          # 표준 배포 단위
@@ -117,11 +117,11 @@ Pipeline/
 ├── config/                 # 프로젝트별 설정 스키마·템플릿
 └── examples/               # 적용 사례 (Reclip 등)
     └── <project>/
-        ├── app-config.yml          # 모듈 리스트·프로젝트 번호 등
+        ├── pipeline-config.yml      # 모듈 리스트·프로젝트 번호 등
         └── .github/workflows/      # 영역 레포에 설치할 호출자 yml 예시
 ```
 
-- 본체 = `.claude-plugin/` + `plugin/`(= `agents/` +예정 `skills/`) + `app/` + `.github/workflows/` + `actions/` + `scripts/`
+- 본체 = `.claude-plugin/` + `plugin/`(= `agents/` + `skills/`) + `app/` + `.github/workflows/` + `actions/` + `scripts/`
 - **플러그인 격리**: 플러그인 루트는 `plugin/`. 마켓플레이스(`.claude-plugin/marketplace.json`)는
   레포 루트에 남아 `./plugin` 을 카탈로그한다. 레포 루트 CLAUDE.md 가 플러그인 루트 밖이라
   설치 시 딸려가지 않고, `claude plugin validate plugin/ --strict` 도 깨끗하다. 로드: `claude --plugin-dir plugin`
