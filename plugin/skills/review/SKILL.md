@@ -555,7 +555,7 @@ gh pr comment <N> --repo "$OWNER/<영역>" \
 
 #### 8-c-bis. critic findings 상태 파일 기록 (schemaVersion 1.1)
 
-위 8-c 의 parent 코멘트 렌더와 **별개로**, critic 이 반환한 finding 을 상태 파일에 구조화 기록한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용). `aggregate.criticFindings[]` 구조·기록 규칙은 [상태 파일 스키마 §8-c-bis](reference/state-schema.md) 참조.
+위 8-c 의 parent 코멘트 렌더와 **별개로**, critic 이 반환한 finding 을 상태 파일에 구조화 기록한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용). 이때 `criticFindings` 만 추가하며, `aggregate.verdict`(critic 종합 verdict `pass`/`concerns`/`blocker` — `critic.yml` 이 읽어 머지 분기)는 별도 기록 경로라 여기서 덮지 않는다. `aggregate.criticFindings[]` 구조·기록 규칙은 [상태 파일 스키마 §8-c-bis](reference/state-schema.md) 참조.
 
 #### 8-d. Critic 실패 처리
 

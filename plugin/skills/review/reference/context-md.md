@@ -38,6 +38,6 @@
 - (a) 한 영역 이상 `verdict=escalated` 또는 `request_changes`
 - (b) SIGINT 캡처로 중단
 - (c) 혼합 상태 (approved + request_changes · escalated 동시 존재)
-- (d) `aggregate.criticVerdict == "concerns"` (R11 — 개별 모두 approved + critic concerns 케이스도 cross-area finding 영구 보존)
+- (d) `aggregate.criticFindings` 가 비어있지 않으면 (R11 — 개별 모두 approved 라도 critic 이 짚은 cross-area finding 을 영구 보존. critic 반환 규칙상 `findings 1건 이상` ⟺ verdict 가 pass 가 아님 이므로 blocker/major/minor 전부 포착. 하위호환: 구버전(1.0) 상태 파일은 `criticFindings` 키 부재 → "부재=빈 배열"로 간주해 트리거 off)
 
 클린 성공(전부 approved · critic pass)은 Docs 커밋 생략.

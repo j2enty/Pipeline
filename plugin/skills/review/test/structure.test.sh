@@ -23,6 +23,8 @@ SCRIPTS="$TEST_DIR/../scripts"
 CR_AGENT="$TEST_DIR/../../../agents/code-reviewer.md"
 VF_AGENT="$TEST_DIR/../../../agents/verifier.md"
 CRITIC_AGENT="$TEST_DIR/../../../agents/critic.md"
+# tmpl 배포 SSOT (드리프트 동기 검증용 — plugin ⟺ tmpl 쌍)
+TMPL="$TEST_DIR/../../../../templates/claude-commands/review.md.tmpl"
 
 if [ -t 1 ]; then
   C_GREEN='\033[0;32m'; C_RED='\033[0;31m'; C_CYAN='\033[0;36m'; C_NC='\033[0m'
@@ -153,6 +155,57 @@ has '"codeReview"' "$REF/state-schema.md" "(E-2) state-schema: findings.codeRevi
 has 'severity' "$CR_AGENT" "(E-3) severity 분류 → code-reviewer 에이전트"
 has '인수 기준' "$VF_AGENT" "(E-3) 인수 기준 체크 → verifier 에이전트"
 hasE '모드 C' "$CRITIC_AGENT" "(E-3) 모드 C → critic 에이전트"
+
+echo -e "\n${C_CYAN}── (D-6b~e) critic verdict 死문 정정 (#47) ──${C_NC}"
+CTX_MD="$REF/context-md.md"
+SCHEMA_MD="$REF/state-schema.md"
+# D-6b 死문 필드 criticVerdict 재유입 차단 (context-md.md R11 트리거)
+absentE 'criticVerdict' "$CTX_MD" "(D-6b) context-md.md criticVerdict 死문 필드 부재"
+# D-6c 정정된 트리거 (d) — criticFindings 가 비어있지 않으면
+hasE 'criticFindings.* 가 비어있지 않' "$CTX_MD" "(D-6c) context-md.md 트리거 (d) criticFindings 비어있지 않음"
+# D-6d state-schema.md 8-c-bis ↔ critic.yml verdict 계약 잠금.
+#   8-c-bis 블록(## 8-c-bis ~ 다음 ## 헤더)만 추출해 검사. (앵커가 사라지면 awk 가
+#   파일 끝까지 삼키지 않도록, 다음 '## ' 헤더를 터미네이터로 쓴다 — 특정 섹션명에 비의존.)
+SCHEMA_8CBIS="$(awk '/^## 8-c-bis/{f=1; next} f&&/^## /{exit} f{print}' "$SCHEMA_MD")"
+# D-6d-1 死문 필드 criticVerdict 재유입 차단 (맞는 검증 — 유지).
+if printf '%s' "$SCHEMA_8CBIS" | grep -q 'criticVerdict'; then
+  fail "(D-6d-1) state-schema 8-c-bis criticVerdict 死문 부재"; else pass "(D-6d-1) state-schema 8-c-bis criticVerdict 死문 부재"; fi
+# D-6d-2 GHA 계약 잠금 (#47 핵심): aggregate.verdict 의 enum 예시가 critic 종합 verdict
+#   (pass|concerns|blocker)로 존재하고, 실제 소비자 critic.yml 의 verdict allowlist(case)와
+#   토큰 집합이 정확히 일치하는지 검증. 문서↔GHA 한쪽만 바뀌면 FAIL → 런타임 계약 깨짐 사전 차단.
+#   (이번 #47 의 critical: 8-c-bis enum 을 approved/changes-requested/escalated 로 바꿔
+#    critic.yml allowlist 와 어긋났는데 기존 테스트가 못 잡았음 → 이 테스트가 그걸 잠근다.)
+CRITIC_YML="$TEST_DIR/../../../../.github/workflows/critic.yml"
+# 8-c-bis 예시에서 "verdict": "a" | "b" | "c" 의 값 토큰만 추출(키 "verdict" 자체는 제외).
+#   colon 뒤의 값 부분만 잘라낸 뒤 따옴표 안 소문자 토큰을 모은다.
+schema_enum="$(printf '%s' "$SCHEMA_8CBIS" \
+  | grep -E '"verdict":' | sed -E 's/^.*"verdict":[[:space:]]*//' \
+  | grep -oE '"[a-z]+"' | tr -d '"' | sort -u | paste -sd'|' -)"
+if [ -f "$CRITIC_YML" ]; then
+  # critic.yml 의 allowlist case 라인(예: `pass|concerns|blocker) ;;`)에서 토큰 추출.
+  #   indeterminate 는 allowlist 통과값이 아니라 fallback(*) 흡수값이므로 계약 enum 에서 제외.
+  yml_enum="$(grep -oE '^[[:space:]]*[a-z|]+\)[[:space:]]*;;' "$CRITIC_YML" \
+    | grep -F 'pass' | grep -oE '[a-z]+' | grep -v '^indeterminate$' | sort -u | paste -sd'|' -)"
+  if [ -n "$schema_enum" ] && [ "$schema_enum" = "$yml_enum" ]; then
+    pass "(D-6d-2) 8-c-bis aggregate.verdict enum($schema_enum) ↔ critic.yml allowlist($yml_enum) 일치"
+  else
+    fail "(D-6d-2) 8-c-bis aggregate.verdict enum($schema_enum) ≠ critic.yml allowlist($yml_enum) — 런타임 계약 불일치"
+  fi
+else
+  fail "(D-6d-2) critic.yml 존재: $CRITIC_YML"
+fi
+# D-6e Phase 3 동기 — plugin context-md.md ⟺ tmpl 둘 다 정정 트리거 (d) 문구 존재(드리프트 재발 차단)
+if [ -f "$TMPL" ]; then
+  hasE 'criticFindings.* 가 비어있지 않' "$TMPL" "(D-6e) tmpl 트리거 (d) criticFindings 비어있지 않음(드리프트 동기)"
+  # 死문 필드 criticVerdict 재유입 차단은 라이브 영역(10-a 트리거 블록)에 한정.
+  #   R11 이력 노트(minor-gaps)는 死문 정정 블레임으로 그 단어를 정당히 인용하므로 제외한다.
+  #   터미네이터는 다음 '### ' 헤더 — 특정 문구('클린 성공')에 비의존(편집 견고화, #47 [minor]).
+  TMPL_10A="$(awk '/^#### 10-a\./{f=1; next} f&&/^### /{exit} f{print}' "$TMPL")"
+  if printf '%s' "$TMPL_10A" | grep -q 'criticVerdict'; then
+    fail "(D-6e) tmpl 10-a 트리거 criticVerdict 死문 부재"; else pass "(D-6e) tmpl 10-a 트리거 criticVerdict 死문 부재"; fi
+else
+  fail "(D-6e) tmpl 파일 존재: $TMPL"
+fi
 
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
