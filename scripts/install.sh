@@ -155,9 +155,11 @@ with open(path) as f:
 def get_scalar(key, default=''):
     # 따옴표로 감싼 값 우선 매칭 — 내부 # 허용 (예: slack-channel: "#alerts")
     # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 개행 포함이라 값이 비면 다음 줄 키를 흡수.
-    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', content, re.MULTILINE)
+    # 닫는 따옴표 뒤 줄끝에 선택적 인라인 주석((?:#.*)?$) 허용 — `key: "X"  # 주석` 에서
+    # 따옴표 분기 실패 → 무따옴표 폴백 빈 캡처되는 값 소실 방지(#52, 리더와 parity).
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*(?:#.*)?$', content, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", content, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*(?:#.*)?$", content, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
     # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
@@ -180,9 +182,11 @@ pipeline_block = ps.group(1) if ps else ''
 def get_scalar_in(block, key, default=''):
     # 따옴표로 감싼 값 우선 매칭 — 내부 # 허용
     # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 개행 포함이라 값이 비면 다음 줄 키를 흡수.
-    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', block, re.MULTILINE)
+    # 닫는 따옴표 뒤 줄끝에 선택적 인라인 주석((?:#.*)?$) 허용 — `key: "X CI"  # 주석` 에서
+    # 따옴표 분기 실패 → 무따옴표 폴백 빈 캡처되는 값 소실 방지(#52, 리더와 parity).
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*(?:#.*)?$', block, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", block, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*(?:#.*)?$", block, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
     # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
@@ -305,14 +309,21 @@ resolved_area_ids = {}  # name → hash (legacy 먼저 채우고 modules 값으�
 # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-ids 항목이 다음 줄 항목 값을 흡수하는 것 방지.
 # 값 캡처 non-greedy + 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `Backend: be11  # 주석`
 # 에서 값이 사라지는 것 방지(#52). 리더 area_id() 와 동일 패턴(parity).
-for am in re.finditer(r'^\s+([A-Za-z0-9_]+):[ \t]*"?([^"#\n]+?)"?\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
+# 키 패턴: 리더 area_id() 는 re.escape(name) 으로 임의 모듈명(하이픈 포함 Frontend-1 등)을
+# 매칭한다 → install 키 집합도 동일하게 [^\s:#]+ 로 일반화(공백·콜론·# 만 제외)해 비대칭 제거.
+for am in re.finditer(r'^\s+([^\s:#]+):[ \t]*"?([^"#\n]+?)"?\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
     resolved_area_ids[am.group(1).strip()] = am.group(2).strip().strip("'\"")
 # modules[].area-id 우선 — 비어있지 않은 값만 덮어씀(빈 값은 legacy 폴백 유지)
 for mname, mhash in module_area_ids.items():
     if mhash:
         resolved_area_ids[mname] = mhash
+# CMD_AREA_ID_<UPPER> emit — 이 출력은 셸에서 eval 되므로 변수명이 유효한 셸 식별자여야 한다.
+# 하이픈 등 식별자 비허용 문자는 '_' 로 치환(예: Frontend-1 → CMD_AREA_ID_FRONTEND_1).
+# (resolved_area_ids 딕셔너리 키는 실제 모듈명 그대로 — 리더 area-id.<Name> 와 값 parity 유지.
+#  eval 안전 보장이 우선이라 변수명만 sanitize.)
 for area_name, area_hash in resolved_area_ids.items():
-    print(f"CMD_AREA_ID_{area_name.upper()}='{area_hash}'")
+    var_suffix = re.sub(r'[^A-Za-z0-9_]', '_', area_name.upper())
+    print(f"CMD_AREA_ID_{var_suffix}='{area_hash}'")
 
 # plan 서브섹션 — critic 토글 (claude-commands 블록 내부에서만 탐색)
 # plan: 의 들여쓰기를 \1 로 캡처해, 같은(또는 더 얕은) 들여쓰기의 다음 키에서 종료한다.

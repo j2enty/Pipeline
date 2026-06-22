@@ -106,9 +106,12 @@ def get_scalar_in(block, key, default=''):
     """따옴표 우선(내부 # 허용) → 무따옴표 폴백(인라인 주석 제거). install.sh 와 동일."""
     # 값 앞 공백은 [ \t]* (개행 비흡수). \s* 는 python 에서 개행을 포함해, 값이 비면
     # 다음 줄 키를 빨아들이는 버그가 있다(예: area-id 빈 필드가 다음 줄 planner: 를 흡수).
-    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*$', block, re.MULTILINE)
+    # 닫는 따옴표 뒤 줄끝에 선택적 인라인 주석((?:#.*)?$) 허용 — `key: "X CI"  # 주석` 에서
+    # 따옴표 분기가 매칭 실패해 무따옴표 폴백이 첫 글자 `"` 로 빈 캡처되는 값 소실 방지(#52).
+    # 따옴표 안쪽 # 은 그대로 보존([^"\n]* 가 닫는 따옴표까지 캡처 — slack-channel: "#x" 등).
+    mq = re.search(rf'^\s+{re.escape(key)}:[ \t]*"([^"\n]*)"\s*(?:#.*)?$', block, re.MULTILINE)
     if not mq:
-        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*$", block, re.MULTILINE)
+        mq = re.search(rf"^\s+{re.escape(key)}:[ \t]*'([^'\n]*)'\s*(?:#.*)?$", block, re.MULTILINE)
     if mq:
         return mq.group(1).strip()
     m = re.search(rf'^\s+{re.escape(key)}:[ \t]*([^"#\n]*)', block, re.MULTILINE)

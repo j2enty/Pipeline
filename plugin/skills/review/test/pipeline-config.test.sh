@@ -326,6 +326,37 @@ assert_key area-id.Frontend fe-legacy "$INLINE_FIX"
 # 대조군: 주석 없는 iOS 정상
 assert_key module.iOS.ci-workflow-name "iOS CI" "$INLINE_FIX"
 rm -f "$INLINE_FIX"
+
+# ── 따옴표 값 + 인라인 주석 / 하이픈 키 parity 회귀 (#52 이중리뷰) ─────────────
+# get_scalar_in 따옴표 분기 `"([^"\n]*)"\s*$` 가 `key: "X"  # 주석` 에서 뒤 주석 때문에
+# 매칭 실패 → 무따옴표 폴백이 빈 캡처로 값 소실. + legacy area-ids 하이픈 키.
+# (이 fail 은 따옴표 분기 수정/하이픈 키 패턴 되돌리면 빈값으로 재현.)
+QC_FIX="$(mktemp)"
+cat > "$QC_FIX" <<'EOF'
+project:
+  owner: "RedOrg"  # 따옴표+주석
+  slack-channel: "#blue-alerts"  # 따옴표 안 # 보존 + 뒤 주석
+modules:
+  - name: Backend
+    ci-workflow-name: "Backend CI"  # 따옴표+주석
+    area-id: "be-mod"  # 따옴표+주석
+claude-commands:
+  enabled: true
+  project-name: "Blue Proj"  # 따옴표+주석
+  area-ids:
+    Frontend-1: feh   # 하이픈 키 + 주석
+EOF
+# 따옴표+주석 스칼라 — 값 보존
+assert_key owner RedOrg "$QC_FIX"
+assert_key project-name "Blue Proj" "$QC_FIX"
+# 대조군: 따옴표 안 # 은 그대로
+assert_key slack-channel "#blue-alerts" "$QC_FIX"
+# per-module 따옴표+주석 (리더 get_scalar_in 경로)
+assert_key module.Backend.ci-workflow-name "Backend CI" "$QC_FIX"
+assert_key module.Backend.area-id be-mod "$QC_FIX"
+# 하이픈 legacy area-ids 키
+assert_key area-id.Frontend-1 feh "$QC_FIX"
+rm -f "$QC_FIX"
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"

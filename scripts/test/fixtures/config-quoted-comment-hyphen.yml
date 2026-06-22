@@ -1,0 +1,21 @@
+# 따옴표 값 + 인라인 주석 / 하이픈 area-ids 키 parity 회귀 픽스처(#52 이중리뷰).
+#   (1) 따옴표 분기(get_scalar/get_scalar_in)가 닫는 따옴표 뒤 인라인 주석에서
+#       값을 잃지 않는지 — `key: "X"  # 주석` 에서 리더==install 동일값.
+#   (2) area-ids 의 하이픈 키(Frontend-1)를 install 도 매칭하는지(리더와 비대칭 제거).
+#   대조군: 따옴표 안쪽 # (slack-channel: "#x") 는 그대로 보존돼야 함.
+project:
+  owner: "RedOrg"  # 따옴표+주석
+  slack-channel: "#blue-alerts"  # 따옴표 안 # 보존 + 뒤 주석
+modules:
+  - name: Backend
+    ci-workflow-name: "Backend CI"  # 따옴표+주석
+    area-id: "be-mod"  # 따옴표+주석
+  - name: iOS
+    ci-workflow-name: "iOS CI"
+modules-ignore: []
+claude-commands:
+  enabled: true
+  project-name: "Blue Proj"  # 따옴표+주석
+  area-ids:
+    Frontend-1: feh   # 하이픈 키 + 주석
+    Backend: bb22
