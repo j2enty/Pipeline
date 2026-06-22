@@ -304,6 +304,75 @@ assert_key module.Backend.area-id be-mod "$QC_FIX"
 # 하이픈 legacy area-ids 키
 assert_key area-id.Frontend-1 feh "$QC_FIX"
 rm -f "$QC_FIX"
+
+# ── 따옴표 값 안 # 보존 회귀 (#57) ──────────────────────────────────
+# modules 블록 전용 추출(name / legacy area-ids)이 따옴표로 감싼 값 안의 # 를
+# 주석으로 오인해 자르면 안 된다(`name: "a#b"` → 'a#b'). 무따옴표 인라인 주석은 유지.
+H57_FIX="$(mktemp)"
+cat > "$H57_FIX" <<'EOF'
+project:
+  owner: RedOrg
+modules:
+  - name: "a#b"
+    ci-workflow-name: "CI#1"
+    area-id: "h#1"
+  - name: Plain  # 무따옴표 인라인 주석(유지)
+    area-id: pid  # 주석
+claude-commands:
+  enabled: true
+  area-ids:
+    Frontend: "v#1"
+    Legacy: lv1  # 주석
+EOF
+# 따옴표 안 # 보존 — module_blocks name (a#b 가 살아있어야 module.a#b.* 도 동작)
+h57_list="$(PIPELINE_CONFIG="$H57_FIX" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+[ "$h57_list" = "a#b,Plain," ] && pass "따옴표 안 # 보존: --list-modules == 'a#b,Plain'" || fail "따옴표 안 # name 보존" "실제='$h57_list'"
+# per-module 따옴표 안 # (리더 get_scalar_in 경로 — 이미 보존이지만 parity 확인)
+assert_key "module.a#b.ci-workflow-name" "CI#1" "$H57_FIX"
+assert_key "module.a#b.area-id" "h#1" "$H57_FIX"
+# legacy area-ids 맵 따옴표 안 # 보존
+assert_key area-id.Frontend "v#1" "$H57_FIX"
+# 무따옴표 인라인 주석 무회귀(#52)
+assert_key area-id.Legacy lv1 "$H57_FIX"
+assert_key module.Plain.area-id pid "$H57_FIX"
+rm -f "$H57_FIX"
+
+# ── 빈 따옴표 '' / "" parity 회귀 (#57 후속, Claude major) ─────────────
+# 빈 단일/이중 따옴표가 리터럴 ''(2글자)로 새면 안 된다 — 빈값이어야 함.
+# 또 모듈 area-id: '' + legacy area-ids 폴백 동시 존재 시 '' 가 legacy 를 덮으면 안 됨.
+EQ_FIX="$(mktemp)"
+cat > "$EQ_FIX" <<'EOF'
+project:
+  owner: RedOrg
+modules:
+  - name: Backend
+    area-id: ''
+    ci-workflow-name: ''
+  - name: Admin
+    area-id: ""
+claude-commands:
+  enabled: true
+  area-ids:
+    Backend: belegacy
+    KSingle: ''
+    KDouble: ""
+EOF
+# 빈 따옴표 → 빈값(리터럴 '' 아님). 모듈 area-id '' + legacy → legacy 폴백.
+assert_key module.Backend.area-id belegacy "$EQ_FIX"   # '' 가 legacy 안 덮음
+assert_key module.Backend.ci-workflow-name "" "$EQ_FIX" # '' → 빈값
+assert_key module.Admin.area-id "" "$EQ_FIX"            # "" → 빈값(legacy 없음)
+assert_key area-id.KSingle "" "$EQ_FIX"                 # 맵 '' → 빈값(리터럴 '' 아님)
+assert_key area-id.KDouble "" "$EQ_FIX"                 # 맵 "" → 빈값
+rm -f "$EQ_FIX"
+
+# ── 미종결 따옴표 모듈 — stderr 경고(조용한 누락 방지, #57 minor) ──────────
+MW_FIX="$(mktemp)"
+printf 'modules:\n  - name: "ab\n  - name: Good\n' > "$MW_FIX"
+mw_list="$(PIPELINE_CONFIG="$MW_FIX" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+[ "$mw_list" = "Good," ] && pass "미종결 따옴표: 정상 모듈(Good)은 유지" || fail "미종결 따옴표 정상모듈 유지" "실제='$mw_list'"
+mw_err="$(PIPELINE_CONFIG="$MW_FIX" bash "$READER" --list-modules 2>&1 >/dev/null)"
+printf '%s' "$mw_err" | grep -q "모듈 name 파싱 실패" && pass "미종결 따옴표: stderr 경고 발생" || fail "미종결 따옴표 stderr 경고" "stderr='$mw_err'"
+rm -f "$MW_FIX"
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"

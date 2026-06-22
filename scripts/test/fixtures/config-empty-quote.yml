@@ -1,0 +1,21 @@
+# 빈 따옴표 '' / "" parity 회귀 픽스처(#57 후속, Claude major).
+# 빈 단일/이중 따옴표가 리터럴 ''(2글자)로 새면 안 된다(빈값이어야 함).
+# 모듈 area-id: '' + legacy area-ids 폴백 동시 존재 시 '' 가 legacy 를 덮으면 안 됨.
+#   Backend: 모듈 area-id '' (빈) → legacy belegacy 로 폴백돼야 함.
+#   Admin:   모듈 area-id "" (빈) + legacy 없음 → 빈값.
+project:
+  owner: RedOrg
+modules:
+  - name: Backend
+    area-id: ''
+    ci-workflow-name: ''
+  - name: Admin
+    area-id: ""
+    ci-workflow-name: "Admin CI"
+modules-ignore: []
+claude-commands:
+  enabled: true
+  area-ids:
+    Backend: belegacy
+    KSingle: ''
+    KDouble: ""

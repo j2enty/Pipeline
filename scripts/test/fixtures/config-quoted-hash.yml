@@ -1,0 +1,20 @@
+# 따옴표 값 안 # 보존 회귀 픽스처(#57).
+# modules 블록 전용 추출(name / ci-workflow-name / area-id / area-ids 맵)이 따옴표로
+# 감싼 값 안의 # 를 주석으로 오인해 자르면 안 된다. 무따옴표 인라인 주석은 #52 대로 유지.
+#   a#b:   name·ci·area-id 전부 따옴표 안 # → 보존돼야 함.
+#   Plain: 무따옴표 + 인라인 주석 → 주석 제거(#52 무회귀).
+project:
+  owner: RedOrg
+modules:
+  - name: "a#b"
+    ci-workflow-name: "CI#1"
+    area-id: "h#1"
+  - name: Plain  # 무따옴표 인라인 주석(유지)
+    ci-workflow-name: Plain CI  # 주석
+    area-id:
+modules-ignore: []
+claude-commands:
+  enabled: true
+  area-ids:
+    Frontend: "v#1"
+    Legacy: lv1  # 주석
