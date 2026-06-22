@@ -27,6 +27,7 @@ gh issue edit <sub-N> --repo "$OWNER/<영역>" --add-label blocked
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
+SLACK_TOKEN_KEY="$(bash "$CFG" slack-token-key)"
 SLACK_CHANNEL="$(bash "$CFG" slack-channel)"
 
 # sub-issue 의 assignees 조회
@@ -65,11 +66,16 @@ COMMENT_URL=$(gh issue comment <sub-N> --repo "$OWNER/<영역>" --body "$COMMENT
 
 # Slack 이중 발송 (보조 채널 — 발송 실패해도 파이프라인 차단 안 함).
 # 메시지는 짧게: 제목 + 컨텍스트 1~3줄 + GitHub 링크. 풀 내용은 위 GitHub 코멘트가 기록.
-#   slack-notify.sh 는 env 의 webhook 을 읽는다. config slack-token-key(민감키, --dump 미노출)가
-#   가리키는 env 변수가 미설정이면 헬퍼가 graceful skip → 파이프라인 차단 없음.
+#   SLACK_TOKEN_KEY(slack-token-key 가 준 env 이름표, 민감키·--dump 미노출)를 헬퍼에 env 로
+#   넘긴다. 간접확장(env 이름표를 실제 값으로 푸는 bash 전용 문법)은 헬퍼(slack-notify.sh)
+#   안에서 한다 — 헬퍼가 bash shebang 이라 안전. 이 펜스는 사용자 셸(zsh 가능)로 실행되므로
+#   간접확장을 여기 두면 zsh 에서 "bad substitution" 으로 깨진다(그래서 펜스엔 안 둔다).
+#   헬퍼는 SLACK_TOKEN_KEY 역참조 우선, 없으면 SLACK_WEBHOOK_URL 폴백, 둘 다 없으면
+#   graceful skip → 파이프라인 차단 없음.
 SLACK_CONTEXT=$(printf '기능: %s\n실패 유형: %s %s/%s\n에러: %s' \
   "<slug>" "<카테고리>" "<count>" "<limit>" "<errorSummary.message 1줄>")
-"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh" "/kickoff 중단 — <영역>" "$COMMENT_URL" "$SLACK_CONTEXT"
+SLACK_TOKEN_KEY="$SLACK_TOKEN_KEY" \
+  "${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh" "/kickoff 중단 — <영역>" "$COMMENT_URL" "$SLACK_CONTEXT"
 ```
 
 **진단 힌트**: executor 의 `errorSummary.message` + `rawTail` 이 이미 구체적이므로 일반화
@@ -81,7 +87,7 @@ SLACK_CONTEXT=$(printf '기능: %s\n실패 유형: %s %s/%s\n에러: %s' \
 **Slack 이중 발송 규칙**:
 - 메시지 형식: 제목 + 컨텍스트 (실패 유형·에러 요약) + GitHub 코멘트 링크. 풀 컨텍스트
   중복 금지 (GitHub 이 영구 기록)
-- config `slack-token-key`(가 가리키는 env 변수) 미설정 시 헬퍼가 graceful skip → 파이프라인 차단 없음
+- 펜스는 `SLACK_TOKEN_KEY`(slack-token-key 가 준 env 이름표)를 헬퍼에 env 로 넘긴다. 간접확장(bash 전용 문법)은 헬퍼(bash shebang) 안에서 수행 — 펜스엔 간접확장을 두지 않아 zsh 에서도 안전. 헬퍼는 `SLACK_TOKEN_KEY` 역참조 우선, 없으면 `SLACK_WEBHOOK_URL` 폴백, 둘 다 미설정 시 graceful skip → 파이프라인 차단 없음
 - Slack 발송 실패도 차단 없음 (보조 채널)
 - GitHub 코멘트 발송이 1차, Slack 은 항상 그 뒤 호출 (순서 고정 — Slack 먼저 가면 사용자가
   빈 링크 클릭 위험)

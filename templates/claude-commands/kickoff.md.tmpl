@@ -537,16 +537,22 @@ COMMENT_URL=$(gh issue comment <sub-N> --repo __ORG__/<영역> --body "$COMMENT"
 
 # Slack __SLACK_CHANNEL__ 이중 발송 (보조 채널 — 발송 실패해도 파이프라인 차단 안 함)
 # 메시지는 짧게: 제목 + 컨텍스트 1~3줄 + GitHub 링크. 풀 내용은 위 GitHub 코멘트가 기록.
+#   SLACK_TOKEN_KEY(=env 이름표 __SLACK_TOKEN_KEY__)를 헬퍼에 env 로 넘긴다. 간접확장(env
+#   이름표를 실제 값으로 푸는 bash 전용 문법)은 헬퍼(slack-notify.sh) 안에서 한다 — 헬퍼가
+#   bash shebang 이라 안전. 이 펜스는 사용자 셸(zsh 가능)로 실행되므로 간접확장을 여기 두지
+#   않는다. 헬퍼는 SLACK_TOKEN_KEY 역참조 우선, 없으면 SLACK_WEBHOOK_URL(GHA 직접 주입) 폴백,
+#   둘 다 없으면 graceful skip → 차단 없음.
 SLACK_CONTEXT=$(printf '기능: %s\n실패 유형: %s %s/%s\n에러: %s' \
   "<slug>" "<카테고리>" "<count>" "<limit>" "<errorSummary.message 1줄>")
-.omc/scripts/slack-notify.sh "/kickoff 중단 — <영역>" "$COMMENT_URL" "$SLACK_CONTEXT"
+SLACK_TOKEN_KEY=__SLACK_TOKEN_KEY__ \
+  .omc/scripts/slack-notify.sh "/kickoff 중단 — <영역>" "$COMMENT_URL" "$SLACK_CONTEXT"
 ```
 
 **진단 힌트**: executor의 `errorSummary.message` + `rawTail` 이 이미 구체적이므로 일반화 힌트 표 없음. 사용자는 에러 메시지로 검색·진단. 2026-04-20 파일럿 실측: 표 9항목 중 실제 에스컬(Android JDK 미설치) 매치 0건.
 
 **Slack 이중 발송 규칙**:
 - 메시지 형식: 제목 + 컨텍스트 (실패 유형·에러 요약) + GitHub 코멘트 링크. 풀 컨텍스트 중복 금지 (GitHub 이 영구 기록)
-- `__SLACK_TOKEN_KEY__` 미설정 시 헬퍼가 graceful skip → 파이프라인 차단 없음
+- 펜스는 `SLACK_TOKEN_KEY`(=env 이름표 `__SLACK_TOKEN_KEY__`)를 헬퍼에 env 로 넘긴다. 간접확장(bash 전용 문법)은 헬퍼(bash) 안에서 — 펜스엔 간접확장 없어 zsh 안전. 헬퍼는 `SLACK_TOKEN_KEY` 역참조 우선, 없으면 `SLACK_WEBHOOK_URL` 폴백, 둘 다 미설정 시 graceful skip → 파이프라인 차단 없음
 - Slack 발송 실패도 차단 없음 (보조 채널)
 - GitHub 코멘트 발송이 1차, Slack 은 항상 그 뒤 호출 (순서 고정 — Slack 먼저 가면 사용자가 빈 링크 클릭 위험)
 

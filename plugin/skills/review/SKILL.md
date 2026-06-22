@@ -627,11 +627,15 @@ COMMENT_URL=$(gh pr comment <N> --repo "$OWNER/<영역>" --body "$COMMENT")
 # )
 
 # Slack 이중 발송 (보조 채널 — 발송 실패해도 파이프라인 차단 안 함)
-#   slack-notify.sh 는 토큰 키(env 변수 이름표)를 받아 env 에서 실제 webhook/토큰을 읽는다.
-#   slack-token-key 미설정이면 헬퍼가 graceful skip → 파이프라인 차단 없음.
+#   SLACK_TOKEN_KEY(slack-token-key 가 준 env 이름표)를 헬퍼에 env 로 넘긴다. 간접확장(env
+#   이름표를 실제 값으로 푸는 bash 전용 문법)은 헬퍼(slack-notify.sh) 안에서 한다 — 헬퍼가
+#   bash shebang 이라 안전. 이 펜스는 사용자 셸(zsh 가능)로 실행되므로 간접확장을 여기 두면
+#   zsh 에서 "bad substitution" 으로 깨진다(그래서 펜스엔 안 둔다). 헬퍼는 SLACK_TOKEN_KEY
+#   역참조 우선, 없으면 SLACK_WEBHOOK_URL 폴백, 둘 다 없으면 graceful skip.
 SLACK_CONTEXT=$(printf '대상: %s\n실패 유형: %s %s/%s\n원인: %s' \
   "<PR #N or Parent #parent-N>" "<카테고리>" "<count>" "<limit>" "<핵심 요약>")
-"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh" "/review 중단 — <영역 or cross-area>" "$COMMENT_URL" "$SLACK_CONTEXT"
+SLACK_TOKEN_KEY="$SLACK_TOKEN_KEY" \
+  "${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh" "/review 중단 — <영역 or cross-area>" "$COMMENT_URL" "$SLACK_CONTEXT"
 ```
 
 > **순서 고정**: GitHub 코멘트 발송이 1차, Slack 은 항상 그 뒤 호출 (Slack 먼저 가면 사용자가 빈 링크 클릭 위험).

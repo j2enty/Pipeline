@@ -518,7 +518,7 @@ executor가 `status=escalated`로 반환했거나, fixing/transient 상한을 �
 
 핵심:
 - **개별 PR/sub-issue 실패** → 해당 sub-issue 에 `blocked` 라벨 + 에스컬 코멘트.
-- **Slack 이중 발송** — GitHub 코멘트가 1차, `"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh"` 가 그 뒤(순서 고정). config `slack-token-key`(가 가리키는 env webhook) 미설정 시 헬퍼가 graceful skip → 파이프라인 차단 없음.
+- **Slack 이중 발송** — GitHub 코멘트가 1차, `"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh"` 가 그 뒤(순서 고정). 에스컬 펜스(reference/escalation.md 9-b)는 config `slack-token-key`(env 이름표)를 `SLACK_TOKEN_KEY` env 로 헬퍼에 넘기고, 간접확장(env 이름표를 실제 값으로 푸는 bash 전용 문법)은 헬퍼 안에서 한다(헬퍼가 bash shebang — 펜스가 zsh 여도 안전). 헬퍼는 `SLACK_TOKEN_KEY` 역참조 우선, 없으면 `SLACK_WEBHOOK_URL` 폴백, 둘 다 미설정 시 graceful skip → 파이프라인 차단 없음.
 - **영역별 독립** (G3) — 한 영역 에스컬돼도 나머지 영역은 계속(lead 선행 제외 — 8-b).
 
 ### 10. `/review` 자동 체이닝 (G18)
