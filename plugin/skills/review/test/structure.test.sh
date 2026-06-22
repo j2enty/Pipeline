@@ -207,6 +207,28 @@ else
   fail "(D-6e) tmpl 파일 존재: $TMPL"
 fi
 
+echo -e "\n${C_CYAN}── (D-8) aggregate.verdict write 단계 존재 (#54) ──${C_NC}"
+# #54 critical: aggregate.verdict 를 상태파일에 쓰는 실행 단계가 처음부터 없어 항상 null →
+#   critic.yml allowlist 미스 → indeterminate → critic 자동머지 영구 차단. 8-c-bis 에 write 추가.
+#   plugin SKILL.md + tmpl 둘 다 jq 로 .aggregate.verdict 를 세팅하는 실행 블록이 있어야 한다.
+#   (8-c-bis 블록만 추출해 검사 — 다음 '#### ' 헤더를 터미네이터로.)
+SKILL_8CBIS="$(awk '/^#### 8-c-bis/{f=1; next} f&&/^#### /{exit} f{print}' "$SKILL")"
+TMPL_8CBIS="$(awk '/^#### 8-c-bis/{f=1; next} f&&/^#### /{exit} f{print}' "$TMPL")"
+# jq 로 .aggregate.verdict 를 대입하는 실행 패턴 존재(공백 변형 허용).
+if printf '%s' "$SKILL_8CBIS" | grep -qE '\.aggregate\.verdict[[:space:]]*='; then
+  pass "(D-8) SKILL 8-c-bis aggregate.verdict write 실행 단계 존재"
+else fail "(D-8) SKILL 8-c-bis aggregate.verdict write 실행 단계 존재"; fi
+if printf '%s' "$SKILL_8CBIS" | grep -qE 'jq .*--argjson|jq .*--arg cv'; then
+  pass "(D-8) SKILL 8-c-bis jq 트랜잭션(verdict 캡처) 존재"
+else fail "(D-8) SKILL 8-c-bis jq 트랜잭션(verdict 캡처) 존재"; fi
+if printf '%s' "$TMPL_8CBIS" | grep -qE '\.aggregate\.verdict[[:space:]]*='; then
+  pass "(D-8) tmpl 8-c-bis aggregate.verdict write 실행 단계 존재(드리프트 동기)"
+else fail "(D-8) tmpl 8-c-bis aggregate.verdict write 실행 단계 존재(드리프트 동기)"; fi
+# 원자적 temp+mv 규칙 준수(L250) — write 블록에 mv 가 있어야 partial write 방지.
+if printf '%s' "$SKILL_8CBIS" | grep -qE 'mv .*STATE_FILE|mv "\$TEMP"'; then
+  pass "(D-8) SKILL 8-c-bis 원자적 temp+mv 준수"
+else fail "(D-8) SKILL 8-c-bis 원자적 temp+mv 준수"; fi
+
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"

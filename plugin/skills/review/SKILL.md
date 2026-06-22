@@ -282,7 +282,7 @@ if CRITIC_ONLY:
     run_aggregate_review()                # 8단계 critic 만 곧장 실행
 ```
 
-- critic-only에서도 **유지**: 2단계(대상 PR 수집), 3단계(플랜 캐시 — cross-area 플랜 일관성 입력), 8단계(critic), 8-c(parent 코멘트), 상태 파일의 `aggregate.verdict` 기록(후속 GHA가 이 값을 읽으므로 반드시 써야 함)
+- critic-only에서도 **유지**: 2단계(대상 PR 수집), 3단계(플랜 캐시 — cross-area 플랜 일관성 입력), 8단계(critic), 8-c(parent 코멘트), **8-c-bis(상태 파일 `aggregate.verdict`·`criticFindings` 기록 — 후속 GHA가 verdict 를 읽어 머지 분기하므로 반드시 실행)**
 - critic-only에서 **스킵**: 개별 리뷰(`run_individual_review`) 전부, 7단계(개별 GitHub Review 제출), 7-h(Status `Bot Review → In Review` 전환)
 - 배경: critic 발사 시점엔 개별 PR이 이미 전부 APPROVED 라 개별 재리뷰는 낭비. critic-only로 개별 단계만 빼서 시간 단축 (20~30분 → 5~10분)
 
@@ -553,9 +553,30 @@ gh pr comment <N> --repo "$OWNER/<영역>" \
   --body "ℹ️ 종합 리뷰는 <PARENT_COMMENT_URL> 참조"
 ```
 
-#### 8-c-bis. critic findings 상태 파일 기록 (schemaVersion 1.1)
+#### 8-c-bis. critic verdict·findings 상태 파일 기록 (schemaVersion 1.1)
 
-위 8-c 의 parent 코멘트 렌더와 **별개로**, critic 이 반환한 finding 을 상태 파일에 구조화 기록한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용). 이때 `criticFindings` 만 추가하며, `aggregate.verdict`(critic 종합 verdict `pass`/`concerns`/`blocker` — `critic.yml` 이 읽어 머지 분기)는 별도 기록 경로라 여기서 덮지 않는다. `aggregate.criticFindings[]` 구조·기록 규칙은 [상태 파일 스키마 §8-c-bis](reference/state-schema.md) 참조.
+위 8-c 의 parent 코멘트 렌더와 **별개로**, 8-b critic Agent 가 반환한 **verdict 와 findings 를 상태 파일 `aggregate` 에 한 트랜잭션으로 기록**한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용).
+
+- `aggregate.verdict` ← 8-b critic 반환 verdict(`pass`/`concerns`/`blocker`). **`critic.yml` 이 이 값을 읽어 머지 분기**하며 allowlist(`pass`/`concerns`/`blocker`) 밖이면 indeterminate → fail-closed 로 머지 차단. **이 단계가 verdict 를 쓰는 유일한 실행 지점**이라 빠지면 verdict 가 초기값 null 로 남아 critic 자동머지가 영구 차단된다(#54).
+- `aggregate.criticFindings` ← 8-b critic 반환 `findings[]`(0건이면 `[]`).
+- 개별 PR verdict(`prs.<area>.verdict`: `approved`/`request_changes`)와는 **별개**다 — `aggregate.verdict` 는 critic 종합 verdict 다.
+
+```bash
+# 8-b critic Agent 가 반환한 verdict(pass|concerns|blocker)·findings 를 캡처해 변수에 둔다.
+#   CRITIC_VERDICT  : 8-b 반환 JSON 의 .verdict (반드시 pass|concerns|blocker 중 하나)
+#   CRITIC_FINDINGS : 8-b 반환 JSON 의 .findings 배열(JSON 문자열, 0건이면 '[]')
+STATE_FILE=".omc/state/reviews/<slug>.json"
+CRITIC_VERDICT="<8-b critic 반환 verdict: pass|concerns|blocker>"
+CRITIC_FINDINGS='<8-b critic 반환 findings[] JSON, 0건이면 []>'
+
+# verdict·criticFindings 를 한 jq 트랜잭션으로 기록. 원자적 temp + mv (L250 규칙 준수).
+TEMP="$STATE_FILE.tmp.$$"
+jq --arg cv "$CRITIC_VERDICT" --argjson cf "$CRITIC_FINDINGS" \
+  '.aggregate.verdict = $cv | .aggregate.criticFindings = $cf | .aggregate.completedAt = (now | todate)' \
+  "$STATE_FILE" > "$TEMP" && mv "$TEMP" "$STATE_FILE"
+```
+
+`aggregate.criticFindings[]` 구조·기록 규칙은 [상태 파일 스키마 §8-c-bis](reference/state-schema.md) 참조.
 
 #### 8-d. Critic 실패 처리
 
