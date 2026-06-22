@@ -304,6 +304,38 @@ assert_key module.Backend.area-id be-mod "$QC_FIX"
 # 하이픈 legacy area-ids 키
 assert_key area-id.Frontend-1 feh "$QC_FIX"
 rm -f "$QC_FIX"
+
+# ── 따옴표 값 안 # 보존 회귀 (#57) ──────────────────────────────────
+# modules 블록 전용 추출(name / legacy area-ids)이 따옴표로 감싼 값 안의 # 를
+# 주석으로 오인해 자르면 안 된다(`name: "a#b"` → 'a#b'). 무따옴표 인라인 주석은 유지.
+H57_FIX="$(mktemp)"
+cat > "$H57_FIX" <<'EOF'
+project:
+  owner: RedOrg
+modules:
+  - name: "a#b"
+    ci-workflow-name: "CI#1"
+    area-id: "h#1"
+  - name: Plain  # 무따옴표 인라인 주석(유지)
+    area-id: pid  # 주석
+claude-commands:
+  enabled: true
+  area-ids:
+    Frontend: "v#1"
+    Legacy: lv1  # 주석
+EOF
+# 따옴표 안 # 보존 — module_blocks name (a#b 가 살아있어야 module.a#b.* 도 동작)
+h57_list="$(PIPELINE_CONFIG="$H57_FIX" bash "$READER" --list-modules 2>/dev/null | tr '\n' ',')"
+[ "$h57_list" = "a#b,Plain," ] && pass "따옴표 안 # 보존: --list-modules == 'a#b,Plain'" || fail "따옴표 안 # name 보존" "실제='$h57_list'"
+# per-module 따옴표 안 # (리더 get_scalar_in 경로 — 이미 보존이지만 parity 확인)
+assert_key "module.a#b.ci-workflow-name" "CI#1" "$H57_FIX"
+assert_key "module.a#b.area-id" "h#1" "$H57_FIX"
+# legacy area-ids 맵 따옴표 안 # 보존
+assert_key area-id.Frontend "v#1" "$H57_FIX"
+# 무따옴표 인라인 주석 무회귀(#52)
+assert_key area-id.Legacy lv1 "$H57_FIX"
+assert_key module.Plain.area-id pid "$H57_FIX"
+rm -f "$H57_FIX"
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"

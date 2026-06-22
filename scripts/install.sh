@@ -192,6 +192,15 @@ def get_scalar_in(block, key, default=''):
     # 무따옴표 폴백 — [^"#\n] 로 인라인 주석(# 이후) 제거
     m = re.search(rf'^\s+{re.escape(key)}:[ \t]*([^"#\n]*)', block, re.MULTILINE)
     return m.group(1).strip().strip("'\"") if m and m.group(1).strip() else default
+
+# 따옴표 분기 우선 값 캡처 조각 — 따옴표 안 # 보존(#57). get_scalar_in 과 동일 철학:
+#   "..."  → 그룹1(닫는 따옴표까지, # 포함) / '...'  → 그룹2 / 무따옴표 → 그룹3([^"#\n]+? 비탐욕).
+# 줄끝 선택적 인라인 주석((?:#.*)?$)은 호출부 패턴이 붙인다. 리더 pipeline-config.sh 와 동일.
+QUOTED_VALUE = r'''(?:"([^"\n]+)"|'([^'\n]+)'|([^"#\n]+?))'''
+def pick_quoted_value(m):
+    v = m.group(1) if m.group(1) is not None else (
+        m.group(2) if m.group(2) is not None else m.group(3))
+    return v.strip() if v is not None else ''
 print(f"PIPELINE_REPO='{get_scalar_in(pipeline_block, 'repo')}'")
 print(f"PIPELINE_REF='{get_scalar_in(pipeline_block, 'ref', 'main')}'")
 
@@ -221,23 +230,23 @@ ms = re.search(r'^modules:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTA
 modules_block = ms.group(1) if ms else ''
 
 # 각 `- name:` 위치를 기준으로 블록 분할
-# 값 캡처 non-greedy + 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `- name: Backend  # 주석`
-# 에서 모듈이 통째로 사라져 MODULE_COUNT 가 어긋나는 footgun 방지(#52).
-# 모듈명에 '#' 없다는 전제(값 밖 # 만 주석). 리더 pipeline-config.sh 와 동일 패턴.
-name_iter = list(re.finditer(r'^\s+-\s+name:\s*"?([^"#\n]+?)"?\s*(?:#.*)?$', modules_block, re.MULTILINE))
+# 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52).
+# 무따옴표 모듈명에 # 가 오면 주석 경계(값 밖 # 만 주석). 따옴표로 감싸면 보존.
+# 리더 pipeline-config.sh module_blocks 와 동일 패턴(parity).
+name_iter = list(re.finditer(rf'^\s+-\s+name:\s*{QUOTED_VALUE}\s*(?:#.*)?$', modules_block, re.MULTILINE))
 names = []
 module_area_ids = {}  # name → modules[].area-id (legacy area-ids 맵보다 우선)
 for idx, m in enumerate(name_iter):
-    name = m.group(1).strip().strip("'\"")
+    name = pick_quoted_value(m)
     block_start = m.end()
     block_end = name_iter[idx + 1].start() if idx + 1 < len(name_iter) else len(modules_block)
     block = modules_block[block_start:block_end]
 
     # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 ci-workflow-name 이 다음 줄 키를 흡수하는 것 방지.
-    # 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `ci-workflow-name: Backend CI  # 주석`
-    # 에서 값이 사라지는 것 방지(#52). 캡처는 비탐욕 *? (빈 값 정상 동작 유지).
-    ci_m = re.search(r'^\s+ci-workflow-name:[ \t]*"?([^"#\n]*?)"?\s*(?:#.*)?$', block, re.MULTILINE)
-    ci = ci_m.group(1).strip().strip("'\"") if ci_m else ''
+    # 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52).
+    # 빈 값은 어느 분기도 매칭 안 됨(group3 은 1글자 이상) → ci_m None → '' (빈값 동작 유지).
+    ci_m = re.search(rf'^\s+ci-workflow-name:[ \t]*{QUOTED_VALUE}\s*(?:#.*)?$', block, re.MULTILINE)
+    ci = pick_quoted_value(ci_m) if ci_m else ''
 
     # strict-review-bot-check — 미지정 시 기본 true
     strict_m = re.search(r'^\s+strict-review-bot-check:\s*(\w+)', block, re.MULTILINE)
@@ -247,9 +256,10 @@ for idx, m in enumerate(name_iter):
 
     # area-id — 모듈 블록 내부 값(있으면). 없으면 빈 값 → 아래 area-ids 맵 폴백.
     # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-id 가 다음 줄 키를 흡수하면 legacy 폴백이 깨짐.
-    # 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `area-id: be11  # 주석` 에서 값이 사라지는 것 방지(#52).
-    aid_m = re.search(r'^\s+area-id:[ \t]*"?([^"#\n]*?)"?\s*(?:#.*)?$', block, re.MULTILINE)
-    module_area_ids[name] = aid_m.group(1).strip().strip("'\"") if aid_m else ''
+    # 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52).
+    # 빈 값은 어느 분기도 매칭 안 됨 → aid_m None → '' (빈값 → legacy 폴백 동작 유지).
+    aid_m = re.search(rf'^\s+area-id:[ \t]*{QUOTED_VALUE}\s*(?:#.*)?$', block, re.MULTILINE)
+    module_area_ids[name] = pick_quoted_value(aid_m) if aid_m else ''
 
     names.append(name)
     print(f"MODULE_{idx}_NAME='{name}'")
@@ -307,12 +317,14 @@ ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', cc_
 area_ids_block = ai.group(2) if ai else ''
 resolved_area_ids = {}  # name → hash (legacy 먼저 채우고 modules 값으로 덮어씀)
 # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-ids 항목이 다음 줄 항목 값을 흡수하는 것 방지.
-# 값 캡처 non-greedy + 줄끝 선택적 인라인 주석((?:#.*)?$) 허용 — `Backend: be11  # 주석`
-# 에서 값이 사라지는 것 방지(#52). 리더 area_id() 와 동일 패턴(parity).
+# 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52). 리더 area_id() parity.
 # 키 패턴: 리더 area_id() 는 re.escape(name) 으로 임의 모듈명(하이픈 포함 Frontend-1 등)을
 # 매칭한다 → install 키 집합도 동일하게 [^\s:#]+ 로 일반화(공백·콜론·# 만 제외)해 비대칭 제거.
-for am in re.finditer(r'^\s+([^\s:#]+):[ \t]*"?([^"#\n]+?)"?\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
-    resolved_area_ids[am.group(1).strip()] = am.group(2).strip().strip("'\"")
+# 값은 QUOTED_VALUE 가 그룹 2·3·4 로 캡처(키가 그룹1) — 매칭된 분기를 직접 고른다.
+for am in re.finditer(rf'^\s+([^\s:#]+):[ \t]*{QUOTED_VALUE}\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
+    val = am.group(2) if am.group(2) is not None else (
+        am.group(3) if am.group(3) is not None else am.group(4))
+    resolved_area_ids[am.group(1).strip()] = val.strip() if val is not None else ''
 # modules[].area-id 우선 — 비어있지 않은 값만 덮어씀(빈 값은 legacy 폴백 유지)
 for mname, mhash in module_area_ids.items():
     if mhash:
