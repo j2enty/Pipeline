@@ -20,7 +20,7 @@
 **실행 컨텍스트**
 - 리뷰 대상 SHA: `<sha>` (PR 실패인 경우)
 - 재시도: <카테고리> <count>/<limit>
-- 마지막 에러: `.omc/state/reviews/<slug>.json` 참조
+- 마지막 에러: `.pipeline/state/reviews/<slug>.json` 참조
 
 **재개 방법**
 1. 원인 진단

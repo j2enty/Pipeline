@@ -4,6 +4,9 @@
 # OMC 세션 메타데이터
 .omc/
 
+# Pipeline 런타임 상태 (kickoff/review 가 생성하는 세션·리뷰 상태파일 — 커밋 대상 아님, #65)
+.pipeline/state/
+
 # Claude Code 로컬 상태 (scheduled_tasks.lock·worktrees 등 — 커밋 대상 아님)
 # 단, 프로젝트 하네스 설정(settings.json)은 예외로 추적 — 작업환경을 코드로 고정.
 # 주의: 디렉토리 통째(.claude/)로 ignore 하면 하위 파일을 !로 되살릴 수 없어 .claude/* 사용.

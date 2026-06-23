@@ -74,7 +74,7 @@ bash "$CFG" docs-context-dir   # Context md 디렉토리
 | Project ID | `project-id` |
 | Status 필드 ID | `status-field-id` (Backlog/Planning/Ready/**In Progress**/**Bot Review**/**In Review**/Done) |
 | Area 필드 ID | `area-field-id` |
-| 상태 파일 | `.omc/state/sessions/<slug>.json` |
+| 상태 파일 | `.pipeline/state/sessions/<slug>.json` |
 | 컨텍스트 문서 | `<docs-context-dir>/<slug>-status.md` |
 
 ## 모듈 동작표 (Area ID · 동작 의미론)
@@ -221,7 +221,7 @@ query($owner: String!, $number: Int!, $issueId: ID!) {
 ### 6. 상태 파일 감지 + 재개 분기 (G4)
 
 ```bash
-STATE_FILE=".omc/state/sessions/${SLUG}.json"
+STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
 ```
 
 **분기 A. `--restart` 플래그 있음**
@@ -451,7 +451,7 @@ Parent: $OWNER/$PARENT_REPO_NAME#<parent-N>
 
 ## 🔗 참고
 - 플랜: \`Docs/claude/plans/<parent-N>-<slug>-<영역소문자>.md\`
-- 세션: \`.omc/state/sessions/<slug>.json\`
+- 세션: \`.pipeline/state/sessions/<slug>.json\`
 EOF
 )"
 ```
@@ -559,7 +559,7 @@ PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 ```
 
 - `parent-issue-url` 은 1단계에서 파싱한 값 그대로 사용 (번호→URL 변환 필요 시 위 형태)
-- `pipeline:review` 는 자체 상태 파일(`.omc/state/reviews/<slug>.json`)을 만들고, `/kickoff` 세션 파일은 건드리지 않음 (review SKILL C8, G1)
+- `pipeline:review` 는 자체 상태 파일(`.pipeline/state/reviews/<slug>.json`)을 만들고, `/kickoff` 세션 파일은 건드리지 않음 (review SKILL C8, G1)
 - `pipeline:review` 가 실패해도 `/kickoff` 는 이미 PR 생성까지 책임 완료 상태 — 최종 리포트에만 "리뷰 체이닝 실패" 로 표기
 
 #### 10-c. 체이닝 실패 처리
@@ -575,7 +575,7 @@ PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 `pipeline:review` 가 종료되면 그 상태 파일을 읽어서 `/kickoff` 최종 리포트(12단계)에 영역별 리뷰 판정을 같이 표시해요:
 
 ```bash
-REVIEW_STATE=".omc/state/reviews/${SLUG}.json"
+REVIEW_STATE=".pipeline/state/reviews/${SLUG}.json"
 if [ -f "$REVIEW_STATE" ]; then
   REVIEW_VERDICTS=$(jq -r '.prs | to_entries[] | "\(.key): \(.value.verdict)"' "$REVIEW_STATE")
 fi
@@ -604,7 +604,7 @@ DOCS_CONTEXT_DIR="$(bash "$CFG" docs-context-dir)"
 
 Slug: <slug>
 런타임: <mode>   # OMC 폴백 시 "agent (team→agent degrade)" 등
-세션: .omc/state/sessions/<slug>.json
+세션: .pipeline/state/sessions/<slug>.json
 
 영역별 상태 (/kickoff):
   ✅ Frontend   PR #12 생성         [feature/#1-<slug>]  Status=Bot Review
@@ -612,7 +612,7 @@ Slug: <slug>
   🔴 Android    escalated (빌드 오류)  [feature/#1-<slug>]  → <코멘트 URL>
   ⏳ Backend    스킵 (Status=Ready)
 
-/review 자동 체이닝: 실행됨 (.omc/state/reviews/<slug>.json)
+/review 자동 체이닝: 실행됨 (.pipeline/state/reviews/<slug>.json)
 
 영역별 리뷰 판정:
   ✅ Frontend   APPROVE          Status=In Review (사용자 검증 대기)

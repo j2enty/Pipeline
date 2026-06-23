@@ -14,7 +14,7 @@ it "F2-a 풀 install + REVIEWER_BOT_LOGIN 빈값 → PIPELINE_REVIEWER_BOT_LOGIN
 
   # register_variables 직접 호출 (is_reapply=false = 기본값)
   eval "$(parse_config)"
-  VERDICT_DIR=".omc/state/reviews"
+  VERDICT_DIR=".pipeline/state/reviews"
   REVIEWER_BOT_LOGIN=""   # 빈 값 — 풀 install 에서 reviewer.enabled=false 케이스
 
   register_variables "test-org/ModuleA" "ModuleA CI" "true" "false" >/dev/null 2>&1
@@ -33,7 +33,7 @@ it "F2-b reapply + REVIEWER_BOT_LOGIN=_SKIP_ → PIPELINE_REVIEWER_BOT_LOGIN 스
   GH_LOG="$(mktemp)"; export GH_LOG
 
   eval "$(parse_config)"
-  VERDICT_DIR=".omc/state/reviews"
+  VERDICT_DIR=".pipeline/state/reviews"
   REVIEWER_BOT_LOGIN="_SKIP_"
 
   register_variables "test-org/ModuleA" "ModuleA CI" "true" "true" >/dev/null 2>&1
@@ -53,7 +53,7 @@ it "F2-c reapply + REVIEWER_BOT_LOGIN 빈값 → PIPELINE_REVIEWER_BOT_LOGIN 스
   GH_LOG="$(mktemp)"; export GH_LOG
 
   eval "$(parse_config)"
-  VERDICT_DIR=".omc/state/reviews"
+  VERDICT_DIR=".pipeline/state/reviews"
   REVIEWER_BOT_LOGIN=""
 
   register_variables "test-org/ModuleA" "ModuleA CI" "true" "true" >/dev/null 2>&1
