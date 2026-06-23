@@ -62,7 +62,16 @@ if [ ! -f "$CONFIG_PATH" ]; then
   echo "⚠️  pipeline-config: config 파일 없음: $CONFIG_PATH (빈 값 반환)" >&2
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
-    --keys|--dump) : ;;
+    # --keys 는 정적 지원키 카탈로그라 config 유무와 무관하게 항상 동일 출력
+    # (아래 python 블록의 --keys 분기와 동일 목록). --dump 는 config 내용 요약이라 부재 시 빈 게 맞음.
+    --keys) printf '%s\n' \
+      'owner' 'parent-repository' 'parent-repo-name' 'project-number' 'slack-channel' \
+      'project-name' 'project-id' 'status-field-id' 'area-field-id' \
+      'author-login' 'local-account' 'docs-context-dir' 'area-id.<Name>' \
+      'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
+      'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
+      '--list-modules' 'module.<Name>.<flag>' '--modules-where <flag>=<val>' '--modules-table' ;;
+    --dump) : ;;
     # modules 인터페이스 — config 부재 시 모듈 없음(빈 출력). 단 표는 헤더행만.
     --list-modules|--modules-where) : ;;
     --modules-table) printf 'name\trole\tplanner\treview\tkickoff\tlead\tdefault-status\tcross-area-group\tarea-id\tci-workflow-name\n' ;;

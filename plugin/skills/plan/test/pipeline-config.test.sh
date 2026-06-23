@@ -491,6 +491,32 @@ mw_list="$(PIPELINE_CONFIG="$MW_FIX" bash "$READER" --list-modules 2>/dev/null |
 mw_err="$(PIPELINE_CONFIG="$MW_FIX" bash "$READER" --list-modules 2>&1 >/dev/null)"
 printf '%s' "$mw_err" | grep -q "모듈 name 파싱 실패" && pass "미종결 따옴표: stderr 경고 발생" || fail "미종결 따옴표 stderr 경고" "stderr='$mw_err'"
 rm -f "$MW_FIX"
+
+# ── --keys 정적 카탈로그 회귀 (#45) ─────────────────────────────────────
+# --keys 는 "지원키 목록"이라 config 유무와 무관하게 항상 동일 출력해야 한다.
+# (수정 전 버그: config 부재 분기 `--keys|--dump) : ;;` 가 --keys 를 빈 출력으로 만듦.)
+# 반대로 --dump 는 config 내용 요약이라 부재 시 빈 출력이 맞다(건드리면 안 됨).
+KEYS_MISSING="$(mktemp -u)/none.yml"
+# FIXTURE 는 위에서 rm 됐으므로 config 존재 케이스용 임시 config 를 새로 만든다(있음/없음 동일성만 보면 됨).
+KEYS_FIX="$(mktemp)"; printf 'project:\n  owner: K\n' > "$KEYS_FIX"
+keys_with="$(PIPELINE_CONFIG="$KEYS_FIX" bash "$READER" --keys 2>/dev/null)"
+keys_without="$(PIPELINE_CONFIG="$KEYS_MISSING" bash "$READER" --keys 2>/dev/null)"
+[ -n "$keys_without" ] && pass "--keys: config 부재에도 비어있지 않음(#45)" || fail "--keys config 부재 비어있음" "출력=''"
+[ "$keys_with" = "$keys_without" ] && pass "--keys: config 유무 출력 동일" || fail "--keys config 유무 불일치" "with≠without"
+# 카탈로그 핵심 키 포함 확인
+printf '%s\n' "$keys_without" | grep -qx 'owner' && pass "--keys 에 owner 포함" || fail "--keys owner 누락" ""
+printf '%s\n' "$keys_without" | grep -qx 'module.<Name>.<flag>' && pass "--keys 에 module.<Name>.<flag> 포함" || fail "--keys module 누락" ""
+# plan 리더 카탈로그엔 review 전용 4키가 없어야(보안 의도 보존)
+if printf '%s\n' "$keys_without" | grep -qE 'reviewer-app-id|reviewer-bot-slug|reviewer-token-key|slack-token-key'; then
+  fail "--keys plan 에 review 4키 없어야" "발견됨"
+else
+  pass "--keys: plan 카탈로그에 review 전용 4키 없음(보안 의도)"
+fi
+# --dump 는 config 부재 시 여전히 빈 출력(회귀 방지 — 수정이 dump 를 건드리지 않았는지)
+dump_missing="$(PIPELINE_CONFIG="$KEYS_MISSING" bash "$READER" --dump 2>/dev/null)"
+[ -z "$dump_missing" ] && pass "--dump: config 부재 시 빈 출력(건드리지 않음)" || fail "--dump config 부재 비어있어야" "출력='$dump_missing'"
+rm -f "$KEYS_FIX"
+
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"

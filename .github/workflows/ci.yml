@@ -66,3 +66,14 @@ jobs:
       - name: 단위 테스트
         working-directory: app
         run: npm test
+
+  # plugin 셸 테스트 — skills/agents 의 standalone *.test.sh 를 aggregate 러너로 강제
+  # (순수 bash. Node 불필요. 새 *.test.sh 는 러너가 glob 으로 자동 수집)
+  plugin-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: plugin 셸 테스트 실행
+        run: bash plugin/test/run-tests.sh
