@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # structure.test.sh — /pipeline:kickoff skill 구조 정적 분석 테스트 (P2b K2).
 #
-# kickoff.md.tmpl → SKILL.md 변환의 불변식을 단언한다:
+# SKILL.md 가 가져야 할 구조 불변식을 단언한다(P3.1: 배포 SSOT 가 SKILL.md 로 일원화돼
+# templates/claude-commands/*.tmpl 의존을 제거함. 모든 검증은 plugin 내부 자산만 대상으로 한다):
 #   (A) skill 변환 불변식: placeholder 0, pipeline:executor·verifier 호출,
 #       disable-model-invocation, config 리더(--dump + CFG) 주입,
 #       모듈 동작은 리더 인터페이스(--modules-table/--modules-where)로 읽음(모듈명 비종속, #42).
@@ -21,8 +22,6 @@ set -uo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$TEST_DIR/../SKILL.md"
 REF="$TEST_DIR/../reference"
-# #65 — tmpl 은 install.sh 가 영역 레포 .claude/commands/ 에 배포하는 SSOT (plugin SKILL 과 같은 동작의 두 배포경로)
-TMPL="$TEST_DIR/../../../../templates/claude-commands/kickoff.md.tmpl"
 SCRIPTS="$TEST_DIR/../scripts"
 EXEC_AGENT="$TEST_DIR/../../../agents/executor.md"
 VF_AGENT="$TEST_DIR/../../../agents/verifier.md"
@@ -152,12 +151,11 @@ hasE 'slack-notify\.sh' "$SKILL" "(D-7) Slack 이중 발송 보존"
 echo -e "\n${C_CYAN}── (E) 헬퍼 경로 ──${C_NC}"
 has '"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh"' "$SKILL" "(E-1) slack-notify.sh 헬퍼 경로"
 # .omc/ 잔재 0 (#65 — 상태경로도 중립 경로로 탈종속. state·scripts 등 omc 경로 전체가 새어들면 잡는다)
+#   상태경로 드리프트(#54: .omc/state 잔재 → verdict=null 자동머지 차단 회귀)는 이 광역 검사가
+#   .omc/state 를 포함하므로 SKILL.md+reference 만으로 잡힌다(P3.1 전엔 tmpl 도 별도 검사했으나
+#   배포 SSOT 가 SKILL.md 로 일원화돼 tmpl 의존 제거).
 if grep -qE '\.omc/' "$SKILL"; then fail "(E-2) .omc/ 잔재 0"; else pass "(E-2) .omc/ 잔재 0"; fi
 if grep -rqE '\.omc/' "$REF"; then fail "(E-2) reference/ .omc/ 잔재 0"; else pass "(E-2) reference/ .omc/ 잔재 0"; fi
-# #65 — tmpl 은 install.sh 가 영역 레포에 실제 배포하는 SSOT. plugin 만 고치고 tmpl 빠뜨리면(또는 반대)
-# 상태경로 드리프트로 verdict=null 자동머지 차단 회귀(#54) → tmpl 도 .omc/state 잔재 0 검사.
-# (주의: tmpl 의 .omc/scripts·.omc/specs 헬퍼/스펙 경로는 별개 미완 탈종속 항목이라 여기선 상태경로만 한정 검사)
-if grep -qE '\.omc/state' "$TMPL"; then fail "(E-2) tmpl .omc/state 잔재 0"; else pass "(E-2) tmpl .omc/state 잔재 0"; fi
 # 동봉 헬퍼 실제 존재 + 실행권한
 for sh in pipeline-config.sh slack-notify.sh; do
   if [ -f "$SCRIPTS/$sh" ]; then pass "(E-3) 동봉 헬퍼 존재: $sh"; else fail "(E-3) 동봉 헬퍼 없음: $sh"; fi

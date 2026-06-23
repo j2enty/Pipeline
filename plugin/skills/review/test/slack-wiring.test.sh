@@ -4,7 +4,7 @@
 # 배경(#49-1):
 #   1차 수정(역참조를 SKILL 펜스에서 ${!SLACK_TOKEN_KEY} 로)이 잘못이었다. ${!VAR} 간접확장은
 #   bash-ism 이라 펜스가 zsh 로 실행되면(실제 이 환경도 zsh) "bad substitution" 으로 死.
-#   SKILL/reference/tmpl 펜스엔 bash 보장 단서(shebang·bash -c·shell:bash)가 없다.
+#   SKILL/reference 펜스엔 bash 보장 단서(shebang·bash -c·shell:bash)가 없다.
 #   → 역참조를 slack-notify.sh(#!/usr/bin/env bash shebang → ${!} 안전) **안으로** 옮긴다.
 #   펜스는 SLACK_TOKEN_KEY(env 이름표)만 헬퍼에 env 로 넘긴다(${!} 없음 → zsh/bash 무관).
 #
@@ -14,7 +14,7 @@
 #   ③ 둘 다 없음 → graceful skip(exit 0, 발송 안 함)
 #   ④ SLACK_TOKEN_KEY 빈 문자열 → ${!} 가드로 에러 없이 SLACK_WEBHOOK_URL 폴백
 #   ⑤ 레드 입증: 헬퍼에서 역참조 블록 제거 시 토큰키 시나리오가 skip 으로 떨어짐(데드)
-#   ⑥ 정적 가드(zsh 회귀 차단): SKILL·reference·tmpl 펜스에 ${! 간접확장 0건
+#   ⑥ 정적 가드(zsh 회귀 차단): SKILL·reference 펜스에 ${! 간접확장 0건
 #   ⑦ 헬퍼 shebang 이 bash(역참조 ${!} 안전 근거)
 #
 # 발송 차단: curl 을 임시 PATH 스텁으로 가로채 실제 네트워크 호출 없이 "ok" 반환.
@@ -25,7 +25,8 @@ set -uo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$TEST_DIR/../scripts/slack-notify.sh"
-# 펜스 정적 가드는 본체 전체(plugin skills + tmpl)를 대상으로 — zsh 회귀 광역 차단.
+# 펜스 정적 가드는 plugin skills 전체를 대상으로 — zsh 회귀 광역 차단.
+#   (P3.1) 배포 SSOT 가 SKILL.md 로 일원화돼 tmpl 의존 제거.
 REPO_ROOT="$(cd "$TEST_DIR/../../../.." && pwd)"
 
 if [ -t 1 ]; then
@@ -137,15 +138,16 @@ fi
 #                              (b) 기능 — 프로브 주입→탐지/제거→통과(이 러너에서 실제 동작).
 scan_fences() {
   # $1 = 추가로 스캔할 프로브 파일(옵션). 본체 펜스 + 프로브에서 '${!' 리터럴 검색(-F 필수).
+  #   (P3.1) 스캔 대상은 plugin 자산(SKILL·reference)만 — 배포 SSOT 가 SKILL.md 로 일원화돼
+  #   templates/claude-commands/*.tmpl 의존을 제거했다. zsh 회귀 광역 차단은 plugin 펜스로 충분.
   grep -rFn '${!' \
     "$REPO_ROOT"/plugin/skills/*/SKILL.md \
     "$REPO_ROOT"/plugin/skills/*/reference/*.md \
-    "$REPO_ROOT"/templates/claude-commands/*.tmpl \
     ${1:+"$1"} 2>/dev/null || true
 }
 FENCE_HITS="$(scan_fences)"
 if [ -z "$FENCE_HITS" ]; then
-  pass "(SW-6) SKILL·reference·tmpl 펜스에 \${!} 간접확장 0건(zsh 호환)"
+  pass "(SW-6) SKILL·reference 펜스에 \${!} 간접확장 0건(zsh 호환)"
 else
   fail "(SW-6) 펜스에 \${!} 간접확장 발견(zsh 깨짐 위험):"
   printf '%s\n' "$FENCE_HITS" | sed 's/^/    ↳ /' >&2

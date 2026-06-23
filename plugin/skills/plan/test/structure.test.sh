@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # structure.test.sh — /pipeline:plan skill 구조 정적 분석 테스트 (P2).
 #
-# plan.md.tmpl → SKILL.md 변환의 불변식을 단언한다:
+# SKILL.md 가 가져야 할 구조 불변식을 단언한다(P3.1: 배포 SSOT 가 SKILL.md 로 일원화돼
+# templates/claude-commands/ 의존을 제거함. dry-run 가드 분석기도 plugin 내부 사본 사용):
 #   (A) skill 변환 불변식: placeholder 0, oh-my-claudecode ref(codex 폴백 외) 0,
 #       pipeline:planner·critic(완결성·정합성 모드) 호출, 토글 config 읽기,
 #       disable-model-invocation, config 리더(--dump) 주입,
@@ -19,7 +20,8 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$TEST_DIR/../SKILL.md"
 REF="$TEST_DIR/../reference"
 CRITIC_AGENT="$TEST_DIR/../../../agents/critic.md"
-DRY_RUN_GUARD="$TEST_DIR/../../../../templates/claude-commands/test/dry-run-guard.test.sh"
+# (P3.1) dry-run 가드 분석기는 plugin 내부 사본 사용 — templates/claude-commands/ 제거(P3.4)에 비의존.
+DRY_RUN_GUARD="$TEST_DIR/dry-run-guard.lib.sh"
 
 if [ -t 1 ]; then
   C_GREEN='\033[0;32m'; C_RED='\033[0;31m'; C_CYAN='\033[0;36m'; C_NC='\033[0m'
@@ -108,15 +110,15 @@ has '# \[contract\]' "$CT" "(B-4) contract 헤더 → contract-template"
 has '## API 스키마' "$CT" "(B-4) '## API 스키마' → contract-template"
 has '## 공통 규약' "$CT" "(B-4) '## 공통 규약' → contract-template"
 
-echo -e "\n${C_CYAN}── (C) dry-run 안전 가드 (기존 테스트 재사용) ──${C_NC}"
+echo -e "\n${C_CYAN}── (C) dry-run 안전 가드 (plugin 내부 분석기 재사용) ──${C_NC}"
 if [ -f "$DRY_RUN_GUARD" ]; then
   if TEMPLATE="$SKILL" bash "$DRY_RUN_GUARD" >/dev/null 2>&1; then
-    pass "(C-1) dry-run-guard.test.sh (TEMPLATE=SKILL.md) 통과"
+    pass "(C-1) dry-run-guard.lib.sh (TEMPLATE=SKILL.md) 통과"
   else
-    fail "(C-1) dry-run-guard.test.sh (TEMPLATE=SKILL.md) 실패 — 안전 가드 훼손"
+    fail "(C-1) dry-run-guard.lib.sh (TEMPLATE=SKILL.md) 실패 — 안전 가드 훼손"
   fi
 else
-  fail "(C-1) dry-run-guard.test.sh 없음: $DRY_RUN_GUARD"
+  fail "(C-1) dry-run-guard.lib.sh 없음: $DRY_RUN_GUARD"
 fi
 
 echo ""
