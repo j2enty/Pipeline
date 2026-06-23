@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # structure.test.sh — /pipeline:review skill 구조 정적 분석 테스트 (P2b R2).
 #
-# review.md.tmpl → SKILL.md 변환의 불변식을 단언한다:
+# SKILL.md 가 가져야 할 구조 불변식을 단언한다(P3.1: 배포 SSOT 가 SKILL.md 로 일원화돼
+# templates/claude-commands/review.md.tmpl 의존을 제거함. 검증은 plugin 내부 자산만 대상으로 한다):
 #   (A) skill 변환 불변식: placeholder 0, oh-my-claudecode ref 0,
 #       pipeline:code-reviewer·verifier·critic 호출, disable-model-invocation,
 #       config 리더(--dump + CFG) 주입,
@@ -23,8 +24,6 @@ SCRIPTS="$TEST_DIR/../scripts"
 CR_AGENT="$TEST_DIR/../../../agents/code-reviewer.md"
 VF_AGENT="$TEST_DIR/../../../agents/verifier.md"
 CRITIC_AGENT="$TEST_DIR/../../../agents/critic.md"
-# tmpl 배포 SSOT (드리프트 동기 검증용 — plugin ⟺ tmpl 쌍)
-TMPL="$TEST_DIR/../../../../templates/claude-commands/review.md.tmpl"
 
 if [ -t 1 ]; then
   C_GREEN='\033[0;32m'; C_RED='\033[0;31m'; C_CYAN='\033[0;36m'; C_NC='\033[0m'
@@ -120,12 +119,11 @@ has '--require reviewer-bot-slug reviewer-token-key' "$SKILL" "(C-1) self-approv
 has '"${CLAUDE_SKILL_DIR}/scripts/gh-app-token.sh"' "$SKILL" "(C-2) gh-app-token.sh 헬퍼 경로"
 has '"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh"' "$SKILL" "(C-2) slack-notify.sh 헬퍼 경로"
 # C-3 .omc/ 잔재 0 (#65 — 상태경로도 중립 경로로 탈종속. state·scripts 등 omc 경로 전체가 새어들면 잡는다)
+#   상태경로 드리프트(#54: .omc/state 잔재 → verdict=null 자동머지 차단 회귀)는 이 광역 검사가
+#   .omc/state 를 포함하므로 SKILL.md+reference 만으로 잡힌다(P3.1 전엔 tmpl 도 별도 검사했으나
+#   배포 SSOT 가 SKILL.md 로 일원화돼 tmpl 의존 제거).
 if grep -qE '\.omc/' "$SKILL"; then fail "(C-3) .omc/ 잔재 0"; else pass "(C-3) .omc/ 잔재 0"; fi
 if grep -rqE '\.omc/' "$REF"; then fail "(C-3) reference/ .omc/ 잔재 0"; else pass "(C-3) reference/ .omc/ 잔재 0"; fi
-# #65 — tmpl 은 install.sh 가 영역 레포에 실제 배포하는 SSOT. plugin 만 고치고 tmpl 빠뜨리면(또는 반대)
-# 상태경로 드리프트로 verdict=null 자동머지 차단 회귀(#54) → tmpl 도 .omc/state 잔재 0 검사.
-# (주의: tmpl 의 .omc/scripts·.omc/specs 헬퍼/스펙 경로는 별개 미완 탈종속 항목이라 여기선 상태경로만 한정 검사)
-if grep -qE '\.omc/state' "$TMPL"; then fail "(C-3) tmpl .omc/state 잔재 0"; else pass "(C-3) tmpl .omc/state 잔재 0"; fi
 
 echo -e "\n${C_CYAN}── (D) 핵심 동작 보존 ──${C_NC}"
 # D-1 self-approve 회피 키워드
@@ -199,26 +197,25 @@ if [ -f "$CRITIC_YML" ]; then
 else
   fail "(D-6d-2) critic.yml 존재: $CRITIC_YML"
 fi
-# D-6e Phase 3 동기 — plugin context-md.md ⟺ tmpl 둘 다 정정 트리거 (d) 문구 존재(드리프트 재발 차단)
-if [ -f "$TMPL" ]; then
-  hasE 'criticFindings.* 가 비어있지 않' "$TMPL" "(D-6e) tmpl 트리거 (d) criticFindings 비어있지 않음(드리프트 동기)"
-  # 死문 필드 criticVerdict 재유입 차단은 라이브 영역(10-a 트리거 블록)에 한정.
-  #   R11 이력 노트(minor-gaps)는 死문 정정 블레임으로 그 단어를 정당히 인용하므로 제외한다.
-  #   터미네이터는 다음 '### ' 헤더 — 특정 문구('클린 성공')에 비의존(편집 견고화, #47 [minor]).
-  TMPL_10A="$(awk '/^#### 10-a\./{f=1; next} f&&/^### /{exit} f{print}' "$TMPL")"
-  if printf '%s' "$TMPL_10A" | grep -q 'criticVerdict'; then
-    fail "(D-6e) tmpl 10-a 트리거 criticVerdict 死문 부재"; else pass "(D-6e) tmpl 10-a 트리거 criticVerdict 死문 부재"; fi
-else
-  fail "(D-6e) tmpl 파일 존재: $TMPL"
-fi
+# (P3.1) D-6e 의 tmpl 동기 검증은 제거했다 — 배포 SSOT 가 SKILL.md 로 일원화됐다.
+#   원래 D-6e 가 보던 두 불변식은 plugin 자산 대상으로 이미 보존된다:
+#     · 트리거 (d) 'criticFindings 가 비어있지 않' → 위 D-6c 가 context-md.md(CTX_MD)에서 검증
+#     · 10-a 라이브 트리거에 criticVerdict 死문 부재 → 아래 D-6e' 가 SKILL.md 에서 검증
+# D-6e' SKILL.md 의 10-a Docs 커밋 트리거 블록에 死문 필드 criticVerdict 가 재유입되지 않았는지.
+#   (R11 이력 노트는 死문 정정 블레임으로 그 단어를 정당히 인용하므로, 라이브 트리거 블록만 한정 검사.
+#    터미네이터는 다음 헤더 — '#### ' 또는 더 얕은 '### '(10-a 다음 섹션이 ### 11 처럼 얕을 수 있어
+#    '#### ' 만 보면 EOF 까지 과추출됨). 특정 문구에 비의존.)
+SKILL_10A="$(awk '/^#### 10-a\./{f=1; next} f&&/^#### |^### /{exit} f{print}' "$SKILL")"
+if printf '%s' "$SKILL_10A" | grep -q 'criticVerdict'; then
+  fail "(D-6e') SKILL 10-a 트리거 criticVerdict 死문 부재"; else pass "(D-6e') SKILL 10-a 트리거 criticVerdict 死문 부재"; fi
 
 echo -e "\n${C_CYAN}── (D-8) aggregate.verdict write 단계 존재 (#54) ──${C_NC}"
 # #54 critical: aggregate.verdict 를 상태파일에 쓰는 실행 단계가 처음부터 없어 항상 null →
 #   critic.yml allowlist 미스 → indeterminate → critic 자동머지 영구 차단. 8-c-bis 에 write 추가.
-#   plugin SKILL.md + tmpl 둘 다 jq 로 .aggregate.verdict 를 세팅하는 실행 블록이 있어야 한다.
+#   SKILL.md 8-c-bis 에 jq 로 .aggregate.verdict 를 세팅하는 실행 블록이 있어야 한다.
 #   (8-c-bis 블록만 추출해 검사 — 다음 '#### ' 헤더를 터미네이터로.)
+#   (P3.1) tmpl 동기 검증은 제거 — 배포 SSOT 가 SKILL.md 로 일원화됐다.
 SKILL_8CBIS="$(awk '/^#### 8-c-bis/{f=1; next} f&&/^#### /{exit} f{print}' "$SKILL")"
-TMPL_8CBIS="$(awk '/^#### 8-c-bis/{f=1; next} f&&/^#### /{exit} f{print}' "$TMPL")"
 # jq 로 .aggregate.verdict 를 대입하는 실행 패턴 존재(공백 변형 허용).
 if printf '%s' "$SKILL_8CBIS" | grep -qE '\.aggregate\.verdict[[:space:]]*='; then
   pass "(D-8) SKILL 8-c-bis aggregate.verdict write 실행 단계 존재"
@@ -226,9 +223,6 @@ else fail "(D-8) SKILL 8-c-bis aggregate.verdict write 실행 단계 존재"; fi
 if printf '%s' "$SKILL_8CBIS" | grep -qE 'jq .*--argjson|jq .*--arg cv'; then
   pass "(D-8) SKILL 8-c-bis jq 트랜잭션(verdict 캡처) 존재"
 else fail "(D-8) SKILL 8-c-bis jq 트랜잭션(verdict 캡처) 존재"; fi
-if printf '%s' "$TMPL_8CBIS" | grep -qE '\.aggregate\.verdict[[:space:]]*='; then
-  pass "(D-8) tmpl 8-c-bis aggregate.verdict write 실행 단계 존재(드리프트 동기)"
-else fail "(D-8) tmpl 8-c-bis aggregate.verdict write 실행 단계 존재(드리프트 동기)"; fi
 # 원자적 temp+mv 규칙 준수(L250) — write 블록에 mv 가 있어야 partial write 방지.
 if printf '%s' "$SKILL_8CBIS" | grep -qE 'mv .*STATE_FILE|mv "\$TEMP"'; then
   pass "(D-8) SKILL 8-c-bis 원자적 temp+mv 준수"
@@ -236,17 +230,14 @@ else fail "(D-8) SKILL 8-c-bis 원자적 temp+mv 준수"; fi
 # D-8b STATE_FILE 와이어링 가드 (#54 후속 [major]): 8-c-bis 의 STATE_FILE 대입이
 #   Step4/5 컨벤션인 라이브 변수 ${SLUG} 여야 한다. 리터럴 angle-bracket(<slug>.json)을
 #   박으면 별개 셸에서 치환 누락 시 jq no-such-file → mv 스킵 → verdict 미기록 → #54 회귀.
-#   plugin+tmpl 둘 다: ${SLUG} 존재 + 리터럴 <slug>.json 부재 정적 단언.
-for pair in "SKILL:$SKILL_8CBIS" "tmpl:$TMPL_8CBIS"; do
-  label="${pair%%:*}"; block="${pair#*:}"
-  state_assign="$(printf '%s\n' "$block" | grep -E 'STATE_FILE=' | grep -E 'reviews/' )"
-  if printf '%s' "$state_assign" | grep -qF '${SLUG}.json'; then
-    pass "(D-8b) $label 8-c-bis STATE_FILE 라이브 변수 \${SLUG} 사용"
-  else fail "(D-8b) $label 8-c-bis STATE_FILE 라이브 변수 \${SLUG} 사용"; fi
-  if printf '%s' "$state_assign" | grep -qF '<slug>.json'; then
-    fail "(D-8b) $label 8-c-bis STATE_FILE 리터럴 <slug> 부재(치환누락 회귀 함정)"
-  else pass "(D-8b) $label 8-c-bis STATE_FILE 리터럴 <slug> 부재(치환누락 회귀 함정)"; fi
-done
+#   SKILL.md: ${SLUG} 존재 + 리터럴 <slug>.json 부재 정적 단언.
+state_assign="$(printf '%s\n' "$SKILL_8CBIS" | grep -E 'STATE_FILE=' | grep -E 'reviews/' )"
+if printf '%s' "$state_assign" | grep -qF '${SLUG}.json'; then
+  pass "(D-8b) SKILL 8-c-bis STATE_FILE 라이브 변수 \${SLUG} 사용"
+else fail "(D-8b) SKILL 8-c-bis STATE_FILE 라이브 변수 \${SLUG} 사용"; fi
+if printf '%s' "$state_assign" | grep -qF '<slug>.json'; then
+  fail "(D-8b) SKILL 8-c-bis STATE_FILE 리터럴 <slug> 부재(치환누락 회귀 함정)"
+else pass "(D-8b) SKILL 8-c-bis STATE_FILE 리터럴 <slug> 부재(치환누락 회귀 함정)"; fi
 
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"

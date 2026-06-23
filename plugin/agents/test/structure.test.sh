@@ -4,7 +4,7 @@
 # code-reviewer·verifier·critic(모드 A/B/C)·executor 에이전트 파일의 불변식을 단언한다:
 #   (A) frontmatter 필수 필드(name·model) 존재 + name 일치.
 #   (B) 반환 JSON 계약 보존 — code-reviewer·verifier·critic(모드C)·executor 의 필드명·
-#       severity·status·category 값이 원본(.tmpl)과 1:1 (skill 파싱 강결합이라 한 글자도 못 바꿈).
+#       severity·status·category 값이 SKILL 파서와 1:1 (skill 파싱 강결합이라 한 글자도 못 바꿈).
 #   (C) critic 모드 A/B/C 셋 다 존재(기존 A/B 보존 + C 추가).
 #   (D) 프로젝트 식별자·시크릿 패턴 부재(이식성 — 본체 코드 종속성 제로).
 #   (E) executor 가드 문구(플랜 밖 수정 금지 / 재시도 정책 호출자 소유).
@@ -82,7 +82,7 @@ has '메우지 말고 분류' "$CRITIC" "(C) 모드 A/B '메우지 말고 분류
 has 'rate limit' "$CRITIC" "(C) 보안 강제 룰(rate limit) 보존"
 
 echo -e "\n${C_CYAN}── (E) executor 가드 문구 보존 ──${C_NC}"
-# 플랜 밖 수정 금지 가드(scope creep 차단) — 원본 .tmpl 8-d 의 "금지: 플랜 밖 수정" 승격
+# 플랜 밖 수정 금지 가드(scope creep 차단) — kickoff 8-d 의 "금지: 플랜 밖 수정" 을 에이전트로 승격
 has '플랜 밖 수정 금지' "$EXECUTOR" "(E) executor '플랜 밖 수정 금지' 가드"
 # 재시도 정책이 호출자 소유라는 명시(executor 는 category 라벨만 반환)
 has '재시도 정책' "$EXECUTOR" "(E) executor '재시도 정책 호출자 소유' 명시"

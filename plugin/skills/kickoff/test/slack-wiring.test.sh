@@ -3,9 +3,11 @@
 #
 # 배경(#49-1):
 #   1차 수정(역참조를 펜스에서 ${!SLACK_TOKEN_KEY} 로)이 잘못이었다. ${!VAR} 간접확장은
-#   bash-ism 이라 펜스가 zsh 로 실행되면 "bad substitution" 으로 死. SKILL/reference/tmpl
+#   bash-ism 이라 펜스가 zsh 로 실행되면 "bad substitution" 으로 死. SKILL/reference
 #   펜스엔 bash 보장 단서가 없다. → 역참조를 slack-notify.sh(bash shebang) 안으로 옮긴다.
 #   kickoff 의 에스컬 펜스는 reference/escalation.md 에 있고 헬퍼에 SLACK_TOKEN_KEY 만 env 로 넘긴다.
+#   (P3.1) 정적 펜스 가드 대상은 plugin 자산(SKILL·reference)만 — 배포 SSOT 가 SKILL.md 로 일원화돼
+#   templates/claude-commands/*.tmpl 의존 제거.
 #
 # 헬퍼 기준 검증(외부 발송은 curl 스텁으로 차단). 시나리오: 역참조 / GHA 폴백 / 둘 다 없음 /
 #   빈 가드 / 레드입증 / 펜스 ${! 정적가드(escalation.md 포함) / 헬퍼 shebash bash.
@@ -115,15 +117,16 @@ fi
 #                              (b) 기능 — 프로브 주입→탐지/제거→통과(이 러너에서 실제 동작).
 scan_fences() {
   # $1 = 추가로 스캔할 프로브 파일(옵션). 본체 펜스 + 프로브에서 '${!' 리터럴 검색(-F 필수).
+  #   (P3.1) 스캔 대상은 plugin 자산(SKILL·reference)만 — 배포 SSOT 가 SKILL.md 로 일원화돼
+  #   templates/claude-commands/*.tmpl 의존을 제거했다. zsh 회귀 광역 차단은 plugin 펜스로 충분.
   grep -rFn '${!' \
     "$REPO_ROOT"/plugin/skills/*/SKILL.md \
     "$REPO_ROOT"/plugin/skills/*/reference/*.md \
-    "$REPO_ROOT"/templates/claude-commands/*.tmpl \
     ${1:+"$1"} 2>/dev/null || true
 }
 FENCE_HITS="$(scan_fences)"
 if [ -z "$FENCE_HITS" ]; then
-  pass "(SW-6) SKILL·reference·tmpl 펜스에 \${!} 간접확장 0건(zsh 호환)"
+  pass "(SW-6) SKILL·reference 펜스에 \${!} 간접확장 0건(zsh 호환)"
 else
   fail "(SW-6) 펜스에 \${!} 간접확장 발견(zsh 깨짐 위험):"
   printf '%s\n' "$FENCE_HITS" | sed 's/^/    ↳ /' >&2
