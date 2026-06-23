@@ -332,17 +332,16 @@ jobs:
 
       # ── Pipeline plugin 설치 (멱등 — 항상 최신) ──
       # 신뢰되지 않은 git repo(영역 레포 체크아웃)에서는 --plugin-dir 로컬 plugin 이
-      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). 대신 user scope 로
-      # "설치"하면 cwd 신뢰와 무관하게 로드된다. 설치 시퀀스의 근거는
+      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). user scope 설치본은
+      # cwd 신뢰와 무관하게 로드된다. 설치 시퀀스·동시성 전제는 composite action 및
       # scripts/ensure-plugin-installed.sh 주석 참조.
       # 위 체크아웃과 동일 조건(pipeline-repo != '')에 건다 — 체크아웃이 안 되면 설치
       # 스크립트도 없으므로. (fail-fast 로 pipeline-repo 는 필수라 실질 항상 참.)
       - name: Pipeline plugin 설치 (멱등 — 항상 최신)
         if: ${{ inputs.pipeline-repo != '' }}
-        run: |
-          set -euo pipefail
-          "$GITHUB_WORKSPACE/.pipeline-action-checkout/scripts/ensure-plugin-installed.sh" \
-            "$GITHUB_WORKSPACE/.pipeline-action-checkout"
+        uses: ./.pipeline-action-checkout/actions/ensure-plugin
+        with:
+          checkout-path: ${{ github.workspace }}/.pipeline-action-checkout
 
       - name: /review --bot (critic-only) 실행
         env:

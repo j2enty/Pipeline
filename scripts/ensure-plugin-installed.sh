@@ -22,6 +22,19 @@
 #   (왜 중요한가: 자동화 인프라에서 "코드 고쳤는데 러너는 옛 버전으로 도는" 버전 드리프트는
 #    재현·디버깅이 가장 어려운 유령버그라 구조적으로 차단한다.)
 #
+# ⚠️ 운영 전제 — 동시성(반드시 지킬 계약):
+#   이 스크립트는 user scope(~/.claude)라는 "공유 전역 상태"를 uninstall→install 로
+#   비원자적으로 갱신한다. 따라서 self-hosted 러너가 "단일 1대(=job 직렬 실행)"임을
+#   전제한다. 단일 러너에선 두 워크플로가 물리적으로 동시에 돌 수 없어 경합이 없고,
+#   각 워크플로는 자기 claude 호출 "직전"에 자기 pipeline-ref 로 설치하므로 ref 격리도
+#   정확하다.
+#   러너를 다중화하면 이 전제가 깨진다: 한 워크플로의 claude -p 가 plugin 을 읽는 중에
+#   다른 워크플로가 uninstall→install 하면 'command not found'·버전 섞임(cross-ref 오염)이
+#   난다. 그 시점의 해법은 (a) 러너 레벨에서 plugin 설치/실행을 직렬화(GitHub Actions
+#   concurrency 또는 설치 전용 단일 잡)하거나 (b) 여기에 파일 락을 도입하는 것이다.
+#   지금 락을 넣지 않는 이유: 단일 러너에선 죽은 코드이고, stale 락 정리 없이는 데드락
+#   리스크만 추가되기 때문(YAGNI). 다중화는 인프라 결정이라 그 시점에 인프라 레벨로 푼다.
+#
 # 종속성 제로: 마켓플레이스 소스 경로는 인자로 주입받는다(프로젝트 식별자 하드코딩 없음).
 # 'pipeline' 마켓플레이스명·'pipeline@pipeline' 플러그인명은 Pipeline 프레임워크 자체
 # 식별자(.claude-plugin/marketplace.json)이지 특정 사용자 프로젝트 식별자가 아니다.
@@ -35,8 +48,10 @@ PLUGIN_REF="pipeline@pipeline"
 claude plugin marketplace add "$MARKETPLACE_SOURCE"
 # 2) 소스 디렉토리 → 마켓플레이스 캐시 최신화 — 2차+ 실행에서 소스 변경을 반영하는 핵심 단계.
 claude plugin marketplace update "$MARKETPLACE_NAME"
-# 3) 기존 설치 제거 — 최초엔 미설치라 실패하므로 무시(|| true). version 무관하게
+# 3) 기존 설치 제거 — 최초엔 미설치라 실패가 정상이므로 무시(|| ...). version 무관하게
 #    내용 갱신을 강제하는 유일 경로(install/update 단독은 위 주석대로 스킵될 수 있음).
-claude plugin uninstall "$PLUGIN_REF" 2>/dev/null || true
+#    stderr 를 숨기지 않는다 — 권한/락 같은 "진짜" 실패는 로그에 보여 장애 추적이 되게.
+#    (codex 교차리뷰 반영: 과거 2>/dev/null 은 실패 원인을 통째로 은닉했다.)
+claude plugin uninstall "$PLUGIN_REF" || echo "  (uninstall 스킵 — 미설치이거나 무시 가능한 실패. 위 메시지 참고.)"
 # 4) 최신 캐시에서 새로 설치(user scope, ~/.claude — self-hosted 러너에 영구).
 claude plugin install "$PLUGIN_REF"

@@ -35,7 +35,7 @@ on:
         required: false
         default: false
       pipeline-repo:
-        description: "Pipeline 레포 (owner/repo) — 추적 action 체크아웃 대상. tracking-enabled=true 시 필수"
+        description: "Pipeline 레포 (owner/repo) — plugin 설치 소스 + 추적 action 체크아웃 대상. plugin 로드에 필요하므로 항상 필수(빈값이면 fail-fast). required:false 는 하위호환용일 뿐."
         type: string
         required: false
         default: ''
@@ -96,6 +96,17 @@ jobs:
           fi
           echo "URL 검증 완료"
 
+      # pipeline-repo 가 비어 있으면 즉시 실패(fail-fast).
+      # plugin 로드(아래 "Pipeline plugin 설치" step)는 Pipeline 레포 체크아웃을 설치
+      # 소스로 쓴다. 그 체크아웃이 repository:'' 면 caller(영역) 레포를 받아 설치 스크립트가
+      # 없어 모호한 'No such file' 로 죽는다. critic.yml 과 동일하게 명시적 fail-fast 한다
+      # (pipeline-repo 가 required:false 라 GitHub 이 안 막아줌 — caller 누락을 여기서 잡는다).
+      - name: pipeline-repo 설정 검증 (fail-fast)
+        if: ${{ inputs.pipeline-repo == '' }}
+        run: |
+          echo "::error::pipeline-repo 가 비어 있습니다. review 워크플로는 claude 의 /pipeline:* 슬래시커맨드를 plugin 으로 로드하기 위해 Pipeline 레포 체크아웃(설치 소스)이 필요하므로 pipeline-repo(예: org/Pipeline)는 필수입니다. caller yml 에 pipeline-repo 를 추가하세요."
+          exit 1
+
       # ── Pipeline 체크아웃 (plugin 로드 + 추적 action 용) ──
       # claude 호출이 `/pipeline:*` 슬래시커맨드를 plugin 으로 로드하려면 이 시점에
       # Pipeline 레포의 plugin/ 이 있어야 한다. 그래서 claude 호출 step "앞"에 둔다.
@@ -125,14 +136,13 @@ jobs:
 
       # ── Pipeline plugin 설치 (멱등 — 항상 최신) ──
       # 신뢰되지 않은 git repo(영역 레포 체크아웃)에서는 --plugin-dir 로컬 plugin 이
-      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). 대신 user scope 로
-      # "설치"하면 cwd 신뢰와 무관하게 로드된다. 설치 시퀀스(add→update→uninstall→install)의
-      # 근거·실측은 scripts/ensure-plugin-installed.sh 주석 참조.
+      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). user scope 설치본은
+      # cwd 신뢰와 무관하게 로드된다. 설치 시퀀스·동시성 전제는 composite action 및
+      # scripts/ensure-plugin-installed.sh 주석 참조.
       - name: Pipeline plugin 설치 (멱등 — 항상 최신)
-        run: |
-          set -euo pipefail
-          "$GITHUB_WORKSPACE/.pipeline-action-checkout/scripts/ensure-plugin-installed.sh" \
-            "$GITHUB_WORKSPACE/.pipeline-action-checkout"
+        uses: ./.pipeline-action-checkout/actions/ensure-plugin
+        with:
+          checkout-path: ${{ github.workspace }}/.pipeline-action-checkout
 
       - name: Review and fix loop
         env:
