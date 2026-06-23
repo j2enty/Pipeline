@@ -4,7 +4,7 @@
 # 로드맵 Phase 4 — /review 의 "Docs 레포 없는 프로젝트 지원" 가드 단위테스트.
 #
 # 배경:
-#   review.md(.tmpl) 의 쓰기-백(section 10-a)은 Context md 를 Docs 레포에 커밋·push 한다.
+#   review SKILL 의 쓰기-백(section 10-a)은 Context md 를 Docs 레포에 커밋·push 한다.
 #   Docs 미사용 프로젝트로 이식하면 `git -C Docs checkout/add/commit/push` 가 하드 실패한다.
 #   이를 막기 위해 쓰기-백 앞에 "Docs 독립 레포 루트" 판정 가드를 둔다.
 #   초기 가드는 `git -C Docs rev-parse --git-dir` 였으나, 이는 부모 디렉토리로 거슬러
@@ -15,29 +15,29 @@
 #   실제 git 명령으로 고정한다.
 #
 # anti-drift:
-#   DG-DRIFT 케이스가 배포본/템플릿 review.md(.tmpl)에 가드 문자열이 실제로 존재하는지
-#   grep 으로 단언해, 가드가 사라지면 fail 하도록 동기화를 강제한다.
+#   DG-DRIFT 케이스가 플러그인 review SKILL(plugin/skills/review/SKILL.md)에 가드 문자열이
+#   실제로 존재하는지 grep 으로 단언해, 가드가 사라지면 fail 하도록 동기화를 강제한다.
+#   (P3.4 에서 .tmpl 배포 방식 제거 → 가드 SSOT 가 plugin SKILL 로 이관됨.)
 #   ⚠️ 가드 표현을 수정하면 아래 docs_guard_decision 본문과 DG-DRIFT needle 을 함께 동기화할 것.
 #
 # 종속성 제로: 각 케이스가 격리 임시 디렉토리에 빈/일반/git Docs 를 만든다.
 #   install.sh 불필요 → setup_install_env 안 씀.
 
-TEMPLATE_REVIEW="$REPO_ROOT/templates/claude-commands/review.md.tmpl"
-DEPLOYED_REVIEW="$REPO_ROOT/../.claude/commands/review.md"
+PLUGIN_REVIEW_SKILL="$REPO_ROOT/plugin/skills/review/SKILL.md"
 
-# 가드 판정 재현 — review.md 의 "Docs 독립 레포 루트" 가드와 동일 로직.
-#   review.md 는 cwd 기준 `Docs`, 테스트는 `$workspace/Docs` — 경로 prefix 만 다르고
-#   가드 핵심(rev-parse --show-toplevel + pwd -P 경로 비교)은 문자 그대로 동일.
+# 가드 판정 재현 — review SKILL 의 "Docs 독립 레포 루트" 가드와 동일 로직.
+#   SKILL 은 cwd 기준 `Docs`, 테스트는 `$workspace/Docs` — 경로 prefix 만 다르고
+#   가드 핵심(rev-parse --show-toplevel + pwd -P 경로 비교)은 문자 그대로 plugin SKILL 과 동일.
 #   toplevel 이 Docs 자신의 실제 경로와 일치할 때만 "proceed", 아니면 "skip".
 # 입력: $1 = 워크스페이스 루트(그 하위의 Docs/ 를 검사)
 # 출력: "skip" | "proceed"
 docs_guard_decision() {
   local workspace="$1"
-  # >>> review.md 가드와 동일 로직 (anti-drift; DG-DRIFT 가 동기화 단언) >>>
+  # >>> review SKILL 가드와 동일 로직 (anti-drift; DG-DRIFT 가 동기화 단언) >>>
   docs_top="$(git -C "$workspace/Docs" rev-parse --show-toplevel 2>/dev/null || true)"
   docs_abs="$(cd "$workspace/Docs" 2>/dev/null && pwd -P || true)"
   if [ -n "$docs_top" ] && [ "$docs_top" = "$docs_abs" ]; then HAS_DOCS=1; else HAS_DOCS=0; fi
-  # <<< review.md 동일 구간 끝 <<<
+  # <<< review SKILL 동일 구간 끝 <<<
   if [ "$HAS_DOCS" = "1" ]; then
     printf 'proceed\n'
   else
@@ -98,26 +98,23 @@ it "DG-5 상위 git + Docs 독립 clone → proceed (Reclip 실제 구조)"
   rm -rf "$dir"; pass
 )
 
-# DG-DRIFT — anti-drift 가드: 배포본/템플릿 review.md(.tmpl)에 가드 문자열 존재 확인.
-#   위 docs_guard_decision 의 rev-parse 가드는 review.md 와 문자 일치를 전제로 한다.
-#   review.md 가 가드를 제거/변경하면 이 케이스가 fail 해 동기화를 강제한다.
-it "DG-DRIFT review.md(.tmpl)에 Docs 독립레포 가드(show-toplevel + pwd -P) 존재(동기화 가드)"
+# DG-DRIFT — anti-drift 가드: 플러그인 review SKILL 에 가드 문자열 존재 확인.
+#   위 docs_guard_decision 의 rev-parse 가드는 plugin SKILL 과 문자 일치를 전제로 한다.
+#   SKILL 이 가드를 제거/변경하면 이 케이스가 fail 해 동기화를 강제한다.
+it "DG-DRIFT plugin review SKILL 에 Docs 독립레포 가드(show-toplevel + pwd -P) 존재(동기화 가드)"
 (
   # 가드는 두 축으로 성립한다: ① toplevel 조회(rev-parse --show-toplevel)
   # ② Docs 실경로(pwd -P) 와의 비교. 한쪽만 보면 비교부 드리프트를 놓치므로 둘 다 요구.
   # ⚠️ docs_guard_decision 의 가드 핵심 표현을 바꾸면 두 needle 도 함께 동기화할 것.
   needle_top='git -C Docs rev-parse --show-toplevel'
   needle_abs='pwd -P'
-  found=0
-  for f in "$TEMPLATE_REVIEW" "$DEPLOYED_REVIEW"; do
-    [ -f "$f" ] || continue
-    if grep -qF -- "$needle_top" "$f" && grep -qF -- "$needle_abs" "$f"; then
-      found=$((found + 1))
-    fi
-  done
-  if [ "$found" -ge 1 ]; then
+  if [ ! -f "$PLUGIN_REVIEW_SKILL" ]; then
+    fail "plugin review SKILL 없음: $PLUGIN_REVIEW_SKILL"
+    return
+  fi
+  if grep -qF -- "$needle_top" "$PLUGIN_REVIEW_SKILL" && grep -qF -- "$needle_abs" "$PLUGIN_REVIEW_SKILL"; then
     pass
   else
-    fail "review.md(.tmpl)에 Docs 독립 레포 가드(show-toplevel + pwd -P) 미존재 — 가드가 제거/변경됨"
+    fail "plugin review SKILL 에 Docs 독립 레포 가드(show-toplevel + pwd -P) 미존재 — 가드가 제거/변경됨"
   fi
 )

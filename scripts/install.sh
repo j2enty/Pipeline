@@ -15,9 +15,10 @@
 #                        (off 가 기본 — 플래그 없으면 기존 대화형 동작 유지)
 #   --update-commands-only
 #                        secrets/variables/caller-yml/env 전부 스킵하고
-#                        config 파싱 + Claude 슬래시커맨드 배포만 실행 후 종료
-#                        (커맨드 템플릿 수정 후 빠른 로컬 재배포용)
-#   --reapply            secrets/.env/커맨드/npm 전부 스킵하고
+#                        config 파싱 + 런타임 config(.claude/pipeline-config.yml) 재생성만
+#                        실행 후 종료 (config 수정 후 빠른 로컬 재생성용)
+#                        (플래그명은 하위호환 위해 유지 — 플러그인 전환으로 실역할은 config 재생성)
+#   --reapply            secrets/.env/런타임 config/npm 전부 스킵하고
 #                        variables + 추적 라벨 + 호출자 yml 만 멱등 재적용 후 종료.
 #                        운영 App 가동 중 부분 재적용용 — app/.env(WEBHOOK_SECRET) 불변 보장.
 #   --rotate-webhook-secret
@@ -58,7 +59,7 @@ CONFIG_FILE=""              # 위치인자로 받음 (미지정 시 아래에서
 ENV_FILE=""                 # --env-file (미지정 시 아래에서 app/.env)
 PORT_VALUE="3000"           # --port
 NON_INTERACTIVE=false       # --non-interactive
-UPDATE_COMMANDS_ONLY=false  # --update-commands-only
+UPDATE_COMMANDS_ONLY=false  # --update-commands-only (런타임 config 재생성 전용)
 REAPPLY=false               # --reapply (variables+labels+caller-yml만 멱등 재적용)
 ROTATE_WEBHOOK_SECRET=false # --rotate-webhook-secret (WEBHOOK_SECRET 의도적 회전)
 
@@ -249,7 +250,6 @@ for lm in re.finditer(r'^\s+-\s+name:.*$', modules_block, re.MULTILINE):
                          f"해당 모듈 누락: {lm.group(0).strip()}\n")
 name_iter = list(re.finditer(rf'^\s+-\s+name:\s*{QUOTED_VALUE}\s*(?:#.*)?$', modules_block, re.MULTILINE))
 names = []
-module_area_ids = {}  # name → modules[].area-id (legacy area-ids 맵보다 우선)
 for idx, m in enumerate(name_iter):
     name = pick_quoted_value(m)
     block_start = m.end()
@@ -268,13 +268,6 @@ for idx, m in enumerate(name_iter):
     if strict not in ('true', 'false'):
         strict = 'true'
 
-    # area-id — 모듈 블록 내부 값(있으면). 없으면 빈 값 → 아래 area-ids 맵 폴백.
-    # 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-id 가 다음 줄 키를 흡수하면 legacy 폴백이 깨짐.
-    # 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52).
-    # 빈 값은 어느 분기도 매칭 안 됨 → aid_m None → '' (빈값 → legacy 폴백 동작 유지).
-    aid_m = re.search(rf'^\s+area-id:[ \t]*{QUOTED_VALUE}\s*(?:#.*)?$', block, re.MULTILINE)
-    module_area_ids[name] = pick_quoted_value(aid_m) if aid_m else ''
-
     names.append(name)
     print(f"MODULE_{idx}_NAME='{name}'")
     print(f"MODULE_{idx}_CI='{ci}'")
@@ -292,93 +285,9 @@ ignore_set = {i.strip() for i in items}
 poller_modules = [n for n in names if n not in ignore_set]
 print(f"MODULES_JSON='{json.dumps(poller_modules, separators=(',', ':'))}'")
 
-# ── claude-commands 섹션 — Claude 슬래시커맨드 로컬 배포용 ────────────
-# claude-commands: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
-# (다른 섹션의 동명 키와 충돌 방지)
-cc = re.search(r'^claude-commands:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
-cc_block = cc.group(1) if cc else ''
-
-# enabled — 미지정 시 기본 false
-cc_en = re.search(r'^\s+enabled:\s*(\w+)', cc_block, re.MULTILINE)
-cc_enabled = cc_en.group(1).strip().lower() if cc_en else 'false'
-if cc_enabled not in ('true', 'false'):
-    cc_enabled = 'false'
-print(f"CMD_ENABLED={cc_enabled}")
-
-# 스칼라 항목들 — claude-commands 블록 내부에서만 탐색
-# (CLAUDE.md 설정 중복 방지 원칙: owner/project-number/slack-channel/parent-repo-name 은
-#  여기서 새로 만들지 않고 기존 값에서 셸 측에서 파생)
-print(f"CMD_PROJECT_NAME='{get_scalar_in(cc_block, 'project-name')}'")
-print(f"CMD_PROJECT_ID='{get_scalar_in(cc_block, 'project-id')}'")
-print(f"CMD_STATUS_FIELD_ID='{get_scalar_in(cc_block, 'status-field-id')}'")
-print(f"CMD_AREA_FIELD_ID='{get_scalar_in(cc_block, 'area-field-id')}'")
-print(f"CMD_REVIEWER_APP_ID='{get_scalar_in(cc_block, 'reviewer-app-id')}'")
-print(f"CMD_REVIEWER_BOT_SLUG='{get_scalar_in(cc_block, 'reviewer-bot-slug')}'")
-print(f"CMD_REVIEWER_TOKEN_KEY='{get_scalar_in(cc_block, 'reviewer-token-key')}'")
-print(f"CMD_SLACK_TOKEN_KEY='{get_scalar_in(cc_block, 'slack-token-key')}'")
-print(f"CMD_AUTHOR_LOGIN='{get_scalar_in(cc_block, 'author-login')}'")
-print(f"CMD_LOCAL_ACCOUNT='{get_scalar_in(cc_block, 'local-account')}'")
-print(f"CMD_DOCS_CONTEXT_DIR='{get_scalar_in(cc_block, 'docs-context-dir')}'")
-
-# area-ids 매핑 (영역명 → 해시) — area-ids: 하위의 `<name>: <hash>` 들을 추출
-# CMD_AREA_ID_<UPPER> 형태로 emit (예: Backend → CMD_AREA_ID_BACKEND)
-# area-ids: 의 들여쓰기를 \1 로 캡처해 더 깊게 들여쓴 항목 줄만 모은다(plan_m 과 동일 앵커).
-# 주의: 기존 `\s+...\s*.+` 는 콜론 뒤 \s* 가 개행을 넘어 다음 형제 블록(plan:)의 자식 줄까지
-# 빨아들였다 → 정크 CMD_AREA_ID_PLAN emit + 값에 따옴표 섞이면 eval 오염(선재 버그).
-# resolve 순서: modules[].area-id 우선 → 없으면 legacy claude-commands.area-ids.<Name> 폴백.
-# (리더 pipeline-config.sh 의 area-id resolve 와 동일한 우선순위로 parity 유지.)
-ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', cc_block, re.MULTILINE)
-area_ids_block = ai.group(2) if ai else ''
-resolved_area_ids = {}  # name → hash (legacy 먼저 채우고 modules 값으로 덮어씀)
-# 값 앞 공백은 [ \t]* (개행 비흡수) — 빈 area-ids 항목이 다음 줄 항목 값을 흡수하는 것 방지.
-# 따옴표 분기 우선(따옴표 안 # 보존, #57) → 무따옴표 폴백(인라인 주석 제거, #52). 리더 area_id() parity.
-# 키 패턴: 리더 area_id() 는 re.escape(name) 으로 임의 모듈명(하이픈 포함 Frontend-1 등)을
-# 매칭한다 → install 키 집합도 동일하게 [^\s:#]+ 로 일반화(공백·콜론·# 만 제외)해 비대칭 제거.
-# 값은 QUOTED_VALUE 가 그룹 2·3·4 로 캡처(키가 그룹1) — 매칭된 분기를 직접 고른다.
-# 따옴표 분기(2·3)는 .strip() 만, 무따옴표 폴백(4)은 .strip("'\"") 추가 — pick_quoted_value 동일 규칙
-# (빈 따옴표 K: '' → 그룹3 이 빈 문자열로 매치 → 빈값. 리터럴 '' 누출/legacy 오염 방지, #57 후속).
-for am in re.finditer(rf'^\s+([^\s:#]+):[ \t]*{QUOTED_VALUE}\s*(?:#.*)?$', area_ids_block, re.MULTILINE):
-    if am.group(2) is not None:
-        val = am.group(2).strip()
-    elif am.group(3) is not None:
-        val = am.group(3).strip()
-    elif am.group(4) is not None:
-        val = am.group(4).strip().strip("'\"")
-    else:
-        val = ''
-    resolved_area_ids[am.group(1).strip()] = val
-# modules[].area-id 우선 — 비어있지 않은 값만 덮어씀(빈 값은 legacy 폴백 유지)
-for mname, mhash in module_area_ids.items():
-    if mhash:
-        resolved_area_ids[mname] = mhash
-# CMD_AREA_ID_<UPPER> emit — 이 출력은 셸에서 eval 되므로 변수명이 유효한 셸 식별자여야 한다.
-# 하이픈 등 식별자 비허용 문자는 '_' 로 치환(예: Frontend-1 → CMD_AREA_ID_FRONTEND_1).
-# (resolved_area_ids 딕셔너리 키는 실제 모듈명 그대로 — 리더 area-id.<Name> 와 값 parity 유지.
-#  eval 안전 보장이 우선이라 변수명만 sanitize.)
-for area_name, area_hash in resolved_area_ids.items():
-    var_suffix = re.sub(r'[^A-Za-z0-9_]', '_', area_name.upper())
-    print(f"CMD_AREA_ID_{var_suffix}='{area_hash}'")
-
-# plan 서브섹션 — critic 토글 (claude-commands 블록 내부에서만 탐색)
-# plan: 의 들여쓰기를 \1 로 캡처해, 같은(또는 더 얕은) 들여쓰기의 다음 키에서 종료한다.
-# [ \t]+ 로 제한: \s+ 는 개행을 포함해 plan: 앞 빈 줄이 있으면 \1 에 개행이 섞이는 버그.
-plan_m = re.search(r'^([ \t]+)plan:\s*\n(.*?)(?=^\1\S|\Z)', cc_block, re.MULTILINE | re.DOTALL)
-plan_block = plan_m.group(2) if plan_m else ''
-def get_plan_bool(key, default='true'):
-    # 따옴표 허용 + boolean 만 인정 (오타·비boolean·누락 → default).
-    # 주의: \w+ 만 쓰면 "false"(따옴표) 가 매치 실패해 opt-out 이 조용히 무력화됨(true 로 떨어짐).
-    # 그래서 값 양옆 따옴표를 선택 허용하고, true/false 만 줄 끝(주석 허용)까지 고정해 잡는다.
-    m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
-                  plan_block, re.MULTILINE | re.IGNORECASE)
-    return m.group(1).lower() if m else default
-print(f"CMD_PLAN_COMPLETENESS_CRITIC_ENABLED='{get_plan_bool('completeness-critic-enabled')}'")
-print(f"CMD_PLAN_CONSISTENCY_CRITIC_ENABLED='{get_plan_bool('consistency-critic-enabled')}'")
-print(f"CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL='{get_plan_bool('consistency-critic-dual-model')}'")
-print(f"CMD_PLAN_CONTRACT_DOC_ENABLED='{get_plan_bool('contract-doc-enabled')}'")
-
 # ── tracking 섹션 — finding 추적 라벨 자동 등록용 ───────────────────────
 # tracking: 섹션부터 다음 최상위 키 직전까지 슬라이스해 그 안에서만 탐색
-# (claude-commands 블록 파싱과 동일 방식 — 다른 섹션의 동명 키와 충돌 방지)
+# (pipeline/modules 블록 파싱과 동일 방식 — 다른 섹션의 동명 키와 충돌 방지)
 tk = re.search(r'^tracking:\s*\n(.*?)(?=^\S|\Z)', content, re.MULTILINE | re.DOTALL)
 tk_block = tk.group(1) if tk else ''
 
@@ -797,123 +706,6 @@ generate_package_lock() {
   fi
 }
 
-# ── Claude 슬래시커맨드 로컬 배포 ─────────────────────────────
-# templates/claude-commands/*.md.tmpl 을 config 값으로 치환해
-# 워크스페이스 루트($WORKING_DIR)의 .claude/commands/ 에 로컬 파일로 배포한다.
-#
-# caller-yml(install_caller_ymls)과의 차이:
-#   caller-yml = gh api PUT 으로 "원격 레포"에 커밋
-#   command    = 로컬 워크스페이스 파일 → 단순 로컬 write
-#
-# 원자성: 임시 디렉토리에 3개 전부 생성·검증 성공 후에야 대상 디렉토리로 이동
-#         (부분 실패로 일부만 갱신되는 상황 방지)
-install_claude_commands() {
-  # enabled=false 면 스킵 (로그만)
-  if [ "${CMD_ENABLED:-false}" != "true" ]; then
-    info "claude-commands.enabled=false — 슬래시커맨드 배포 스킵"
-    return 0
-  fi
-
-  local src="$REPO_ROOT/templates/claude-commands"
-  if [ ! -d "$src" ]; then
-    error "템플릿 디렉토리 없음: $src"
-    return 1
-  fi
-
-  # 배포 대상 — working-directory 재사용 (별도 dir 항목 안 만듦)
-  if [ -z "${WORKING_DIR:-}" ]; then
-    error "claude-commands 배포 실패 — working-directory 가 비어있습니다 (배포 경로 산출 불가)"
-    return 1
-  fi
-  local dest_dir="$WORKING_DIR/.claude/commands"
-
-  # ── 기존 재사용 값에서 파생 (설정 중복 방지) ──────────────────
-  # __ORG__            ← OWNER
-  # __PARENT_REPO_NAME__ ← PARENT_REPO(<owner>/<repo>)의 repo 부분
-  # __PROJECT_NUMBER__ ← PROJECT_NUMBERS_JSON 의 첫 요소
-  # __SLACK_CHANNEL__  ← SLACK_CHANNEL
-  local org="$OWNER"
-  local parent_repo_name="${PARENT_REPO##*/}"   # 'a/b' → 'b'
-  local project_number
-  project_number=$(printf '%s' "${PROJECT_NUMBERS_JSON:-[]}" | python3 -c "import sys,json; a=json.load(sys.stdin); print(a[0] if a else '')")
-  local slack_channel="${SLACK_CHANNEL:-}"
-
-  echo "  Claude 슬래시커맨드 배포 중... (→ $dest_dir)"
-
-  # 임시 작업 디렉토리 — 원자적 배포용
-  local tmp_dir
-  tmp_dir=$(mktemp -d)
-  # 함수 종료 시 임시 디렉토리 정리 (성공/실패 무관)
-  trap 'rm -rf "$tmp_dir"' RETURN
-
-  # sed 치환 인자 배열 — 모든 placeholder 1:1 매핑
-  #   값에 '/'(예: Docs/claude/context)·'&' 가 들어갈 수 있으므로 sed 구분자는 '|' 사용.
-  #   치환값 내부의 '|'·'&'·'\' 는 이스케이프 (sed 메타문자 안전).
-  #   placeholder 가 '__' 로 끝나고 결합형 suffix 는 '_' 로 시작하므로
-  #   (__REVIEWER_TOKEN_KEY___PRIVATE_KEY) 경계가 정확히 보존된다.
-  esc() { printf '%s' "$1" | sed -e 's/[\|&\\]/\\&/g'; }
-
-  local sed_args=(
-    -e "s|__ORG__|$(esc "$org")|g"
-    -e "s|__PARENT_REPO_NAME__|$(esc "$parent_repo_name")|g"
-    -e "s|__PROJECT_NAME__|$(esc "$CMD_PROJECT_NAME")|g"
-    -e "s|__PROJECT_NUMBER__|$(esc "$project_number")|g"
-    -e "s|__PROJECT_ID__|$(esc "$CMD_PROJECT_ID")|g"
-    -e "s|__STATUS_FIELD_ID__|$(esc "$CMD_STATUS_FIELD_ID")|g"
-    -e "s|__AREA_FIELD_ID__|$(esc "$CMD_AREA_FIELD_ID")|g"
-    -e "s|__REVIEWER_APP_ID__|$(esc "$CMD_REVIEWER_APP_ID")|g"
-    -e "s|__REVIEWER_BOT_SLUG__|$(esc "$CMD_REVIEWER_BOT_SLUG")|g"
-    -e "s|__REVIEWER_TOKEN_KEY__|$(esc "$CMD_REVIEWER_TOKEN_KEY")|g"
-    -e "s|__SLACK_CHANNEL__|$(esc "$slack_channel")|g"
-    -e "s|__SLACK_TOKEN_KEY__|$(esc "$CMD_SLACK_TOKEN_KEY")|g"
-    -e "s|__AUTHOR_LOGIN__|$(esc "$CMD_AUTHOR_LOGIN")|g"
-    -e "s|__LOCAL_ACCOUNT__|$(esc "$CMD_LOCAL_ACCOUNT")|g"
-    -e "s|__DOCS_CONTEXT_DIR__|$(esc "$CMD_DOCS_CONTEXT_DIR")|g"
-    -e "s|__AREA_ID_BACKEND__|$(esc "${CMD_AREA_ID_BACKEND:-}")|g"
-    -e "s|__AREA_ID_ADMIN__|$(esc "${CMD_AREA_ID_ADMIN:-}")|g"
-    -e "s|__AREA_ID_FRONTEND__|$(esc "${CMD_AREA_ID_FRONTEND:-}")|g"
-    -e "s|__AREA_ID_IOS__|$(esc "${CMD_AREA_ID_IOS:-}")|g"
-    -e "s|__AREA_ID_ANDROID__|$(esc "${CMD_AREA_ID_ANDROID:-}")|g"
-    -e "s|__AREA_ID_DESIGN__|$(esc "${CMD_AREA_ID_DESIGN:-}")|g"
-    -e "s|__PLAN_COMPLETENESS_CRITIC_ENABLED__|$(esc "${CMD_PLAN_COMPLETENESS_CRITIC_ENABLED:-true}")|g"
-    -e "s|__PLAN_CONSISTENCY_CRITIC_ENABLED__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_ENABLED:-true}")|g"
-    -e "s|__PLAN_CONSISTENCY_CRITIC_DUAL_MODEL__|$(esc "${CMD_PLAN_CONSISTENCY_CRITIC_DUAL_MODEL:-true}")|g"
-    -e "s|__PLAN_CONTRACT_DOC_ENABLED__|$(esc "${CMD_PLAN_CONTRACT_DOC_ENABLED:-true}")|g"
-  )
-
-  # 3개 템플릿 치환 → 임시 디렉토리에 생성
-  local tmpl base out
-  for tmpl in review.md.tmpl kickoff.md.tmpl plan.md.tmpl; do
-    if [ ! -f "$src/$tmpl" ]; then
-      error "템플릿 파일 없음: $src/$tmpl"
-      return 1
-    fi
-    base="${tmpl%.tmpl}"   # review.md.tmpl → review.md
-    out="$tmp_dir/$base"
-    sed "${sed_args[@]}" "$src/$tmpl" > "$out"
-  done
-
-  # self-check — 미치환 placeholder 잔존 검사 (배포 전 차단)
-  local leftover
-  leftover=$(grep -rl '__[A-Z_]*__' "$tmp_dir" 2>/dev/null || true)
-  if [ -n "$leftover" ]; then
-    error "치환 누락 — 배포본에 placeholder 잔존:"
-    grep -rohn '__[A-Z_]*__' "$tmp_dir" | sort -u >&2
-    error "config 의 claude-commands 항목을 확인하세요. 배포 중단."
-    return 1
-  fi
-
-  # 원자적 이동 — 검증 통과한 임시본을 대상 디렉토리로 일괄 배치
-  mkdir -p "$dest_dir"
-  for tmpl in review.md.tmpl kickoff.md.tmpl plan.md.tmpl; do
-    base="${tmpl%.tmpl}"
-    mv -f "$tmp_dir/$base" "$dest_dir/$base"
-    echo "    ✅ $base"
-  done
-
-  info "Claude 슬래시커맨드 배포 완료 ($dest_dir)"
-}
-
 # ── Pipeline config 생성 (플러그인 런타임 리더용) ──────────────
 # 입력 config($CONFIG_FILE)를 워크스페이스 루트($WORKING_DIR)의
 # .claude/pipeline-config.yml 로 그대로 복사한다.
@@ -929,13 +721,10 @@ install_claude_commands() {
 #   같은 pipeline-config.yml 을 읽는다. 따라서 입력 config 를 (거의) 그대로 복사하면
 #   되고, 키를 재추출해 재직렬화하지 않는다 — parity 표면을 새로 만들지 않기 위함.
 #
-# install_claude_commands(.tmpl 배포)와의 관계:
-#   현재는 두 방식을 병존(나란히 추가)시킨다. .tmpl 배포 제거는 P3.4 에서 별도로.
-#
-# 원자성: install_claude_commands 와 동일하게 임시 파일에 쓰고 self-check 통과 후 mv.
+# 원자성: 임시 파일에 쓰고 self-check 통과 후 mv.
 # 멱등: 재실행 시 덮어쓰기 — 항상 입력 config 와 동일 상태로 수렴.
 generate_pipeline_config() {
-  # 배포 대상 — install_claude_commands 와 동일하게 working-directory 재사용
+  # 배포 대상 — working-directory 재사용
   if [ -z "${WORKING_DIR:-}" ]; then
     error "pipeline-config 생성 실패 — working-directory 가 비어있습니다 (배포 경로 산출 불가)"
     return 1
@@ -1034,17 +823,14 @@ main() {
   info "프로젝트: $OWNER (parent: $PARENT_REPO)"
   info "모듈 수: $MODULE_COUNT"
 
-  # ── --update-commands-only — 커맨드만 빠른 재배포 후 종료 ──────────
-  # secrets/variables/caller-yml/env 전부 스킵 (config 파싱은 이미 수행됨)
+  # ── --update-commands-only — 런타임 config 만 빠른 재생성 후 종료 ──────────
+  # secrets/variables/caller-yml/env 전부 스킵 (config 파싱은 이미 수행됨).
+  # 플러그인 시대엔 "커맨드 재배포"의 실질 역할 = 런타임 config(.claude/pipeline-config.yml) 재생성.
   if [ "$UPDATE_COMMANDS_ONLY" = "true" ]; then
-    section "Claude 슬래시커맨드 배포 (전용 모드)"
-    install_claude_commands
-    # 플러그인 시대엔 "커맨드 재배포"의 실질 역할 = 런타임 config 재생성.
-    # .tmpl 배포와 병존시켜 함께 갱신(.tmpl 제거는 P3.4).
-    section "Pipeline config 생성"
+    section "Pipeline config 재생성 (전용 모드)"
     generate_pipeline_config
     echo ""
-    info "커맨드 재배포 완료 — 다른 단계는 스킵됨 (--update-commands-only)"
+    info "런타임 config 재생성 완료 — 다른 단계는 스킵됨 (--update-commands-only)"
     exit 0
   fi
 
@@ -1061,12 +847,12 @@ main() {
 
   # ── --reapply — 운영 중 부분 재적용 후 종료 ────────────────────────
   # variables + 추적 라벨 + 호출자 yml 만 멱등 재적용.
-  # secrets / generate_env(.env) / 커맨드 / npm 전부 스킵 →
+  # secrets / generate_env(.env) / 런타임 config / npm 전부 스킵 →
   # app/.env(WEBHOOK_SECRET 포함) 를 일절 건드리지 않아 운영 App 파손 위험 0.
   if [ "$REAPPLY" = "true" ]; then
     VERDICT_DIR=".pipeline/state/reviews"
     section "부분 재적용 (--reapply)"
-    warn "secrets/.env/커맨드/npm 스킵 — variables·라벨·호출자 yml 만 재적용"
+    warn "secrets/.env/런타임 config/npm 스킵 — variables·라벨·호출자 yml 만 재적용"
     # 환경변수 REVIEWER_BOT_LOGIN 원본을 보존.
     # 미제공(빈 값)이면 레포마다 기존 variable 을 읽어 결정(보존 or skip).
     # 제공된 경우는 모든 레포에 동일 값 사용.
@@ -1108,7 +894,7 @@ main() {
       register_labels "$PARENT_REPO"
     fi
     echo ""
-    info "부분 재적용 완료 — secrets/.env/커맨드/npm 스킵됨 (--reapply)"
+    info "부분 재적용 완료 — secrets/.env/런타임 config/npm 스킵됨 (--reapply)"
     exit 0
   fi
 
@@ -1187,12 +973,8 @@ main() {
   section "App 환경변수 생성"
   generate_env
 
-  # Claude 슬래시커맨드 배포 — 워크스페이스 1개라 모듈 루프 밖 1회 호출
-  section "Claude 슬래시커맨드 배포"
-  install_claude_commands
-
   # Pipeline config 생성 — 플러그인 런타임 리더용 .claude/pipeline-config.yml.
-  # install_claude_commands(.tmpl 배포)와 병존(.tmpl 제거는 P3.4).
+  # 워크스페이스 1개라 모듈 루프 밖 1회 호출.
   section "Pipeline config 생성"
   generate_pipeline_config
 

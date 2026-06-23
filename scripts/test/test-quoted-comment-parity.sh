@@ -11,10 +11,10 @@
 # 검증(install ↔ 리더 동일값):
 #   T-QC-1: project.owner 따옴표+주석 → 동일값(RedOrg)
 #   T-QC-2: slack-channel 따옴표 안 # 보존(대조군) → #blue-alerts
-#   T-QC-3: claude-commands project-name 따옴표+주석 → Blue Proj
+#   T-QC-3: project-name 따옴표+주석 → Blue Proj (리더 SSOT — install 측 파싱은 P3.4 제거)
 #   T-QC-4: per-module ci-workflow-name 따옴표+주석 → Backend CI (리더 get_scalar_in 경로)
-#   T-QC-5: per-module area-id 따옴표+주석 → be-mod
-#   T-QC-6: 하이픈 area-ids 키 Frontend-1 → 리더 area-id.Frontend-1 == install CMD_AREA_ID_FRONTEND_1
+#   T-QC-5: per-module area-id 따옴표+주석 → be-mod (리더 SSOT — install 측 파싱은 P3.4 제거)
+#   T-QC-6: 하이픈 area-ids 키 Frontend-1 → 리더 area-id.Frontend-1 (install 측 파싱은 P3.4 제거)
 # shellcheck disable=SC2034
 
 READER="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
@@ -41,15 +41,12 @@ it "T-QC-2 slack-channel 따옴표 안 # 보존(대조군) → install↔리더 
   assert_eq "#blue-alerts" "$rv" "리더: 따옴표 안 # 손상" && pass
 )
 
-# T-QC-3: project-name 따옴표+주석 parity (get_scalar_in)
-it "T-QC-3 project-name 따옴표+주석 → install↔리더 동일값"
+# T-QC-3: project-name 따옴표+주석 — project-name 파싱은 P3.4 에서 install.sh 에서 제거
+#   (claude-commands 블록 제거). 런타임 리더가 단일 SSOT → 리더 기준으로만 검증.
+it "T-QC-3 project-name 따옴표+주석 → 'Blue Proj' (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "Blue Proj" "$CMD_PROJECT_NAME" "install.sh: project-name 따옴표+주석 소실" || return
   rv="$(PIPELINE_CONFIG="$FIX" bash "$READER" project-name 2>/dev/null)"
-  assert_eq "Blue Proj" "$rv" "리더: project-name 따옴표+주석 소실" || return
-  assert_eq "$CMD_PROJECT_NAME" "$rv" "project-name parity 불일치" && pass
+  assert_eq "Blue Proj" "$rv" "리더: project-name 따옴표+주석 소실" && pass
 )
 
 # T-QC-4: per-module ci-workflow-name 따옴표+주석 (리더 get_scalar_in 경로 / install module_blocks)
@@ -63,25 +60,18 @@ it "T-QC-4 ci-workflow-name 따옴표+주석 → install↔리더 동일값"
   assert_eq "$MODULE_0_CI" "$rv" "ci-workflow-name parity 불일치" && pass
 )
 
-# T-QC-5: per-module area-id 따옴표+주석
-it "T-QC-5 modules area-id 따옴표+주석 → install↔리더 동일값"
+# T-QC-5: per-module area-id 따옴표+주석 — area-id 파싱은 P3.4 에서 install.sh 에서 제거,
+#   런타임 리더가 단일 SSOT → 리더 기준으로만 검증.
+it "T-QC-5 modules area-id 따옴표+주석 → 'be-mod' (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "be-mod" "$CMD_AREA_ID_BACKEND" "install.sh: modules area-id 따옴표+주석 소실" || return
   rv="$(PIPELINE_CONFIG="$FIX" bash "$READER" module.Backend.area-id 2>/dev/null)"
-  assert_eq "be-mod" "$rv" "리더: modules area-id 따옴표+주석 소실" || return
-  assert_eq "$CMD_AREA_ID_BACKEND" "$rv" "modules area-id parity 불일치" && pass
+  assert_eq "be-mod" "$rv" "리더: modules area-id 따옴표+주석 소실" && pass
 )
 
-# T-QC-6: 하이픈 area-ids 키 Frontend-1 — install 도 매칭(변수명은 _ sanitize)
-it "T-QC-6 하이픈 area-ids 키 Frontend-1 → install↔리더 동일값"
+# T-QC-6: 하이픈 area-ids 키 Frontend-1 — area-id 파싱은 P3.4 에서 install.sh 에서 제거,
+#   런타임 리더가 단일 SSOT → 리더 기준으로만 검증.
+it "T-QC-6 하이픈 area-ids 키 Frontend-1 → 'feh' (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  # install: CMD_AREA_ID_FRONTEND_1 (하이픈→_ sanitize) 로 emit
-  assert_eq "feh" "${CMD_AREA_ID_FRONTEND_1:-}" "install.sh: 하이픈 키 Frontend-1 미매칭" || return
   rv="$(PIPELINE_CONFIG="$FIX" bash "$READER" area-id.Frontend-1 2>/dev/null)"
-  assert_eq "feh" "$rv" "리더: area-id.Frontend-1 미매칭" || return
-  assert_eq "${CMD_AREA_ID_FRONTEND_1:-}" "$rv" "하이픈 키 parity 불일치" && pass
+  assert_eq "feh" "$rv" "리더: area-id.Frontend-1 미매칭" && pass
 )

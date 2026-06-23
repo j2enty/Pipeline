@@ -7,22 +7,18 @@
 #   수정: 값 앞 공백을 [ \t]* 로 바꿔 개행 비흡수.
 #
 # 검증(리더 parity 포함):
-#   T-EA-1: 빈 modules.area-id → 다음 줄 키 비흡수 + legacy area-ids 맵 폴백
-#           (install.sh CMD_AREA_ID_ALPHA == 리더 module.Alpha.area-id == legacyfallback)
+#   T-EA-1: 빈 modules.area-id → 다음 줄 키 비흡수 + legacy area-ids 맵 폴백 (리더 SSOT)
 #   T-EA-2: 빈 ci-workflow-name → 다음 줄 키 비흡수(빈 값)
-#   T-EA-3: 채워진 area-id 는 그대로(Beta)
+#   T-EA-3: 채워진 area-id/ci 는 그대로(Beta)
+# 주의: area-id resolve 는 P3.4 에서 install.sh 에서 제거 → 리더가 단일 SSOT.
+#   빈 스칼라 비흡수의 install 측 검증은 ci-workflow-name(여전히 install 파싱)로 유지.
 # shellcheck disable=SC2034
 
 READER="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
 
-# T-EA-1: 빈 area-id → legacy 폴백 (install.sh ↔ 리더 parity)
-it "T-EA-1 빈 area-id → 다음 줄 키 비흡수 + legacy 폴백 (install↔리더 parity)"
+# T-EA-1: 빈 area-id → legacy 폴백 (리더 SSOT)
+it "T-EA-1 빈 area-id → 다음 줄 키 비흡수 + legacy 폴백 (리더)"
 (
-  setup_install_env "$FIXTURES_DIR/config-empty-scalar-absorb.yml"
-  eval "$(parse_config 2>/dev/null)"
-  # install.sh: Alpha area-id 비었으니 legacy 맵으로 폴백
-  assert_eq "legacyfallback" "$CMD_AREA_ID_ALPHA" "install.sh: 빈 area-id 가 다음 줄 키 흡수/폴백 실패" || return
-  # 리더: 동일 결과
   rval="$(PIPELINE_CONFIG="$FIXTURES_DIR/config-empty-scalar-absorb.yml" bash "$READER" module.Alpha.area-id 2>/dev/null)"
   assert_eq "legacyfallback" "$rval" "리더: 빈 area-id 폴백 실패" || return
   # 친화 키도 동일
@@ -42,11 +38,12 @@ it "T-EA-2 빈 ci-workflow-name → 다음 줄 키 비흡수(빈 값)"
 )
 
 # T-EA-3: 채워진 area-id/ci 는 그대로 (Beta)
+#   ci-workflow-name 은 install.sh 도 여전히 파싱 → install↔리더 둘 다 검증.
+#   area-id 는 리더 SSOT 기준(install area 파싱 P3.4 제거).
 it "T-EA-3 채워진 area-id/ci 는 정상 (Beta)"
 (
   setup_install_env "$FIXTURES_DIR/config-empty-scalar-absorb.yml"
   eval "$(parse_config 2>/dev/null)"
-  assert_eq "beta-real" "$CMD_AREA_ID_BETA" "install.sh: Beta area-id 누락" || return
   assert_eq "Beta CI" "$MODULE_1_CI" "install.sh: Beta ci 누락" || return
   rb="$(PIPELINE_CONFIG="$FIXTURES_DIR/config-empty-scalar-absorb.yml" bash "$READER" module.Beta.area-id 2>/dev/null)"
   assert_eq "beta-real" "$rb" "리더: Beta area-id 누락" && pass

@@ -40,35 +40,29 @@ it "T-QH-2 ci-workflow-name 따옴표 안 # → 'CI#1' (install↔리더 parity)
   assert_eq "$MODULE_0_CI" "$rci" "ci 따옴표 안 # parity 불일치" && pass
 )
 
-# T-QH-3: modules area-id 따옴표 안 # (a#b → 변수명 sanitize CMD_AREA_ID_A_B)
-it "T-QH-3 modules area-id 따옴표 안 # → 'h#1' (install↔리더 parity)"
+# T-QH-3: modules area-id 따옴표 안 # — area-id 파싱은 P3.4 에서 install.sh 에서 제거,
+#   런타임 리더(pipeline-config.sh)가 단일 SSOT. 리더 기준으로만 검증.
+it "T-QH-3 modules area-id 따옴표 안 # → 'h#1' (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "h#1" "${CMD_AREA_ID_A_B:-}" "install.sh: modules area-id 따옴표 안 # 잘림" || return
   raid="$(PIPELINE_CONFIG="$FIX" bash "$READER" "module.a#b.area-id" 2>/dev/null)"
-  assert_eq "h#1" "$raid" "리더: modules area-id 따옴표 안 # 잘림" || return
-  assert_eq "${CMD_AREA_ID_A_B:-}" "$raid" "area-id 따옴표 안 # parity 불일치" && pass
+  assert_eq "h#1" "$raid" "리더: modules area-id 따옴표 안 # 잘림" && pass
 )
 
-# T-QH-4: area-ids 맵 값 따옴표 안 #
-it "T-QH-4 area-ids 맵 값 따옴표 안 # → 'v#1' (install↔리더 parity)"
+# T-QH-4: area-ids 맵 값 따옴표 안 # — 리더 SSOT 기준 검증(install 제거).
+it "T-QH-4 area-ids 맵 값 따옴표 안 # → 'v#1' (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "v#1" "${CMD_AREA_ID_FRONTEND:-}" "install.sh: area-ids 맵 따옴표 안 # 잘림" || return
   rfe="$(PIPELINE_CONFIG="$FIX" bash "$READER" area-id.Frontend 2>/dev/null)"
-  assert_eq "v#1" "$rfe" "리더: area-ids 맵 따옴표 안 # 잘림" || return
-  assert_eq "${CMD_AREA_ID_FRONTEND:-}" "$rfe" "area-ids 맵 따옴표 안 # parity 불일치" && pass
+  assert_eq "v#1" "$rfe" "리더: area-ids 맵 따옴표 안 # 잘림" && pass
 )
 
 # T-QH-5: 무따옴표 인라인 주석 무회귀(#52)
+#   ci-workflow-name 은 install.sh 도 여전히 파싱(modules 블록) → install↔리더 둘 다 검증.
+#   area-ids 맵은 P3.4 에서 install.sh 에서 제거 → 리더 기준으로만 검증.
 it "T-QH-5 무따옴표 인라인 주석 무회귀(#52) — Plain ci / Legacy"
 (
   setup_install_env "$FIX"
   eval "$(parse_config 2>/dev/null)"
   assert_eq "Plain CI" "$MODULE_1_CI" "install.sh: 무따옴표 인라인 주석 ci 손상(#52 회귀)" || return
-  assert_eq "lv1" "${CMD_AREA_ID_LEGACY:-}" "install.sh: 무따옴표 인라인 주석 area-ids 손상(#52 회귀)" || return
   rci="$(PIPELINE_CONFIG="$FIX" bash "$READER" module.Plain.ci-workflow-name 2>/dev/null)"
   assert_eq "Plain CI" "$rci" "리더: 무따옴표 인라인 주석 ci 손상(#52 회귀)" || return
   rlg="$(PIPELINE_CONFIG="$FIX" bash "$READER" area-id.Legacy 2>/dev/null)"

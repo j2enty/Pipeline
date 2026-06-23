@@ -42,11 +42,9 @@ it "T-IC-2 인라인 주석 단 ci-workflow-name 값 보존 (install↔리더 pa
 )
 
 # T-IC-3: modules area-id 인라인 주석 → 값 보존
-it "T-IC-3 인라인 주석 단 modules area-id 값 보존 (install↔리더 parity)"
+#   area-id resolve 는 P3.4 에서 install.sh 에서 제거 → 리더가 단일 SSOT.
+it "T-IC-3 인라인 주석 단 modules area-id 값 보존 (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "be-mod" "$CMD_AREA_ID_BACKEND" "install.sh: 인라인 주석에서 area-id 손실" || return
   raid="$(PIPELINE_CONFIG="$FIX" bash "$READER" module.Backend.area-id 2>/dev/null)"
   assert_eq "be-mod" "$raid" "리더: 인라인 주석에서 modules area-id 손실" || return
   # 친화 키도 동일(modules 우선)
@@ -55,11 +53,9 @@ it "T-IC-3 인라인 주석 단 modules area-id 값 보존 (install↔리더 par
 )
 
 # T-IC-4: legacy area-ids 맵 인라인 주석 → 값 보존(폴백)
-it "T-IC-4 인라인 주석 단 legacy area-ids 맵 값 보존 (install↔리더 parity)"
+#   area-id resolve 는 P3.4 에서 install.sh 에서 제거 → 리더가 단일 SSOT.
+it "T-IC-4 인라인 주석 단 legacy area-ids 맵 값 보존 (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "fe-legacy" "$CMD_AREA_ID_FRONTEND" "install.sh: 인라인 주석에서 legacy area-id 손실" || return
   rfe="$(PIPELINE_CONFIG="$FIX" bash "$READER" area-id.Frontend 2>/dev/null)"
   assert_eq "fe-legacy" "$rfe" "리더: area-id.Frontend 인라인 주석 손실(폴백)" && pass
 )
