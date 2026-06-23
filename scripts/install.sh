@@ -914,6 +914,86 @@ install_claude_commands() {
   info "Claude 슬래시커맨드 배포 완료 ($dest_dir)"
 }
 
+# ── Pipeline config 생성 (플러그인 런타임 리더용) ──────────────
+# 입력 config($CONFIG_FILE)를 워크스페이스 루트($WORKING_DIR)의
+# .claude/pipeline-config.yml 로 그대로 복사한다.
+#
+# 배경:
+#   P3 에서 슬래시커맨드 배포 방식이 ".tmpl 치환·복사" → "플러그인 + 런타임 config 읽기"
+#   로 전환된다. 플러그인 skill 은 실행 시 .claude/pipeline-config.yml 을 읽어
+#   (plugin/skills/*/scripts/pipeline-config.sh) 프로젝트값을 주입한다.
+#   이 함수는 그 런타임 config 파일을 영역 워크스페이스에 배치하는 역할.
+#
+# 설계 결정(D=ⓐ 복사 방식):
+#   런타임 리더(pipeline-config.sh)와 install.sh 의 parse_config() 는 동일 스키마의
+#   같은 pipeline-config.yml 을 읽는다. 따라서 입력 config 를 (거의) 그대로 복사하면
+#   되고, 키를 재추출해 재직렬화하지 않는다 — parity 표면을 새로 만들지 않기 위함.
+#
+# install_claude_commands(.tmpl 배포)와의 관계:
+#   현재는 두 방식을 병존(나란히 추가)시킨다. .tmpl 배포 제거는 P3.4 에서 별도로.
+#
+# 원자성: install_claude_commands 와 동일하게 임시 파일에 쓰고 self-check 통과 후 mv.
+# 멱등: 재실행 시 덮어쓰기 — 항상 입력 config 와 동일 상태로 수렴.
+generate_pipeline_config() {
+  # 배포 대상 — install_claude_commands 와 동일하게 working-directory 재사용
+  if [ -z "${WORKING_DIR:-}" ]; then
+    error "pipeline-config 생성 실패 — working-directory 가 비어있습니다 (배포 경로 산출 불가)"
+    return 1
+  fi
+
+  # 입력 config 존재 확인 (main 에서 이미 검증하지만 단위 호출 안전성 위해 재확인)
+  if [ ! -f "$CONFIG_FILE" ]; then
+    error "pipeline-config 생성 실패 — 입력 config 없음: $CONFIG_FILE"
+    return 1
+  fi
+
+  local dest_dir="$WORKING_DIR/.claude"
+  local dest="$dest_dir/pipeline-config.yml"
+
+  echo "  Pipeline config 복사 중... (→ $dest)" >&2
+
+  # 런타임 리더 경로 — 3개 skill 의 리더는 동일 스키마를 읽으므로 self-check 엔
+  # 아무거나 써도 무방. kickoff 리더를 기준으로 검증한다(공통 키 owner·project-number).
+  local reader="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
+  if [ ! -f "$reader" ]; then
+    error "pipeline-config 생성 실패 — 런타임 리더 없음: $reader"
+    return 1
+  fi
+
+  # 민감값 경고 — 현 스키마상 config 엔 실 시크릿이 없어야 정상.
+  #   token-key 항목들은 "env 변수 이름표"일 뿐 토큰 자체가 아니다(실 시크릿은
+  #   register_secrets / .env 경로). 만약 입력 config 에 PEM·실 토큰 패턴이 보이면
+  #   잘못 배치되는 것이므로 경고만 한다(차단까진 안 함 — 오탐 가능성).
+  if grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|gh[pousr]_[A-Za-z0-9]{16,}|xox[bap]-[A-Za-z0-9-]{10,}' "$CONFIG_FILE" 2>/dev/null; then
+    warn "입력 config 에 실 시크릿으로 보이는 패턴이 있습니다 — pipeline-config 는 시크릿 저장소가 아닙니다(검토 권장): $CONFIG_FILE"
+  fi
+
+  # 원자적 복사 — 임시 파일에 쓰고 self-check 통과 후 대상으로 이동.
+  #   (부분 쓰기/잘못된 config 가 운영 워크스페이스에 남는 상황 방지)
+  local tmp_file
+  tmp_file=$(mktemp)
+  # 함수 종료 시 임시 파일 정리 (성공/실패 무관)
+  trap 'rm -f "$tmp_file"' RETURN
+
+  cp "$CONFIG_FILE" "$tmp_file"
+
+  # self-check — 런타임 리더로 핵심 키가 실제로 읽히는지 검증.
+  #   리더의 --require 인터페이스(하나라도 비면 exit 1)를 그대로 사용한다.
+  #   owner·project-number 는 모든 흐름의 필수 식별자라 검증 기준으로 적합.
+  #   PIPELINE_CONFIG env 로 임시본 경로를 주입 → 대상에 옮기기 전에 검증.
+  if ! PIPELINE_CONFIG="$tmp_file" bash "$reader" --require owner project-number >/dev/null 2>&1; then
+    error "pipeline-config self-check 실패 — 런타임 리더가 필수 키(owner·project-number)를 읽지 못했습니다."
+    error "입력 config 의 project.owner / project.project-numbers 를 확인하세요. 배치 중단: $CONFIG_FILE"
+    return 1
+  fi
+
+  # 원자적 이동 — 검증 통과한 임시본을 대상으로 일괄 배치(덮어쓰기 = 멱등)
+  mkdir -p "$dest_dir"
+  mv -f "$tmp_file" "$dest"
+
+  info "Pipeline config 생성 완료 ($dest)"
+}
+
 # ── 메인 ─────────────────────────────────────────────────────
 main() {
   echo ""
@@ -959,6 +1039,10 @@ main() {
   if [ "$UPDATE_COMMANDS_ONLY" = "true" ]; then
     section "Claude 슬래시커맨드 배포 (전용 모드)"
     install_claude_commands
+    # 플러그인 시대엔 "커맨드 재배포"의 실질 역할 = 런타임 config 재생성.
+    # .tmpl 배포와 병존시켜 함께 갱신(.tmpl 제거는 P3.4).
+    section "Pipeline config 생성"
+    generate_pipeline_config
     echo ""
     info "커맨드 재배포 완료 — 다른 단계는 스킵됨 (--update-commands-only)"
     exit 0
@@ -1106,6 +1190,11 @@ main() {
   # Claude 슬래시커맨드 배포 — 워크스페이스 1개라 모듈 루프 밖 1회 호출
   section "Claude 슬래시커맨드 배포"
   install_claude_commands
+
+  # Pipeline config 생성 — 플러그인 런타임 리더용 .claude/pipeline-config.yml.
+  # install_claude_commands(.tmpl 배포)와 병존(.tmpl 제거는 P3.4).
+  section "Pipeline config 생성"
+  generate_pipeline_config
 
   # package-lock.json 생성
   section "npm install"

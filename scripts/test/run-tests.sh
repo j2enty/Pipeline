@@ -135,9 +135,14 @@ setup_install_env() {
   export PATH="$STUBS_DIR:$PATH"
   export GH_LOG="${GH_LOG:-$(mktemp)}"
   : > "$GH_LOG"
-  # install.sh 를 빈 위치인자로 source — main 가드로 main 미실행, 함수만 로드
+  # install.sh 를 빈 위치인자로 source — main 가드로 main 미실행, 함수만 로드.
+  # 주의: install.sh 는 상단에서 $0(=source 한 셸) 기준으로 SCRIPT_DIR/REPO_ROOT 를
+  #   재계산해 덮어쓴다. source 시 $0 는 install.sh 가 아니라 호출 셸이므로 REPO_ROOT
+  #   가 엉뚱한 상위 디렉토리로 잡힌다. 러너가 L21 에서 계산한 진짜 레포 루트로 복원.
+  local _repo_root_saved="$REPO_ROOT"
   # shellcheck disable=SC1090
   source "$INSTALL_SH" "" >/dev/null 2>&1 || true
+  REPO_ROOT="$_repo_root_saved"; export REPO_ROOT
   # 테스트가 지정한 config 로 덮어쓰기
   CONFIG_FILE="$config"
 }
