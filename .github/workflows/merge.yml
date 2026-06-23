@@ -161,13 +161,24 @@ jobs:
           fi
 
           # CI 상태 확인
-          HEAD_BRANCH=$(echo "$PR_INFO" | jq -r '.headRefName')
-          CI_CONCLUSION=$(gh run list --repo "$PR_REPO" \
-            --workflow "$CI_WORKFLOW_NAME" --branch "$HEAD_BRANCH" \
-            --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')
-          if [ "$CI_CONCLUSION" != "success" ]; then
-            echo "CI 미통과 ($CI_CONCLUSION) — 스킵"
-            echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+          # CI workflow 이름이 미지정(빈/공백)이면 = CI 게이트가 없는 모듈(예: Design 같은
+          # 문서/리소스 전용 레포). gh run list --workflow "" 는 0건 매칭 → "missing" 으로
+          # 영원히 머지 차단되는 버그(#39)가 있었다. 이 경우 CI 체크만 면제하고 통과로 진행.
+          # 단 위쪽 게이트(blocked·draft·sibling·Reviewer APPROVE·CHANGES_REQUESTED)는 그대로 적용된 뒤다.
+          CI_WORKFLOW_NAME_TRIMMED="$(echo "$CI_WORKFLOW_NAME" | tr -d '[:space:]')"
+          if [ -z "$CI_WORKFLOW_NAME_TRIMMED" ]; then
+            # 어느 레포에서 면제됐는지 로그에 남긴다 — config 오타·변수 누락으로 CI 있는
+            # 모듈이 조용히 면제되는 fail-open 을 사후 추적 가능하게.
+            echo "CI workflow 미지정 — CI 게이트 스킵(CI 없는 모듈): $PR_REPO"
+          else
+            HEAD_BRANCH=$(echo "$PR_INFO" | jq -r '.headRefName')
+            CI_CONCLUSION=$(gh run list --repo "$PR_REPO" \
+              --workflow "$CI_WORKFLOW_NAME" --branch "$HEAD_BRANCH" \
+              --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')
+            if [ "$CI_CONCLUSION" != "success" ]; then
+              echo "CI 미통과 ($CI_CONCLUSION) — 스킵"
+              echo "should_merge=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
           fi
 
           echo "모든 머지 조건 충족"

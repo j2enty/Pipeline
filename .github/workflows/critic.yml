@@ -280,7 +280,7 @@ jobs:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # [수정 1] tracking-enabled=true 인데 pipeline-repo 가 비어 있으면 즉시 실패.
       # 이 조합에서는 Pipeline 체크아웃이 스킵되어 resolve-review-statefile.sh 가 없고,
@@ -314,7 +314,7 @@ jobs:
       # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
       - name: Pipeline 체크아웃 (추적 action + 상태파일 식별 스크립트용)
         if: ${{ inputs.pipeline-repo != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.pipeline-repo }}
           ref: ${{ inputs.pipeline-ref }}

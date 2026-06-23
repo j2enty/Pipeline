@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # 버전 핀 필수 (rolling tag 금지). shellcheck 는 ubuntu 러너 기본 제공분 사용.
       - name: actionlint 실행
@@ -28,10 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Node 20 셋업
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
 
@@ -48,10 +48,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Node 20 셋업
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
 
@@ -73,7 +73,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: plugin 셸 테스트 실행
         run: bash plugin/test/run-tests.sh
+
+  # scripts 셸 테스트 — install.sh 함수 단위 + merge.yml CI 게이트 분기 가드 등.
+  # (순수 bash + python3 + gh stub. Node 불필요. 새 test-*.sh 는 러너가 glob 으로 자동 수집)
+  scripts-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v5
+
+      - name: scripts 셸 테스트 실행
+        run: bash scripts/test/run-tests.sh
