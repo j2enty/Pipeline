@@ -96,6 +96,33 @@ jobs:
           fi
           echo "URL 검증 완료"
 
+      # ── Pipeline 체크아웃 (plugin 로드 + 추적 action 용) ──
+      # claude 호출이 `/pipeline:*` 슬래시커맨드를 plugin 으로 로드하려면 이 시점에
+      # Pipeline 레포의 plugin/ 이 있어야 한다. 그래서 claude 호출 step "앞"에 둔다.
+      # (절대경로 하드코딩 금지 — 체크아웃 상대경로 .pipeline-action-checkout/plugin 사용.)
+      # 이 체크아웃은 두 용도를 함께 충족한다:
+      #   (1) claude --plugin-dir .pipeline-action-checkout/plugin (항상 필요)
+      #   (2) track-findings composite action — 상대경로 uses(./actions/track-findings)
+      #       (뒤 추적 step 에서 tracking-enabled=true 일 때만 실행)
+      # 따라서 plugin 로드를 위해 tracking 여부와 무관하게 "항상" 체크아웃한다
+      # (기존엔 tracking-enabled 조건부였으나 plugin 로드 도입으로 무조건 필요해짐).
+      # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
+      # 대상은 caller(영역) 레포다. 그 레포엔 plugin/ 도 actions/track-findings 도 없어
+      # 실패한다. 따라서 Pipeline 레포(repository/ref)를 명시해 정확히 체크아웃한다
+      # (종속성 제로 — 식별자는 input 으로 주입).
+      # working-directory(self-hosted 실제 작업 경로)를 덮어쓰지 않도록 path 로 별도
+      # 디렉토리에 체크아웃한다.
+      # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
+      # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
+      # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
+      # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
+      - name: Pipeline 체크아웃 (plugin 로드 + 추적 action 용)
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.pipeline-repo }}
+          ref: ${{ inputs.pipeline-ref }}
+          path: .pipeline-action-checkout
+
       - name: Review and fix loop
         env:
           PR_URL: ${{ inputs.pr-url }}
@@ -119,7 +146,11 @@ jobs:
           while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
             echo "=== Review attempt $((attempt + 1))/$MAX_ATTEMPTS ==="
             # 단일 review 실행 최대 30분 — hung 방지 (#20 버그 수정)
-            "$TIMEOUT_CMD" 30m claude --dangerously-skip-permissions -p "/review $PR_URL --bot" || {
+            # --plugin-dir 로 Pipeline plugin 을 로드해 /pipeline:* 슬래시커맨드 사용.
+            #   plugin 경로는 위 "Pipeline 체크아웃" step 이 GITHUB_WORKSPACE 에 받은
+            #   .pipeline-action-checkout/plugin. run 스크립트의 working-directory 가
+            #   GITHUB_WORKSPACE 와 다를 수 있어 절대경로($GITHUB_WORKSPACE/…)로 지정한다.
+            "$TIMEOUT_CMD" 30m claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:review $PR_URL --bot" || {
               rc=$?
               if [ "$rc" -eq 124 ]; then
                 echo "::warning::review timeout (30분 초과) — 다음 attempt 로"
@@ -143,9 +174,10 @@ jobs:
 
             attempt=$((attempt + 1))
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              echo "REQUEST_CHANGES — /kickoff --bot 실행..."
+              echo "REQUEST_CHANGES — /pipeline:kickoff --bot 실행..."
               # kickoff 최대 15분 — hung 방지 (#20); 실패 시 non-timeout 에러도 전파
-              "$TIMEOUT_CMD" 15m claude --dangerously-skip-permissions -p "/kickoff $PARENT_URL --bot" || {
+              # plugin 로드는 위 review 호출과 동일 경로.
+              "$TIMEOUT_CMD" 15m claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:kickoff $PARENT_URL --bot" || {
                 rc=$?
                 if [ "$rc" -eq 124 ]; then
                   echo "::warning::kickoff timeout (15분 초과) — 다음 attempt 에서 재시도"
@@ -163,26 +195,9 @@ jobs:
 
       # ── finding 추적 (tracking-enabled=true 일 때만) ──
       # 리뷰가 APPROVED 로 정상 완료된 경우에만 도달(위 step 실패 시 job 중단).
-      # track-findings composite action 은 Pipeline 레포(reusable workflow 정의 레포)에
-      # 있으므로, 상대경로 uses(./actions/track-findings)를 쓰려면 그 레포를 먼저
-      # 체크아웃해야 한다. working-directory(self-hosted 실제 작업 경로)를 덮어쓰지
-      # 않도록 path 로 별도 디렉토리에 체크아웃한다.
-      # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
-      # 대상은 caller(영역) 레포다. 그 레포엔 actions/track-findings 가 없어 아래 상대경로
-      # uses 가 action not found 로 실패한다. 따라서 Pipeline 레포(repository/ref)를 명시해
-      # 정확히 체크아웃한다(종속성 제로 — 식별자는 input 으로 주입).
-      # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
-      # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
-      # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
-      # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
-      - name: Pipeline 체크아웃 (추적 action 용)
-        if: ${{ inputs.tracking-enabled }}
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ inputs.pipeline-repo }}
-          ref: ${{ inputs.pipeline-ref }}
-          path: .pipeline-action-checkout
-
+      # track-findings composite action 은 위 "Pipeline 체크아웃" step 이 받은
+      # .pipeline-action-checkout/actions/track-findings 를 상대경로 uses 로 쓴다
+      # (체크아웃은 plugin 로드 때문에 이미 job 앞에서 무조건 수행됨).
       - name: 추적용 App 토큰 발급
         id: tracking-token
         if: ${{ inputs.tracking-enabled }}

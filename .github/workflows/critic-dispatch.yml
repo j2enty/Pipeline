@@ -24,6 +24,15 @@ on:
         type: string
         required: false
         default: '[]'
+      pipeline-repo:
+        description: "Pipeline 레포 (owner/repo) — claude plugin 로드용 체크아웃 대상. 필수"
+        type: string
+        required: true
+      pipeline-ref:
+        description: "Pipeline 레포 ref — plugin 체크아웃 시 사용 (기본 main)"
+        type: string
+        required: false
+        default: 'main'
     secrets:
       AUTHOR_APP_ID:
         required: true
@@ -66,12 +75,32 @@ jobs:
           fi
           echo "Parent URL 검증 완료: $PARENT_URL"
 
-      - name: /review --bot (critic-only) 실행
+      # ── Pipeline 체크아웃 (claude plugin 로드용) ──
+      # claude 호출이 /pipeline:review 슬래시커맨드를 plugin 으로 로드하려면 이 시점에
+      # Pipeline 레포의 plugin/ 이 있어야 한다. 그래서 claude 호출 step "앞"에 둔다.
+      # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
+      # 대상은 caller(영역) 레포라 plugin/ 이 없어 실패한다. 따라서 Pipeline 레포
+      # (repository/ref)를 명시해 정확히 체크아웃한다(종속성 제로 — 식별자는 input 주입).
+      # working-directory(self-hosted 실제 작업 경로)를 덮어쓰지 않도록 path 로 별도
+      # 디렉토리에 체크아웃한다(review.yml 과 동일 패턴).
+      # 전제: Pipeline 레포가 public 이다(caller GITHUB_TOKEN 으로 타 레포는 public 만 읽힘).
+      # private/internal 전환 시 별도 token input 추가 필요.
+      - name: Pipeline 체크아웃 (plugin 로드용)
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.pipeline-repo }}
+          ref: ${{ inputs.pipeline-ref }}
+          path: .pipeline-action-checkout
+
+      - name: /pipeline:review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ inputs.parent-url }}
         run: |
           set -euo pipefail
-          claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
+          # --plugin-dir 로 Pipeline plugin 로드 → /pipeline:review 사용.
+          #   plugin 경로는 위 체크아웃이 GITHUB_WORKSPACE 에 받은 .pipeline-action-checkout/plugin.
+          #   working-directory 가 GITHUB_WORKSPACE 와 다를 수 있어 절대경로로 지정한다.
+          claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:review $PARENT_URL --bot --critic-only"
 
       - name: 모든 영역 PR squash merge
         env:

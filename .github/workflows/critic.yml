@@ -282,21 +282,28 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # [수정 1] tracking-enabled=true 인데 pipeline-repo 가 비어 있으면 즉시 실패.
-      # 이 조합에서는 Pipeline 체크아웃이 스킵되어 resolve-review-statefile.sh 가 없고,
-      # concerns 시 PR 머지는 완료되는데 추적이 조용히 스킵된다("켰는데 추적 없음"이
-      # 성공 처리). 침묵 오작동보다 명시적 fail-fast 가 낫다 — 설정 오류를 즉시 표면화.
-      - name: tracking 설정 검증 (fail-fast)
-        if: ${{ inputs.tracking-enabled && inputs.pipeline-repo == '' }}
+      # pipeline-repo 가 비어 있으면 즉시 실패(fail-fast).
+      # critic 은 claude 호출 시 --plugin-dir 로 Pipeline plugin 을 로드해야 하는데,
+      # plugin 은 아래 "Pipeline 체크아웃" step 이 받는다. 그 체크아웃 조건이
+      # pipeline-repo != '' 이므로, pipeline-repo 가 비면 plugin 이 없어 claude 의
+      # /pipeline:review 가 "command not found" 로 실패한다(tracking 여부 무관).
+      # 또한 tracking-enabled=true 면 resolve-review-statefile.sh·track-findings 도
+      # 같은 체크아웃에 의존한다. 따라서 pipeline-repo 는 critic.yml 에서 "항상 필수".
+      # 침묵 오작동보다 명시적 fail-fast 가 낫다 — 설정 오류를 즉시 표면화.
+      - name: pipeline-repo 설정 검증 (fail-fast)
+        if: ${{ inputs.pipeline-repo == '' }}
         run: |
-          echo "::error::tracking-enabled=true 로 설정됐지만 pipeline-repo 가 비어 있습니다. tracking-enabled=true 시 pipeline-repo(Pipeline 레포 경로, 예: org/Pipeline)는 필수 입력입니다. caller yml 에 pipeline-repo 를 추가하거나, tracking-enabled 를 false 로 설정하세요."
+          echo "::error::pipeline-repo 가 비어 있습니다. critic 은 claude 의 /pipeline:* 슬래시커맨드를 plugin 으로 로드하기 위해 Pipeline 레포 체크아웃이 필요하므로 pipeline-repo(예: org/Pipeline)는 필수 입력입니다. caller yml 에 pipeline-repo 를 추가하세요."
           exit 1
 
       # Pipeline 레포(reusable workflow 정의 레포)를 별도 디렉토리에 체크아웃한다.
-      # 두 가지 용도로 쓰인다:
-      #   (1) track-findings composite action — 상대경로 uses(./actions/track-findings)
+      # 세 가지 용도로 쓰인다:
+      #   (1) claude --plugin-dir .pipeline-action-checkout/plugin — /pipeline:review
+      #       슬래시커맨드 로드. claude 호출은 "항상" 돈다 → plugin 도 항상 필요하다.
+      #       (위 fail-fast 가 pipeline-repo 비어있음을 이미 차단해 여기 조건은 항상 참.)
+      #   (2) track-findings composite action — 상대경로 uses(./actions/track-findings)
       #       (tracking-enabled=true 일 때만 실행)
-      #   (2) resolve-review-statefile.sh — verdict 파싱이 상태파일을 결정적으로
+      #   (3) resolve-review-statefile.sh — verdict 파싱이 상태파일을 결정적으로
       #       식별하는 스크립트. verdict 파싱은 tracking 과 무관하게 "항상" 돈다(이슈 #9).
       # 이 reusable workflow 가 영역(caller) 레포에서 호출되면 actions/checkout 의 기본
       # 대상은 caller(영역) 레포라 위 자산들이 없어 실패한다. 따라서 Pipeline 레포
@@ -304,10 +311,11 @@ jobs:
       # working-directory(self-hosted 실제 작업 경로)·위 영역 레포 체크아웃을 덮어쓰지
       # 않도록 path 로 별도 디렉토리에 체크아웃한다(review.yml 과 동일 패턴).
       #
-      # 조건: pipeline-repo 가 주어졌을 때만 체크아웃(tracking 무관). 이슈 #9 의 결정적
-      # 식별을 쓰려면 caller 가 pipeline-repo 를 넘겨야 한다. pipeline-repo 미설정인
-      # 기존 caller(예: tracking 미사용)는 체크아웃이 스킵되고 verdict 파싱이 인라인
-      # 폴백으로 동작한다 → 회귀 0(기존 추측매칭과 완전 동일).
+      # 조건: pipeline-repo 가 주어졌을 때만 체크아웃. 단 plugin 로드 도입 이후
+      # pipeline-repo 는 위 fail-fast 로 필수가 되어 이 조건은 실질적으로 항상 참이다
+      # (조건은 방어적으로 남겨둔다 — fail-fast 제거 시에도 안전하도록).
+      # verdict 파싱 step 의 인라인 폴백(스크립트 미존재 시)은 fail-fast 때문에 도달
+      # 불가능해졌으나 회귀 안전망으로 그대로 유지한다.
       # 전제: Pipeline 레포가 public 이다. 아래 actions/checkout 은 token 을 명시하지 않아
       # caller 의 GITHUB_TOKEN 으로 받는데, 이 토큰은 caller(영역) 레포 권한만 가져 타 레포
       # (Pipeline)는 public 일 때만 읽힌다. Pipeline 을 private/internal 로 전환하면 여기에
@@ -352,8 +360,12 @@ jobs:
           echo "REVIEW_STATE_SENTINEL=$REVIEW_STATE_SENTINEL" >> "$GITHUB_ENV"
 
           # /review 가 종료 직전 자기가 쓴 상태파일 경로를 sentinel 에 기록하도록 env 주입.
+          # --plugin-dir 로 Pipeline plugin 을 로드해 /pipeline:review 슬래시커맨드 사용.
+          #   plugin 경로는 위 "Pipeline 체크아웃" step 이 GITHUB_WORKSPACE 에 받은
+          #   .pipeline-action-checkout/plugin. run 스크립트의 working-directory 가
+          #   GITHUB_WORKSPACE 와 다를 수 있어 절대경로($GITHUB_WORKSPACE/…)로 지정한다.
           REVIEW_STATE_SENTINEL="$REVIEW_STATE_SENTINEL" \
-            claude --dangerously-skip-permissions -p "/review $PARENT_URL --bot --critic-only"
+            claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:review $PARENT_URL --bot --critic-only"
 
       - name: Critic verdict 파싱
         id: verdict
