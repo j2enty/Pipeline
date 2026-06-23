@@ -177,7 +177,7 @@ jobs:
       # 별도 token(PAT 또는 App 토큰) input 을 추가로 넘겨야 한다(caller GITHUB_TOKEN 으로는 실패).
       - name: Pipeline 체크아웃 (추적 action 용)
         if: ${{ inputs.tracking-enabled }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.pipeline-repo }}
           ref: ${{ inputs.pipeline-ref }}
