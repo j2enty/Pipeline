@@ -101,7 +101,7 @@ jobs:
       # Pipeline 레포의 plugin/ 이 있어야 한다. 그래서 claude 호출 step "앞"에 둔다.
       # (절대경로 하드코딩 금지 — 체크아웃 상대경로 .pipeline-action-checkout/plugin 사용.)
       # 이 체크아웃은 두 용도를 함께 충족한다:
-      #   (1) claude --plugin-dir .pipeline-action-checkout/plugin (항상 필요)
+      #   (1) Pipeline plugin 설치 소스(.pipeline-action-checkout = 마켓플레이스 루트) — 항상 필요
       #   (2) track-findings composite action — 상대경로 uses(./actions/track-findings)
       #       (뒤 추적 step 에서 tracking-enabled=true 일 때만 실행)
       # 따라서 plugin 로드를 위해 tracking 여부와 무관하게 "항상" 체크아웃한다
@@ -122,6 +122,17 @@ jobs:
           repository: ${{ inputs.pipeline-repo }}
           ref: ${{ inputs.pipeline-ref }}
           path: .pipeline-action-checkout
+
+      # ── Pipeline plugin 설치 (멱등 — 항상 최신) ──
+      # 신뢰되지 않은 git repo(영역 레포 체크아웃)에서는 --plugin-dir 로컬 plugin 이
+      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). 대신 user scope 로
+      # "설치"하면 cwd 신뢰와 무관하게 로드된다. 설치 시퀀스(add→update→uninstall→install)의
+      # 근거·실측은 scripts/ensure-plugin-installed.sh 주석 참조.
+      - name: Pipeline plugin 설치 (멱등 — 항상 최신)
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.pipeline-action-checkout/scripts/ensure-plugin-installed.sh" \
+            "$GITHUB_WORKSPACE/.pipeline-action-checkout"
 
       - name: Review and fix loop
         env:
@@ -146,11 +157,9 @@ jobs:
           while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
             echo "=== Review attempt $((attempt + 1))/$MAX_ATTEMPTS ==="
             # 단일 review 실행 최대 30분 — hung 방지 (#20 버그 수정)
-            # --plugin-dir 로 Pipeline plugin 을 로드해 /pipeline:* 슬래시커맨드 사용.
-            #   plugin 경로는 위 "Pipeline 체크아웃" step 이 GITHUB_WORKSPACE 에 받은
-            #   .pipeline-action-checkout/plugin. run 스크립트의 working-directory 가
-            #   GITHUB_WORKSPACE 와 다를 수 있어 절대경로($GITHUB_WORKSPACE/…)로 지정한다.
-            "$TIMEOUT_CMD" 30m claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:review $PR_URL --bot" || {
+            # /pipeline:* 슬래시커맨드는 위 "Pipeline plugin 설치" step 이 user scope 로
+            # 설치한 plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
+            "$TIMEOUT_CMD" 30m claude --dangerously-skip-permissions -p "/pipeline:review $PR_URL --bot" || {
               rc=$?
               if [ "$rc" -eq 124 ]; then
                 echo "::warning::review timeout (30분 초과) — 다음 attempt 로"
@@ -176,8 +185,8 @@ jobs:
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
               echo "REQUEST_CHANGES — /pipeline:kickoff --bot 실행..."
               # kickoff 최대 15분 — hung 방지 (#20); 실패 시 non-timeout 에러도 전파
-              # plugin 로드는 위 review 호출과 동일 경로.
-              "$TIMEOUT_CMD" 15m claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:kickoff $PARENT_URL --bot" || {
+              # plugin 로드는 위 review 호출과 동일(설치본 사용).
+              "$TIMEOUT_CMD" 15m claude --dangerously-skip-permissions -p "/pipeline:kickoff $PARENT_URL --bot" || {
                 rc=$?
                 if [ "$rc" -eq 124 ]; then
                   echo "::warning::kickoff timeout (15분 초과) — 다음 attempt 에서 재시도"

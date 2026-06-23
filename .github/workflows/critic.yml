@@ -283,10 +283,11 @@ jobs:
       - uses: actions/checkout@v5
 
       # pipeline-repo 가 비어 있으면 즉시 실패(fail-fast).
-      # critic 은 claude 호출 시 --plugin-dir 로 Pipeline plugin 을 로드해야 하는데,
-      # plugin 은 아래 "Pipeline 체크아웃" step 이 받는다. 그 체크아웃 조건이
-      # pipeline-repo != '' 이므로, pipeline-repo 가 비면 plugin 이 없어 claude 의
-      # /pipeline:review 가 "command not found" 로 실패한다(tracking 여부 무관).
+      # critic 은 claude 호출 전에 Pipeline plugin 을 user scope 로 설치해야 하는데,
+      # 그 설치 소스(.pipeline-action-checkout)는 아래 "Pipeline 체크아웃" step 이 받는다.
+      # 그 체크아웃 조건이 pipeline-repo != '' 이므로, pipeline-repo 가 비면 설치 소스가
+      # 없어 plugin 미설치 → claude 의 /pipeline:review 가 "command not found" 로 실패한다
+      # (tracking 여부 무관).
       # 또한 tracking-enabled=true 면 resolve-review-statefile.sh·track-findings 도
       # 같은 체크아웃에 의존한다. 따라서 pipeline-repo 는 critic.yml 에서 "항상 필수".
       # 침묵 오작동보다 명시적 fail-fast 가 낫다 — 설정 오류를 즉시 표면화.
@@ -298,8 +299,9 @@ jobs:
 
       # Pipeline 레포(reusable workflow 정의 레포)를 별도 디렉토리에 체크아웃한다.
       # 세 가지 용도로 쓰인다:
-      #   (1) claude --plugin-dir .pipeline-action-checkout/plugin — /pipeline:review
-      #       슬래시커맨드 로드. claude 호출은 "항상" 돈다 → plugin 도 항상 필요하다.
+      #   (1) Pipeline plugin 설치 소스(.pipeline-action-checkout = 마켓플레이스 루트).
+      #       ensure-plugin-installed.sh 가 여기서 user scope 로 설치 → /pipeline:review
+      #       슬래시커맨드 로드. claude 호출은 "항상" 돈다 → 설치(=체크아웃)도 항상 필요하다.
       #       (위 fail-fast 가 pipeline-repo 비어있음을 이미 차단해 여기 조건은 항상 참.)
       #   (2) track-findings composite action — 상대경로 uses(./actions/track-findings)
       #       (tracking-enabled=true 일 때만 실행)
@@ -327,6 +329,20 @@ jobs:
           repository: ${{ inputs.pipeline-repo }}
           ref: ${{ inputs.pipeline-ref }}
           path: .pipeline-action-checkout
+
+      # ── Pipeline plugin 설치 (멱등 — 항상 최신) ──
+      # 신뢰되지 않은 git repo(영역 레포 체크아웃)에서는 --plugin-dir 로컬 plugin 이
+      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). 대신 user scope 로
+      # "설치"하면 cwd 신뢰와 무관하게 로드된다. 설치 시퀀스의 근거는
+      # scripts/ensure-plugin-installed.sh 주석 참조.
+      # 위 체크아웃과 동일 조건(pipeline-repo != '')에 건다 — 체크아웃이 안 되면 설치
+      # 스크립트도 없으므로. (fail-fast 로 pipeline-repo 는 필수라 실질 항상 참.)
+      - name: Pipeline plugin 설치 (멱등 — 항상 최신)
+        if: ${{ inputs.pipeline-repo != '' }}
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.pipeline-action-checkout/scripts/ensure-plugin-installed.sh" \
+            "$GITHUB_WORKSPACE/.pipeline-action-checkout"
 
       - name: /review --bot (critic-only) 실행
         env:
@@ -360,12 +376,10 @@ jobs:
           echo "REVIEW_STATE_SENTINEL=$REVIEW_STATE_SENTINEL" >> "$GITHUB_ENV"
 
           # /review 가 종료 직전 자기가 쓴 상태파일 경로를 sentinel 에 기록하도록 env 주입.
-          # --plugin-dir 로 Pipeline plugin 을 로드해 /pipeline:review 슬래시커맨드 사용.
-          #   plugin 경로는 위 "Pipeline 체크아웃" step 이 GITHUB_WORKSPACE 에 받은
-          #   .pipeline-action-checkout/plugin. run 스크립트의 working-directory 가
-          #   GITHUB_WORKSPACE 와 다를 수 있어 절대경로($GITHUB_WORKSPACE/…)로 지정한다.
+          # /pipeline:review 는 위 "Pipeline plugin 설치" step 이 user scope 로 설치한
+          # plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
           REVIEW_STATE_SENTINEL="$REVIEW_STATE_SENTINEL" \
-            claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:review $PARENT_URL --bot --critic-only"
+            claude --dangerously-skip-permissions -p "/pipeline:review $PARENT_URL --bot --critic-only"
 
       - name: Critic verdict 파싱
         id: verdict

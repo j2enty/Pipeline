@@ -77,12 +77,22 @@ jobs:
           ref: ${{ inputs.pipeline-ref }}
           path: .pipeline-action-checkout
 
+      # ── Pipeline plugin 설치 (멱등 — 항상 최신) ──
+      # 신뢰되지 않은 git repo(영역 레포 체크아웃)에서는 --plugin-dir 로컬 plugin 이
+      # 비대화(-p)로 로드되지 않는다(신뢰 게이트, 이슈 #31 P3.3). 대신 user scope 로
+      # "설치"하면 cwd 신뢰와 무관하게 로드된다. 설치 시퀀스의 근거는
+      # scripts/ensure-plugin-installed.sh 주석 참조.
+      - name: Pipeline plugin 설치 (멱등 — 항상 최신)
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.pipeline-action-checkout/scripts/ensure-plugin-installed.sh" \
+            "$GITHUB_WORKSPACE/.pipeline-action-checkout"
+
       - name: /pipeline:kickoff --bot 실행
         env:
           PARENT_URL: ${{ inputs.parent-url }}
         run: |
           set -euo pipefail
-          # --plugin-dir 로 Pipeline plugin 로드 → /pipeline:kickoff 사용.
-          #   plugin 경로는 위 체크아웃이 GITHUB_WORKSPACE 에 받은 .pipeline-action-checkout/plugin.
-          #   working-directory 가 GITHUB_WORKSPACE 와 다를 수 있어 절대경로로 지정한다.
-          claude --dangerously-skip-permissions --plugin-dir "$GITHUB_WORKSPACE/.pipeline-action-checkout/plugin" -p "/pipeline:kickoff $PARENT_URL --bot"
+          # /pipeline:kickoff 는 위 "Pipeline plugin 설치" step 이 user scope 로 설치한
+          # plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
+          claude --dangerously-skip-permissions -p "/pipeline:kickoff $PARENT_URL --bot"
