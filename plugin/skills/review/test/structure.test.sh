@@ -119,8 +119,13 @@ has '--require reviewer-bot-slug reviewer-token-key' "$SKILL" "(C-1) self-approv
 # C-2 헬퍼 경로 ${CLAUDE_SKILL_DIR}/scripts/ 형태
 has '"${CLAUDE_SKILL_DIR}/scripts/gh-app-token.sh"' "$SKILL" "(C-2) gh-app-token.sh 헬퍼 경로"
 has '"${CLAUDE_SKILL_DIR}/scripts/slack-notify.sh"' "$SKILL" "(C-2) slack-notify.sh 헬퍼 경로"
-# C-3 .omc/scripts 잔재 0 (헬퍼 경로 한정 — 상태파일 .omc/state 는 정상이므로 scripts 만 검사)
-if grep -qE '\.omc/scripts' "$SKILL"; then fail "(C-3) .omc/scripts 헬퍼 잔재 0"; else pass "(C-3) .omc/scripts 헬퍼 잔재 0"; fi
+# C-3 .omc/ 잔재 0 (#65 — 상태경로도 중립 경로로 탈종속. state·scripts 등 omc 경로 전체가 새어들면 잡는다)
+if grep -qE '\.omc/' "$SKILL"; then fail "(C-3) .omc/ 잔재 0"; else pass "(C-3) .omc/ 잔재 0"; fi
+if grep -rqE '\.omc/' "$REF"; then fail "(C-3) reference/ .omc/ 잔재 0"; else pass "(C-3) reference/ .omc/ 잔재 0"; fi
+# #65 — tmpl 은 install.sh 가 영역 레포에 실제 배포하는 SSOT. plugin 만 고치고 tmpl 빠뜨리면(또는 반대)
+# 상태경로 드리프트로 verdict=null 자동머지 차단 회귀(#54) → tmpl 도 .omc/state 잔재 0 검사.
+# (주의: tmpl 의 .omc/scripts·.omc/specs 헬퍼/스펙 경로는 별개 미완 탈종속 항목이라 여기선 상태경로만 한정 검사)
+if grep -qE '\.omc/state' "$TMPL"; then fail "(C-3) tmpl .omc/state 잔재 0"; else pass "(C-3) tmpl .omc/state 잔재 0"; fi
 
 echo -e "\n${C_CYAN}── (D) 핵심 동작 보존 ──${C_NC}"
 # D-1 self-approve 회피 키워드

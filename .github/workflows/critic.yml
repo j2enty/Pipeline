@@ -32,7 +32,7 @@ on:
         description: "critic verdict 상태 파일 디렉토리"
         type: string
         required: false
-        default: '.omc/state/reviews'
+        default: '.pipeline/state/reviews'
       modules-ignore:
         description: "제외 모듈 JSON 배열 (예: '[\"Design\"]')"
         type: string

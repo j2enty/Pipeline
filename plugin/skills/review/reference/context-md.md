@@ -26,7 +26,7 @@
   - [minor] ...
 
 ### 참고
-- 리뷰 상태 파일: `.omc/state/reviews/<slug>.json`
+- 리뷰 상태 파일: `.pipeline/state/reviews/<slug>.json`
 - 종합 리뷰 parent 코멘트: <URL>
 ```
 

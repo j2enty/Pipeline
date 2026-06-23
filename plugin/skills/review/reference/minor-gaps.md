@@ -9,7 +9,7 @@
 - **R4** Agent 타임아웃 — Agent 기본에 의존
 - **R5** 머지 충돌 PR (diff 계산 실패) — `immediate` 에스컬, 사용자 rebase 안내
 - **R6** 동일 PR 반복 리뷰 시 이전 Review dismiss — 현재는 새 Review 추가만, dismiss 안 함
-- **R7** (해결 · 2026-04-20) 플랜 파일이 Docs 레포 `plan/<parent-N>-<slug>` 브랜치에만 존재 — `git -C Docs show plan/<parent-N>-<slug>:claude/plans/...`로 추출해 `.omc/state/reviews/cache/` 캐시에 materialize 후 Agent에 전달
+- **R7** (해결 · 2026-04-20) 플랜 파일이 Docs 레포 `plan/<parent-N>-<slug>` 브랜치에만 존재 — `git -C Docs show plan/<parent-N>-<slug>:claude/plans/...`로 추출해 `.pipeline/state/reviews/cache/` 캐시에 materialize 후 Agent에 전달
 - **R8** (해결 · 2026-04-20) 플랜 파일명 영역은 **소문자** (`<parent-N>-<slug>-frontend.md`, `<parent-N>-<slug>-ios.md`, `<parent-N>-<slug>-android.md`, `<parent-N>-<slug>-backend.md`) — `/review`가 경로 구성 시 `tr '[:upper:]' '[:lower:]'` 적용
 - **R9** (도입 · 2026-04-21) APPROVE 판정 시 sub-issue Status `Bot Review → In Review` 전환 — `/kickoff` 의 `Bot Review` stage split 연장선. 전환 대상은 `Status=Bot Review` 인 항목만. 전환 실패는 에스컬 아님(경고 로그 + `statusTransition.succeeded=false` 기록)
 - **R10** (도입 · 2026-05-02) Self-approve 차단 회피 — config `author-login` user 토큰으로 review 부착 시 PR author 와 같은 entity 라 GitHub 가 "Can not approve your own pull request" 로 차단. 해결: config `reviewer-bot-slug` GitHub App (App ID = config `reviewer-app-id`) installation token 사용. App 은 user 와 다른 entity 라 차단 회피 + 정식 `[bot]` 명의 부착. 설정·인증 흐름:

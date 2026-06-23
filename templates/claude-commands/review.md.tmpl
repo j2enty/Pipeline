@@ -51,8 +51,8 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, AskUserQuestion
 | Prep Project ID | `__PROJECT_ID__` |
 | Status 필드 ID | `__STATUS_FIELD_ID__` (Backlog/Planning/Ready/In Progress/**Bot Review**/**In Review**/Done) |
 | 스펙 | `.omc/specs/deep-interview-review-design.md` (본문 C1~C10 + **Addendum G1~G10 — 본문과 상충 시 Addendum 우선**) |
-| 상태 파일 (parent 모드) | `.omc/state/reviews/<slug>.json` |
-| 상태 파일 (단일 수동 PR) | `.omc/state/reviews/pr-<repo>-<number>.json` |
+| 상태 파일 (parent 모드) | `.pipeline/state/reviews/<slug>.json` |
+| 상태 파일 (단일 수동 PR) | `.pipeline/state/reviews/pr-<repo>-<number>.json` |
 | Context md | `__DOCS_CONTEXT_DIR__/<slug>-status.md` (parent 모드 한정) |
 | review-blocked 라벨 | 색상 `#d73a4a`, 설명: "`/review` 에스컬 또는 REQUEST_CHANGES — 코드 수정 후 재실행 필요" |
 
@@ -106,7 +106,7 @@ gh pr view <N> --repo __ORG__/<영역> --json number,url,state,isDraft,baseRefNa
 
 3. **PR 수집** (스펙 C1 순서):
 
-   **우선 A**: `.omc/state/sessions/<SLUG>.json` 존재하면 `areas.<area>.pr.url` 수집
+   **우선 A**: `.pipeline/state/sessions/<SLUG>.json` 존재하면 `areas.<area>.pr.url` 수집
 
    **Fallback B**: 세션 파일 없거나 누락 영역이 있으면, parent의 sub-issue → linked PR 조회:
    ```bash
@@ -147,10 +147,10 @@ if [ "$HAS_DOCS" = "1" ]; then
     || PLAN_REF="origin/plan/${SLUG}"
 
   # 캐시 디렉토리
-  mkdir -p .omc/state/reviews/cache
+  mkdir -p .pipeline/state/reviews/cache
 
-  PLAN_CACHE=".omc/state/reviews/cache/${SLUG}-${AREA_LOWER}-plan.md"
-  REQ_CACHE=".omc/state/reviews/cache/${SLUG}-requirements.md"
+  PLAN_CACHE=".pipeline/state/reviews/cache/${SLUG}-${AREA_LOWER}-plan.md"
+  REQ_CACHE=".pipeline/state/reviews/cache/${SLUG}-requirements.md"
 
   # 플랜 존재 확인 + 캐시 추출
   if git -C Docs cat-file -e "${PLAN_REF}:${PLAN_GIT_PATH}" 2>/dev/null; then
@@ -180,16 +180,16 @@ fi
 
 - `planPath != null` → verifier 호출 대상 (프롬프트에 `PLAN_CACHE` 경로 전달)
 - `planPath == null` → code-reviewer 단독 리뷰
-- 캐시 파일은 `.omc/state/reviews/cache/` 하위에 남김 (재개 시 재사용)
+- 캐시 파일은 `.pipeline/state/reviews/cache/` 하위에 남김 (재개 시 재사용)
 
 ### 4. 상태 파일 감지 + 재개 분기 (C8)
 
 ```bash
 # Parent 모드
-STATE_FILE=".omc/state/reviews/${SLUG}.json"
+STATE_FILE=".pipeline/state/reviews/${SLUG}.json"
 
 # 단일 수동 PR
-STATE_FILE=".omc/state/reviews/pr-<repo>-<number>.json"
+STATE_FILE=".pipeline/state/reviews/pr-<repo>-<number>.json"
 ```
 
 **분기 A. `--restart` 플래그 있음** → 기존 상태 파일 백업 후 초기화, 처음부터
@@ -227,7 +227,7 @@ STATE_FILE=".omc/state/reviews/pr-<repo>-<number>.json"
       "url": "...",
       "number": 0,
       "repo": "__ORG__/<area>",
-      "planPath": ".omc/state/reviews/cache/<parent-N>-<slug>-<area-lowercase>-plan.md" | null,
+      "planPath": ".pipeline/state/reviews/cache/<parent-N>-<slug>-<area-lowercase>-plan.md" | null,
       "planSource": "Docs@plan/<parent-N>-<slug>:claude/plans/<parent-N>-<slug>-<area-lowercase>.md" | null,
       "lastReviewedSha": null,
       "verdict": "pending",
@@ -678,7 +678,7 @@ gh issue comment <parent-N> --repo __ORG__/__PARENT_REPO_NAME__ --body "$(cat <<
 <critic.summary>
 
 ---
-*자동 발송됨. 상태: \`.omc/state/reviews/<slug>.json\`*
+*자동 발송됨. 상태: \`.pipeline/state/reviews/<slug>.json\`*
 EOF
 )"
 # → PARENT_COMMENT_URL 반환
@@ -710,7 +710,7 @@ verdict·criticFindings 를 한 jq 트랜잭션으로 원자적(temp + `mv`) 기
 # 8-b critic Agent 가 반환한 verdict(pass|concerns|blocker)·findings 를 캡처해 변수에 둔다.
 # STATE_FILE 은 Step4/5 와 동일한 라이브 변수 컨벤션(${SLUG})을 따른다 — 리터럴 <slug> 금지
 #   (별개 셸에서 치환 누락 시 존재하지 않는 경로 → jq no-such-file → mv 스킵 → #54 회귀).
-STATE_FILE=".omc/state/reviews/${SLUG}.json"
+STATE_FILE=".pipeline/state/reviews/${SLUG}.json"
 CRITIC_VERDICT="<8-b critic 반환 verdict: pass|concerns|blocker>"
 CRITIC_FINDINGS='<8-b critic 반환 findings[] JSON, 0건이면 []>'
 
@@ -766,7 +766,7 @@ gh pr edit <N> --repo __ORG__/<영역> --add-label review-blocked
 **실행 컨텍스트**
 - 리뷰 대상 SHA: `<sha>` (PR 실패인 경우)
 - 재시도: <카테고리> <count>/<limit>
-- 마지막 에러: `.omc/state/reviews/<slug>.json` 참조
+- 마지막 에러: `.pipeline/state/reviews/<slug>.json` 참조
 
 **재개 방법**
 1. 원인 진단
@@ -871,7 +871,7 @@ __DOCS_CONTEXT_DIR__/<slug>-status.md
   - [minor] ...
 
 ### 참고
-- 리뷰 상태 파일: `.omc/state/reviews/<slug>.json`
+- 리뷰 상태 파일: `.pipeline/state/reviews/<slug>.json`
 - 종합 리뷰 parent 코멘트: <URL>
 ```
 
@@ -939,7 +939,7 @@ fi
 
 모드: <parent | single | parent (critic-only)>
 Slug: <slug or N/A>
-상태 파일: .omc/state/reviews/<...>.json
+상태 파일: .pipeline/state/reviews/<...>.json
 
 # critic-only 모드면 아래 "영역별 판정" 표 대신 이 블록만 출력:
 # ----------------------------------------
@@ -1017,7 +1017,7 @@ Status 전환 실패가 있었다면 경고 블록을 추가:
 - **R4** Agent 타임아웃 — OMC Agent 기본에 의존
 - **R5** 머지 충돌 PR (diff 계산 실패) — `immediate` 에스컬, 사용자 rebase 안내
 - **R6** 동일 PR 반복 리뷰 시 이전 Review dismiss — 현재는 새 Review 추가만, dismiss 안 함
-- **R7** (해결 · 2026-04-20) 플랜 파일이 Docs 레포 `plan/<parent-N>-<slug>` 브랜치에만 존재 — `git -C Docs show plan/<parent-N>-<slug>:claude/plans/...`로 추출해 `.omc/state/reviews/cache/` 캐시에 materialize 후 Agent에 전달
+- **R7** (해결 · 2026-04-20) 플랜 파일이 Docs 레포 `plan/<parent-N>-<slug>` 브랜치에만 존재 — `git -C Docs show plan/<parent-N>-<slug>:claude/plans/...`로 추출해 `.pipeline/state/reviews/cache/` 캐시에 materialize 후 Agent에 전달
 - **R8** (해결 · 2026-04-20) 플랜 파일명 영역은 **소문자** (`<parent-N>-<slug>-frontend.md`, `<parent-N>-<slug>-ios.md`, `<parent-N>-<slug>-android.md`, `<parent-N>-<slug>-backend.md`) — `/review`가 경로 구성 시 `tr '[:upper:]' '[:lower:]'` 적용
 - **R9** (도입 · 2026-04-21) APPROVE 판정 시 sub-issue Status `Bot Review → In Review` 전환 — `/kickoff` 의 `Bot Review` stage split 연장선. 전환 대상은 `Status=Bot Review` 인 항목만. 전환 실패는 에스컬 아님(경고 로그 + `statusTransition.succeeded=false` 기록)
 - **R10** (도입 · 2026-05-02) Self-approve 차단 회피 — `__AUTHOR_LOGIN__` user 토큰으로 review 부착 시 PR author 와 같은 entity 라 GitHub 가 "Can not approve your own pull request" 로 차단. 해결: `__REVIEWER_BOT_SLUG__` GitHub App (App ID __REVIEWER_APP_ID__) installation token 사용. App 은 user 와 다른 entity 라 차단 회피 + 정식 `[bot]` 명의 부착. 설정·인증 흐름:

@@ -66,8 +66,8 @@ bash "$CFG" docs-context-dir   # Context md 디렉토리 (parent 모드 한정)
 | 이름 | 값 |
 |---|---|
 | Base 브랜치 | `develop` (PR 대상 대부분 — 다를 경우 R2 minor gap 적용) |
-| 상태 파일 (parent 모드) | `.omc/state/reviews/<slug>.json` |
-| 상태 파일 (단일 수동 PR) | `.omc/state/reviews/pr-<repo>-<number>.json` |
+| 상태 파일 (parent 모드) | `.pipeline/state/reviews/<slug>.json` |
+| 상태 파일 (단일 수동 PR) | `.pipeline/state/reviews/pr-<repo>-<number>.json` |
 | Context md | `<docs-context-dir>/<slug>-status.md` (parent 모드 한정) |
 | review-blocked 라벨 | 색상 `#d73a4a`, 설명: "`/review` 에스컬 또는 REQUEST_CHANGES — 코드 수정 후 재실행 필요" |
 
@@ -132,7 +132,7 @@ gh pr view <N> --repo "$OWNER/<영역>" --json number,url,state,isDraft,baseRefN
 
 3. **PR 수집** (스펙 C1 순서):
 
-   **우선 A**: `.omc/state/sessions/<SLUG>.json` 존재하면 `areas.<area>.pr.url` 수집
+   **우선 A**: `.pipeline/state/sessions/<SLUG>.json` 존재하면 `areas.<area>.pr.url` 수집
 
    **Fallback B**: 세션 파일 없거나 누락 영역이 있으면, parent의 sub-issue → linked PR 조회:
    ```bash
@@ -176,10 +176,10 @@ if [ "$HAS_DOCS" = "1" ]; then
     || PLAN_REF="origin/plan/${SLUG}"
 
   # 캐시 디렉토리
-  mkdir -p .omc/state/reviews/cache
+  mkdir -p .pipeline/state/reviews/cache
 
-  PLAN_CACHE=".omc/state/reviews/cache/${SLUG}-${AREA_LOWER}-plan.md"
-  REQ_CACHE=".omc/state/reviews/cache/${SLUG}-requirements.md"
+  PLAN_CACHE=".pipeline/state/reviews/cache/${SLUG}-${AREA_LOWER}-plan.md"
+  REQ_CACHE=".pipeline/state/reviews/cache/${SLUG}-requirements.md"
 
   # 플랜 존재 확인 + 캐시 추출
   if git -C Docs cat-file -e "${PLAN_REF}:${PLAN_GIT_PATH}" 2>/dev/null; then
@@ -209,16 +209,16 @@ fi
 
 - `planPath != null` → verifier 호출 대상 (프롬프트에 `PLAN_CACHE` 경로 전달)
 - `planPath == null` → code-reviewer 단독 리뷰
-- 캐시 파일은 `.omc/state/reviews/cache/` 하위에 남김 (재개 시 재사용)
+- 캐시 파일은 `.pipeline/state/reviews/cache/` 하위에 남김 (재개 시 재사용)
 
 ### 4. 상태 파일 감지 + 재개 분기 (C8)
 
 ```bash
 # Parent 모드
-STATE_FILE=".omc/state/reviews/${SLUG}.json"
+STATE_FILE=".pipeline/state/reviews/${SLUG}.json"
 
 # 단일 수동 PR
-STATE_FILE=".omc/state/reviews/pr-<repo>-<number>.json"
+STATE_FILE=".pipeline/state/reviews/pr-<repo>-<number>.json"
 ```
 
 **분기 A. `--restart` 플래그 있음** → 기존 상태 파일 백업 후 초기화, 처음부터
@@ -539,7 +539,7 @@ gh issue comment <parent-N> --repo "$OWNER/$PARENT_REPO_NAME" --body "$(cat <<EO
 <critic.summary>
 
 ---
-*자동 발송됨. 상태: \`.omc/state/reviews/<slug>.json\`*
+*자동 발송됨. 상태: \`.pipeline/state/reviews/<slug>.json\`*
 EOF
 )"
 # → PARENT_COMMENT_URL 반환
@@ -568,7 +568,7 @@ gh pr comment <N> --repo "$OWNER/<영역>" \
 # STATE_FILE 은 Step4/5 와 동일한 라이브 변수 컨벤션(${SLUG})을 따른다.
 #   리터럴 angle-bracket(<slug>)을 박으면 별개 셸에서 치환 누락 시 존재하지 않는 경로가 되어
 #   jq 가 "no such file" → `&& mv` 스킵 → verdict 미기록 → #54(fail-closed) 회귀한다.
-STATE_FILE=".omc/state/reviews/${SLUG}.json"
+STATE_FILE=".pipeline/state/reviews/${SLUG}.json"
 CRITIC_VERDICT="<8-b critic 반환 verdict: pass|concerns|blocker>"
 CRITIC_FINDINGS='<8-b critic 반환 findings[] JSON, 0건이면 []>'
 
@@ -718,7 +718,7 @@ fi
 
 모드: <parent | single | parent (critic-only)>
 Slug: <slug or N/A>
-상태 파일: .omc/state/reviews/<...>.json
+상태 파일: .pipeline/state/reviews/<...>.json
 
 # critic-only 모드면 아래 "영역별 판정" 표 대신 이 블록만 출력:
 # ----------------------------------------

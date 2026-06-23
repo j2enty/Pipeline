@@ -18,7 +18,7 @@
       "url": "...",
       "number": 0,
       "repo": "<owner>/<area>",
-      "planPath": ".omc/state/reviews/cache/<parent-N>-<slug>-<area-lowercase>-plan.md" | null,
+      "planPath": ".pipeline/state/reviews/cache/<parent-N>-<slug>-<area-lowercase>-plan.md" | null,
       "planSource": "Docs@plan/<parent-N>-<slug>:claude/plans/<parent-N>-<slug>-<area-lowercase>.md" | null,
       "lastReviewedSha": null,
       "verdict": "pending",

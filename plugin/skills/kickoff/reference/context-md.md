@@ -34,7 +34,7 @@
 - <영역>: <원인 요약>
 
 ## 참고
-- 상태 파일: `.omc/state/sessions/<slug>.json`
+- 상태 파일: `.pipeline/state/sessions/<slug>.json`
 - 플랜: Docs/claude/plans/<parent-N>-<slug>-*.md
 ```
 

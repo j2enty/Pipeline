@@ -42,7 +42,7 @@ ${ASSIGNEES:+${ASSIGNEES} 확인 요청.}
 **기능:** <slug>  (parent: $OWNER/$PARENT_REPO_NAME#<parent-N>)
 **실패 유형:** \`<카테고리> / <subcategory>\` (<count>/<limit>)
 **에러 메시지:** <errorSummary.message 1~2줄>
-**상세 로그:** 상태 파일 \`rawTail\` 참조 — \`.omc/state/sessions/<slug>.json\`
+**상세 로그:** 상태 파일 \`rawTail\` 참조 — \`.pipeline/state/sessions/<slug>.json\`
 
 **실행 컨텍스트**
 - 브랜치: \`feature/#<sub-N>-<slug>\`

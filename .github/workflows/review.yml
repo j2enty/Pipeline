@@ -193,7 +193,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       # 상태파일 경로 + area 키 해석 — PR 로 결정론적 선택(교차 오염 방지).
-      # /review 가 단일 PR 리뷰 시 .omc/state/reviews/pr-<repo>-<number>.json 을 쓴다
+      # /review 가 단일 PR 리뷰 시 .pipeline/state/reviews/pr-<repo>-<number>.json 을 쓴다
       #   (review.md 상수표: 단일 수동 PR = pr-<repo>-<number>.json, <repo>=레포명만·org 생략).
       # review.yml 은 단일 pr-url 만 받으므로, 그 PR URL 에서 repo·number 를 파싱해
       #   상태파일명을 직접 구성한다("가장 최근 .json" 휴리스틱 폐기 — working-directory 가
@@ -204,7 +204,7 @@ jobs:
         id: track-resolve
         if: ${{ inputs.tracking-enabled }}
         env:
-          REVIEWS_DIR: .omc/state/reviews
+          REVIEWS_DIR: .pipeline/state/reviews
           PR_URL: ${{ inputs.pr-url }}
         run: |
           set -euo pipefail

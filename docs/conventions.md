@@ -43,7 +43,7 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `slack-channel` | string | 알림 yml (옵션) | 슬랙 채널 |
 | `ci-workflow-name` | string | auto-merge yml | 해당 모듈의 CI workflow 이름 (예: `Backend CI`) |
 | `reviewer-bot-login` | string | review·critic yml | Reviewer 봇 GitHub 로그인 이름 (예: `reclip-review-bot[bot]`) |
-| `verdict-state-dir` | string | critic yml | verdict 상태 파일 디렉토리 (예: `.omc/state/reviews`) |
+| `verdict-state-dir` | string | critic yml | verdict 상태 파일 디렉토리 (예: `.pipeline/state/reviews`) |
 | `strict-review-bot-check` | boolean | review·critic yml | `true`: 누구의 CHANGES_REQUESTED든 차단 / `false`: Reviewer 봇 것만 확인 |
 | `project-owner` | string | merge yml (옵션) | Project v2 소유자 (org/user 로그인). 미설정 시 머지 후 Status 전환 스킵 |
 | `project-number` | string | merge yml (옵션) | Project v2 번호. 미설정 시 머지 후 Status 전환 스킵 |

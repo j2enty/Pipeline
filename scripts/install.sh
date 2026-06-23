@@ -980,7 +980,7 @@ main() {
   # secrets / generate_env(.env) / 커맨드 / npm 전부 스킵 →
   # app/.env(WEBHOOK_SECRET 포함) 를 일절 건드리지 않아 운영 App 파손 위험 0.
   if [ "$REAPPLY" = "true" ]; then
-    VERDICT_DIR=".omc/state/reviews"
+    VERDICT_DIR=".pipeline/state/reviews"
     section "부분 재적용 (--reapply)"
     warn "secrets/.env/커맨드/npm 스킵 — variables·라벨·호출자 yml 만 재적용"
     # 환경변수 REVIEWER_BOT_LOGIN 원본을 보존.
@@ -1060,7 +1060,7 @@ main() {
   # Webhook Secret 결정 — 대화형·비대화형 공통 (기존 .env 값 보존이 안전 기본값)
   resolve_webhook_secret
 
-  VERDICT_DIR=".omc/state/reviews"
+  VERDICT_DIR=".pipeline/state/reviews"
 
   # 각 모듈 처리
   section "영역 레포 등록"
