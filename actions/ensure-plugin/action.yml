@@ -1,0 +1,30 @@
+# ensure-plugin — Pipeline 플러그인을 claude Code user scope 에 멱등 설치하는 composite action
+#
+# 무엇을: scripts/ensure-plugin-installed.sh 를 호출해 marketplace add→update→uninstall→install
+#         시퀀스로 "항상 최신" plugin 을 user scope 에 설치한다. self-hosted 러너의 자동화
+#         워크플로(review/kickoff/critic/critic-dispatch.yml)가 claude 슬래시커맨드 호출
+#         "직전"에 사용한다.
+#
+# 왜 composite 인가:
+#   설치 step(주석+호출)이 4개 워크플로에 중복되던 것을 한 곳으로 단일화한다
+#   (CLAUDE.md 원칙 4 "반복되는 step → composite action", track-findings 와 동일 패턴).
+#   설치 시퀀스의 "왜"(신뢰 게이트 우회·멱등·동시성 전제)는 ensure-plugin-installed.sh 주석 참조.
+#
+# 종속성 제로: Pipeline 체크아웃 경로는 input 으로 주입(프로젝트 식별자 하드코딩 없음).
+# 실행 방식: 스크립트를 `bash <path>` 로 실행한다 — 체크아웃된 .sh 의 실행권한(+x)이
+#   core.fileMode·플랫폼에 따라 유실돼도 'Permission denied'(exit 126)로 죽지 않게 한다
+#   (코드리뷰 반영 — track-findings 는 uses 라 무관하지만 이 스크립트는 직접 실행이라 필요).
+
+name: ensure-plugin
+description: "Pipeline 플러그인을 claude Code user scope 에 멱등 설치(항상 최신)"
+
+inputs:
+  checkout-path:
+    description: "Pipeline 레포 체크아웃 루트 — 마켓플레이스 소스이자 ensure-plugin-installed.sh 위치"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bash "${{ inputs.checkout-path }}/scripts/ensure-plugin-installed.sh" "${{ inputs.checkout-path }}"

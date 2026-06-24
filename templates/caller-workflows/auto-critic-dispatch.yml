@@ -24,6 +24,10 @@ jobs:
       owner: ${{ vars.PIPELINE_OWNER }}
       parent-repository: ${{ vars.PIPELINE_PARENT_REPOSITORY }}
       modules-ignore: ${{ vars.PIPELINE_MODULES_IGNORE || '[]' }}
+      # claude plugin(/pipeline:* 슬래시커맨드) 로드용 — critic-dispatch.yml 이 Pipeline
+      # 레포를 정확히 체크아웃하도록 repo/ref 명시(install.sh 가 placeholder 치환).
+      pipeline-repo: __PIPELINE_REPO__
+      pipeline-ref: __PIPELINE_REF__
     secrets:
       AUTHOR_APP_ID: ${{ secrets.AUTHOR_APP_ID }}
       AUTHOR_PRIVATE_KEY: ${{ secrets.AUTHOR_PRIVATE_KEY }}

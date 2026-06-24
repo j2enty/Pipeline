@@ -25,3 +25,7 @@ jobs:
       parent-url: ${{ github.event.client_payload.parent_url || inputs.parent_issue_url }}
       working-directory: ${{ vars.PIPELINE_WORKING_DIRECTORY }}
       owner: ${{ vars.PIPELINE_OWNER }}
+      # claude plugin(/pipeline:* 슬래시커맨드) 로드용 — kickoff.yml 이 Pipeline 레포를
+      # 정확히 체크아웃하도록 repo/ref 명시(install.sh 가 placeholder 치환).
+      pipeline-repo: __PIPELINE_REPO__
+      pipeline-ref: __PIPELINE_REF__
