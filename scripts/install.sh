@@ -768,11 +768,17 @@ generate_pipeline_config() {
 
   # self-check — 런타임 리더로 핵심 키가 실제로 읽히는지 검증.
   #   리더의 --require 인터페이스(하나라도 비면 exit 1)를 그대로 사용한다.
-  #   owner·project-number 는 모든 흐름의 필수 식별자라 검증 기준으로 적합.
+  #   필수 5키: owner·project-number(영역/이슈 식별) + project-id·status-field-id·
+  #   area-field-id(GraphQL Project v2 조작 — Status/Area 변경). 이 5개는 reviewer
+  #   사용 여부와 무관하게 kickoff/review/plan 전 흐름에서 필수라 install 시점에
+  #   fail-fast 한다(P4 — Reclip 실적용에서 런타임 필수키 확정).
+  #   reviewer-* 키는 reviewer.enabled 조건부라 여기 포함하지 않는다(향후 별도 판단).
   #   PIPELINE_CONFIG env 로 임시본 경로를 주입 → 대상에 옮기기 전에 검증.
-  if ! PIPELINE_CONFIG="$tmp_file" bash "$reader" --require owner project-number >/dev/null 2>&1; then
-    error "pipeline-config self-check 실패 — 런타임 리더가 필수 키(owner·project-number)를 읽지 못했습니다."
-    error "입력 config 의 project.owner / project.project-numbers 를 확인하세요. 배치 중단: $CONFIG_FILE"
+  if ! PIPELINE_CONFIG="$tmp_file" bash "$reader" \
+       --require owner project-number project-id status-field-id area-field-id \
+       >/dev/null 2>&1; then
+    error "pipeline-config self-check 실패 — 런타임 리더가 필수 키(owner·project-number·project-id·status-field-id·area-field-id)를 읽지 못했습니다."
+    error "입력 config 의 project.owner / project.project-numbers 와 claude-commands.{project-id,status-field-id,area-field-id} 를 확인하세요. 배치 중단: $CONFIG_FILE"
     return 1
   fi
 

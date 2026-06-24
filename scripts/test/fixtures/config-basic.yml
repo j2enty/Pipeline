@@ -27,6 +27,10 @@ pipeline:
 
 claude-commands:
   enabled: false
+  # 런타임 필수 식별자(더미 — 실제 프로젝트 아님). self-check 5키 검증 통과용.
+  project-id: PVT_test0000
+  status-field-id: PVTSSF_teststatus0000
+  area-field-id: PVTSSF_testarea0000
 
 tracking:
   enabled: true
