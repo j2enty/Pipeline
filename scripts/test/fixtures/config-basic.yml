@@ -31,6 +31,11 @@ claude-commands:
   project-id: PVT_test0000
   status-field-id: PVTSSF_teststatus0000
   area-field-id: PVTSSF_testarea0000
+  # reviewer.enabled=true 라 self-check 조건부 require 가 reviewer-* 3키를 요구한다.
+  #   더미값(실제 봇 아님) — REVIEWER_ENABLED=true 인 테스트에서 통과시키기 위함.
+  reviewer-app-id: "000000"
+  reviewer-bot-slug: test-review-bot
+  reviewer-token-key: TEST_REVIEW_BOT
 
 tracking:
   enabled: true

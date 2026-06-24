@@ -226,3 +226,32 @@ examples/
 | `consistency-critic-dual-model` | `claude-commands.plan` | boolean | `true` | ⑤ 2차 모델 교차검증 on/off (on 이면 `cross-check-tool` 사용) |
 | `contract-doc-enabled` | `claude-commands.plan` | boolean | `true` | ② 영역 간 공유 계약 문서 생성 on/off |
 | `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어, 옛 oh-my-claudecode:ask 의 Pipeline 자체 대체) |
+
+### GraphQL Project v2 식별자 카탈로그 (`claude-commands:` 항목) — 자동조회 대상
+
+`/kickoff`·`/review`·`/plan` 가 GitHub Project v2 를 GraphQL 로 조작(Status·Area 필드 변경)할 때 쓰는 노드 ID 들. 사용자가 알기 어려운 해시값이라 `install.sh` 가 **자동조회**한다.
+
+| 키 | 위치 | 타입 | 의미 |
+|---|---|---|---|
+| `project-id` | `claude-commands` (직속) | string(`PVT_...`) | Project v2 노드 ID |
+| `status-field-id` | `claude-commands` (직속) | string(`PVTSSF_...`) | Project v2 의 `Status` 필드 ID |
+| `area-field-id` | `claude-commands` (직속) | string(`PVTSSF_...`) | Project v2 의 `Area` 필드 ID |
+
+**자동조회 동작 ("명시 > 자동 > 실패")** — `install.sh generate_pipeline_config`:
+
+1. config 에 값이 **명시**돼 있으면 그대로 사용(자동조회 스킵, 절대 덮어쓰지 않음).
+2. 비어 있고 `project.owner`+`project-numbers[0]` 가 있으면 GraphQL 로 **자동조회**(organization→user 순차 폴백)해 **빈 키만** 채운다. gh 내장 `--jq` 만 사용(외부 `jq` 불필요).
+3. 자동조회도 실패(또는 못 찾은 필드)하고 값도 비면 install 시점 self-check 에서 **fail-fast**.
+
+**이식성 주의**: 자동조회는 `Status`·`Area` 라는 표준 필드명만 찾는다. `Status` 는 Project v2 표준이라 거의 항상 있지만, `Area` 는 프로젝트마다 커스텀 필드명일 수 있어 못 찾을 수 있다 → 그 경우 위 표의 `area-field-id` 를 config 에 **수동 명시**(명시가 자동조회보다 우선). 다른 필드명을 본체에 하드코딩하지 않는다.
+
+### install 시점 self-check 필수 키 (`generate_pipeline_config`)
+
+원격쓰기 전 fail-fast 게이트. 리더의 `--require` 로 검증하며, 비면 배치를 중단한다.
+
+| 필수 키 집합 | 조건 |
+|---|---|
+| `owner` · `project-number` · `project-id` · `status-field-id` · `area-field-id` | 항상(reviewer 사용 여부 무관) |
+| + `reviewer-app-id` · `reviewer-bot-slug` · `reviewer-token-key` | `reviewer.enabled: true` 일 때만 조건부 추가 |
+
+> 위 GraphQL 3키는 self-check 전에 자동조회로 채워질 수 있으므로, config 에 비워둬도 자동조회만 성공하면 통과한다.

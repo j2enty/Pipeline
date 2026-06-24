@@ -110,15 +110,14 @@ it "T-GPC-6 입력 config 부재: 에러(파일 미생성)"
   assert_file_absent "$WORKING_DIR/.claude/pipeline-config.yml" "입력 없는데 대상 생성됨" && pass
 )
 
-# T-GPC-7: self-check 거부 — owner·project-number 는 있지만 GraphQL 식별자(project-id·
-#   status-field-id·area-field-id)가 누락된 config → 배치 거부(대상 미생성).
-#   (P4 self-check 5키 확장의 실패경로 — 옛 2키 검증으로는 통과하던 불완전 config 를 잡는다.)
-it "T-GPC-7 self-check 거부: project-id 등 GraphQL 식별자 누락 config 는 배치 거부(대상 미생성)"
+# T-GPC-7: self-check 거부 — GraphQL 식별자 3키 누락 + 자동조회도 실패(stub 미설정)
+#   → 배치 거부(대상 미생성). A안 "명시 > 자동 > 실패"의 실패경로(둘 다 없으면 fail-fast).
+it "T-GPC-7 self-check 거부: GraphQL 식별자 누락 + 자동조회 실패 → 배치 거부(대상 미생성)"
 (
   setup_install_env "$FIXTURES_DIR/config-basic.yml"
   WORKING_DIR="$(_mk_workdir)"
+  unset GH_STUB_PROJECT_TSV   # 자동조회 실패 시뮬(graphql exit 1)
   # owner·project-number 는 채우되 claude-commands 의 GraphQL 식별자 3키는 비운 config.
-  #   (옛 2키 self-check 라면 통과하지만, 5키 확장 후엔 거부돼야 한다.)
   bad_config="$(mktemp)"
   cat > "$bad_config" <<'YML'
 project:
@@ -131,18 +130,21 @@ claude-commands:
 YML
   CONFIG_FILE="$bad_config"
   rc=0
-  generate_pipeline_config >/dev/null 2>&1 || rc=$?
+  err="$(generate_pipeline_config 2>&1)" || rc=$?
   rm -f "$bad_config"
-  assert_ne "0" "$rc" "GraphQL 식별자 누락인데 0 종료(5키 self-check 미작동)" || return
+  assert_ne "0" "$rc" "자동조회 실패 + 식별자 누락인데 0 종료(self-check 미작동)" || return
+  # codex Finding 3 — 실패가 어떤 키 때문인지 사용자에게 보여야 함(리더 stderr 노출).
+  assert_contains "$err" "project-id" "실패 메시지에 누락 키(project-id) 미노출" || return
   assert_file_absent "$WORKING_DIR/.claude/pipeline-config.yml" "거부됐는데 대상 파일이 생성됨(원자성 위반)" && pass
 )
 
-# T-GPC-8: self-check 거부 — status-field-id 만 누락(나머지 4키는 채움) → 배치 거부.
-#   (5키 중 어느 하나라도 비면 fail-fast 하는지 — AND 의미론 확인.)
-it "T-GPC-8 self-check 거부: status-field-id 단일 누락도 배치 거부"
+# T-GPC-8: self-check 거부 — status-field-id 만 누락 + 자동조회 실패 → 배치 거부.
+#   (자동조회 실패 시 채워지지 않은 단일 키도 fail-fast — AND 의미론 확인.)
+it "T-GPC-8 self-check 거부: status-field-id 단일 누락 + 자동조회 실패도 배치 거부"
 (
   setup_install_env "$FIXTURES_DIR/config-basic.yml"
   WORKING_DIR="$(_mk_workdir)"
+  unset GH_STUB_PROJECT_TSV   # 자동조회 실패 시뮬
   bad_config="$(mktemp)"
   cat > "$bad_config" <<'YML'
 project:
@@ -161,4 +163,154 @@ YML
   rm -f "$bad_config"
   assert_ne "0" "$rc" "status-field-id 누락인데 0 종료(단일키 누락 미검출)" || return
   assert_file_absent "$WORKING_DIR/.claude/pipeline-config.yml" "거부됐는데 대상 파일 생성됨" && pass
+)
+
+# ── 자동조회(A안 "명시 > 자동 > 실패") 신규 테스트 ──────────────────────
+# 공통: claude-commands 의 GraphQL 식별자 3키가 빈 config 를 만들고 gh stub 의
+#   GH_STUB_PROJECT_TSV 로 자동조회 결과를 주입한다. reviewer.enabled=false 로 둬
+#   reviewer-* 조건부 require 가 끼어들지 않게 한다.
+
+# 빈 GraphQL 3키 config 생성 헬퍼 — <owner> <project-number> 받아 임시파일 경로 출력.
+_mk_empty_ids_config() {
+  local cfg; cfg="$(mktemp)"
+  cat > "$cfg" <<YML
+project:
+  owner: ${1:-test-org}
+  parent-repository: test-org/parent-repo
+  project-numbers: [${2:-1}]
+  working-directory: /tmp/test-workspace
+reviewer:
+  enabled: false
+claude-commands:
+  enabled: false
+  project-id: ""
+  status-field-id: ""
+  area-field-id: ""
+YML
+  printf '%s\n' "$cfg"
+}
+
+# T-GPC-9: 자동조회 성공 — 빈 3키 + GH_STUB_PROJECT_TSV → dest 의 claude-commands 에 3키 채워짐.
+it "T-GPC-9 자동조회 성공: 빈 3키가 자동조회값으로 채워져 배치됨"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export GH_STUB_PROJECT_TSV=$'PVT_auto0001\tPVTSSF_autostatus\tPVTSSF_autoarea'
+  cfg="$(_mk_empty_ids_config test-org 7)"
+  CONFIG_FILE="$cfg"
+  generate_pipeline_config >/dev/null 2>&1 || { fail "자동조회 성공인데 generate 실패"; rm -f "$cfg"; return; }
+  rm -f "$cfg"
+  dest="$WORKING_DIR/.claude/pipeline-config.yml"
+  assert_file_present "$dest" "자동조회 후 dest 미생성" || return
+  reader="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
+  assert_eq "PVT_auto0001"      "$(PIPELINE_CONFIG="$dest" bash "$reader" project-id 2>/dev/null)"      "project-id 자동주입 실패" || return
+  assert_eq "PVTSSF_autostatus" "$(PIPELINE_CONFIG="$dest" bash "$reader" status-field-id 2>/dev/null)" "status-field-id 자동주입 실패" || return
+  assert_eq "PVTSSF_autoarea"   "$(PIPELINE_CONFIG="$dest" bash "$reader" area-field-id 2>/dev/null)"   "area-field-id 자동주입 실패" && pass
+)
+
+# T-GPC-10: 명시 우선 — 3키가 이미 명시된 config + stub → 자동조회 호출 안 함 + 명시값 보존.
+it "T-GPC-10 명시 우선: 3키 명시 config 는 자동조회 안 함(명시값 보존)"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  # stub 이 설정돼 있어도 명시값이 있으면 graphql 을 호출하면 안 됨.
+  export GH_STUB_PROJECT_TSV=$'PVT_should_not_use\tPVTSSF_x\tPVTSSF_y'
+  : > "$GH_LOG"   # 로그 초기화
+  cfg="$(mktemp)"
+  cat > "$cfg" <<'YML'
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+reviewer:
+  enabled: false
+claude-commands:
+  enabled: false
+  project-id: PVT_explicit
+  status-field-id: PVTSSF_explicit_s
+  area-field-id: PVTSSF_explicit_a
+YML
+  CONFIG_FILE="$cfg"
+  generate_pipeline_config >/dev/null 2>&1 || { fail "명시 config generate 실패"; rm -f "$cfg"; return; }
+  rm -f "$cfg"
+  # graphql 호출이 없어야 함(명시값이라 자동조회 스킵)
+  assert_eq "0" "$(count_gh_log 'api graphql')" "명시값인데 자동조회(graphql) 호출됨" || return
+  dest="$WORKING_DIR/.claude/pipeline-config.yml"
+  reader="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
+  assert_eq "PVT_explicit" "$(PIPELINE_CONFIG="$dest" bash "$reader" project-id 2>/dev/null)" "명시 project-id 가 덮어써짐" && pass
+)
+
+# T-GPC-11: 부분 자동조회(Area 못 찾음) — area 칸 빈 tsv → area-field-id 비어 self-check fail-fast.
+#   (Status·project-id 는 채워지지만 area 누락으로 거부 — 명시 폴백 필요함을 검증.)
+it "T-GPC-11 부분 자동조회: Area 못 찾으면 area-field-id 누락으로 배치 거부"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export GH_STUB_PROJECT_TSV=$'PVT_auto\tPVTSSF_s\t'   # area 칸 빈값
+  cfg="$(_mk_empty_ids_config test-org 1)"
+  CONFIG_FILE="$cfg"
+  rc=0
+  err="$(generate_pipeline_config 2>&1)" || rc=$?
+  rm -f "$cfg"
+  assert_ne "0" "$rc" "area 미발견인데 0 종료(부분조회 후 fail-fast 미작동)" || return
+  assert_contains "$err" "area-field-id" "실패 메시지에 누락 키(area-field-id) 미노출" || return
+  assert_file_absent "$WORKING_DIR/.claude/pipeline-config.yml" "거부됐는데 대상 생성됨" && pass
+)
+
+# T-GPC-12: reviewer 조건부 require — reviewer.enabled=true + reviewer 키 누락 → fail-fast.
+it "T-GPC-12 reviewer 조건부: enabled=true + reviewer 키 누락 → 배치 거부"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export REVIEWER_ENABLED=true   # parse_config 가 emit 하는 변수 — 메인흐름 모사
+  export GH_STUB_PROJECT_TSV=$'PVT_x\tPVTSSF_s\tPVTSSF_a'   # 5키는 채워지게
+  cfg="$(mktemp)"
+  cat > "$cfg" <<'YML'
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+reviewer:
+  enabled: true
+claude-commands:
+  enabled: false
+  project-id: PVT_x
+  status-field-id: PVTSSF_s
+  area-field-id: PVTSSF_a
+YML
+  CONFIG_FILE="$cfg"
+  rc=0
+  err="$(generate_pipeline_config 2>&1)" || rc=$?
+  rm -f "$cfg"
+  assert_ne "0" "$rc" "reviewer.enabled=true + reviewer 키 누락인데 0 종료(조건부 require 미작동)" || return
+  assert_contains "$err" "reviewer-app-id" "실패 메시지에 reviewer 누락 키 미노출" && pass
+)
+
+# T-GPC-13: reviewer 조건부 — reviewer.enabled=false + reviewer 키 누락 → 통과(3키 충족 전제).
+it "T-GPC-13 reviewer 조건부: enabled=false 면 reviewer 키 없어도 통과"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export REVIEWER_ENABLED=false
+  cfg="$(mktemp)"
+  cat > "$cfg" <<'YML'
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+reviewer:
+  enabled: false
+claude-commands:
+  enabled: false
+  project-id: PVT_x
+  status-field-id: PVTSSF_s
+  area-field-id: PVTSSF_a
+YML
+  CONFIG_FILE="$cfg"
+  generate_pipeline_config >/dev/null 2>&1 || { fail "enabled=false 인데 reviewer 키 누락으로 거부됨"; rm -f "$cfg"; return; }
+  rm -f "$cfg"
+  assert_file_present "$WORKING_DIR/.claude/pipeline-config.yml" "통과해야 하는데 대상 미생성" && pass
 )
