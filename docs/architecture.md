@@ -95,6 +95,16 @@ Phase 2가 사실상 최종 형태일 가능성이 높음. Phase 3는 운영자�
 - **미래 배포 옵션**: VPS / Render / Fly.io / AWS Lambda — Docker 표준 패키징이라 코드 수정 없이 이전 가능. (Cloudflare Worker만 다른 패러다임이라 어댑터 필요)
 - `install.sh`는 `docker compose up -d` 한 줄로 띄움 (5분 이식 UX 목표 부합)
 
+### self-hosted 러너 사전 요구사항
+
+`review.yml`의 fix-loop는 claude 호출이 멈추지 않도록 **step 단위** `timeout`/`gtimeout`(#20 hung 방지)으로 감싼다. (`kickoff`·`critic`·`critic-dispatch` 워크플로는 `TIMEOUT_CMD`를 쓰지 않고 job-level `timeout-minutes`로 hung을 막으므로 coreutils가 필요 없다.) 러너 OS별:
+
+- **macOS**: 기본 `timeout`이 없으므로 `brew install coreutils`(→ `gtimeout`) 필요. **미설치 시 review 워크플로가 claude 호출 전 `TIMEOUT_CMD` 결정에서 실패**한다 — `install.sh` 실행 시점이 아니라 **러너에서 워크플로가 도는 시점**에 워크플로 에러로 드러난다.
+- **Linux**: 대부분의 배포판은 `timeout`(coreutils)이 기본 포함 — 단 BusyBox 등 최소/커스텀 이미지는 별도 설치가 필요할 수 있다.
+- `claude` CLI와 Pipeline 플러그인은 워크플로의 `ensure-plugin`(`scripts/ensure-plugin-installed.sh`)이 매 실행 user scope로 설치 — 러너엔 `claude` CLI만 사전 설치돼 있으면 된다.
+
+`install.sh`의 `check_requirements`가 `timeout`/`gtimeout` 부재를 경고로 안내한다(중단 안 함). 단 이 체크는 **install 머신 기준**이라(install≠러너일 수 있음), 실제 요구는 review가 도는 러너 OS임에 유의.
+
 ### 환경 분리 — 운영 App / 개발 App
 
 | 환경 | GitHub App entity | install 대상 | 목적 |
