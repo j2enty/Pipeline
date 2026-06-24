@@ -7,6 +7,18 @@
 #   - `gh auth status`                       → 인증 OK 로 통과 (exit 0)
 #   - `gh api ... --jq .sha` 류              → GH_STUB_EXISTING_SHA 있으면 그 값,
 #                                              없으면 빈 문자열(신규 파일 경로)
+#   - `gh api graphql ... --jq ...`          → query 인자에서 organization( vs user( 를
+#                                              구분해 분기한다(실제 resolve_project_field_ids
+#                                              의 org→user 폴백을 게이트하기 위함).
+#                                                · organization( 쿼리 → GH_STUB_PROJECT_TSV_ORG
+#                                                · user( 쿼리        → GH_STUB_PROJECT_TSV_USER
+#                                                · GH_STUB_PROJECT_TSV (구) → org 응답 호환 별칭
+#                                              해당 env 가 있으면 그 값을 그대로 출력(--jq 결과
+#                                              tsv 를 직접 흉내). 없으면 exit 1(그 쿼리 NOT_FOUND
+#                                              모사). 실제 gh 는 json 을 내고 --jq 를 적용하지만,
+#                                              stub 은 분기/폴백 게이트 역할만 한다 — production
+#                                              jq 표현식 재현은 안 한다(jq 는 실제 gh 로 이미
+#                                              spike 검증됨: PVT_kwDOEH36Hs4BU4t1 등 정확 추출 확인).
 #   - `gh variable list --repo <repo> --json name,value`
 #       → 환경변수 GH_STUB_VARLIST_<SLUG> 에서 JSON 반환.
 #         SLUG = 레포 경로의 '/'·'-' 를 '_' 로 치환하고 대문자화.
@@ -70,6 +82,37 @@ fi
 #   - PUT 등 그 외 api 호출: 빈 출력 + exit 0 (로그만 남김, 위에서 이미 기록됨).
 #   - user --jq .login 도 빈 문자열로 충분 (로그 출력용).
 if [ "${1:-}" = "api" ]; then
+  # gh api graphql — Project v2 식별자 자동조회(resolve_project_field_ids).
+  #   query 인자에서 organization( vs user( 를 구분해 org→user 폴백 분기를 게이트한다.
+  #   해당 쿼리용 env(아래)가 있으면 그 tsv 를 출력(성공), 없으면 exit 1(그 쿼리 NOT_FOUND).
+  #     organization( → GH_STUB_PROJECT_TSV_ORG (구 GH_STUB_PROJECT_TSV 는 org 별칭)
+  #     user(         → GH_STUB_PROJECT_TSV_USER
+  if [ "${2:-}" = "graphql" ]; then
+    # 전체 인자에서 GraphQL 쿼리 종류(organization vs user) 판별.
+    # resolve_project_field_ids 의 query 문자열에 `organization(` / `user(` 가 그대로 들어있다.
+    case "$*" in
+      *"organization("*)
+        # 구 GH_STUB_PROJECT_TSV 는 org 응답 호환 별칭 — 둘 중 설정된 값 사용.
+        org_tsv="${GH_STUB_PROJECT_TSV_ORG:-${GH_STUB_PROJECT_TSV:-}}"
+        if [ -n "$org_tsv" ]; then
+          printf '%s\n' "$org_tsv"
+          exit 0
+        fi
+        exit 1   # org NOT_FOUND 모사 → install.sh 가 user 쿼리로 폴백
+        ;;
+      *"user("*)
+        if [ -n "${GH_STUB_PROJECT_TSV_USER:-}" ]; then
+          printf '%s\n' "$GH_STUB_PROJECT_TSV_USER"
+          exit 0
+        fi
+        exit 1   # user NOT_FOUND 모사
+        ;;
+      *)
+        # 인식 못한 graphql 쿼리 — 안전하게 실패
+        exit 1
+        ;;
+    esac
+  fi
   case "$*" in
     *"--jq .sha"*)
       printf '%s' "${GH_STUB_EXISTING_SHA:-}"

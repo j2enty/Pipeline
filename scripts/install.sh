@@ -706,9 +706,190 @@ generate_package_lock() {
   fi
 }
 
+# ── Project v2 식별자 자동조회 (GraphQL) ───────────────────────
+# project-number(사용자가 쉽게 아는 값 = 프로젝트 URL 끝 숫자)만 있으면
+# GitHub GraphQL 로 project-id·status-field-id·area-field-id 를 자동 획득한다.
+#
+# 인자: <owner> <project-number>
+# 출력(성공): "project-id<TAB>status-field-id<TAB>area-field-id" 한 줄(stdout) + return 0
+# 출력(실패): 아무것도 안 내고 return 1 (project-id 를 못 구하면 실패로 간주)
+#
+# org→user 순차 폴백 이유:
+#   GraphQL 통합 쿼리(organization 과 user 를 한 번에)는 owner 가 한쪽 타입이 아니면
+#   그쪽이 NOT_FOUND 로 떨어지면서 전체 응답이 에러가 된다(부분 성공 안 됨).
+#   그래서 organization 으로 먼저 시도하고, owner 가 user 계정이라 NOT_FOUND 면
+#   gh 가 exit 비0 → user 쿼리로 폴백한다.
+#
+# Area 필드명 가변성 주의:
+#   "Status" 는 GitHub Project v2 표준 필드라 거의 항상 존재한다.
+#   "Area" 는 프로젝트마다 다른 커스텀 필드명일 수 있어 못 찾을 수 있다 — 그 경우
+#   tsv 의 area 칸이 빈 문자열로 나온다. 이때는 config 에 area-field-id 를 명시해야
+#   한다("명시 > 자동 > 실패"의 명시 폴백). "Status"·"Area" 외 다른 필드명은
+#   프로젝트 식별자라 본체에 하드코딩하지 않는다(이식성 — config 명시로 처리).
+#
+# 의존성: gh 내장 --jq 만 사용(외부 jq 불필요).
+resolve_project_field_ids() {
+  local lookup_owner="$1" lookup_number="$2" tsv
+
+  # org 시도 — organization(login).projectV2(number) 에서 id + Status/Area 필드 추출.
+  #   --jq: project-id, Status 필드 id, Area 필드 id 를 tsv 한 줄로. 못 찾은 칸은 "".
+  # shellcheck disable=SC2016  # $o·$n 은 GraphQL 변수(shell 변수 아님) — 펼쳐지면 안 되고 -F 로 주입한다.
+  tsv="$(gh api graphql \
+    -f query='query($o:String!,$n:Int!){ organization(login:$o){ projectV2(number:$n){ id fields(first:50){nodes{...on ProjectV2SingleSelectField{id name}}} } } }' \
+    -F o="$lookup_owner" -F n="$lookup_number" \
+    --jq '.data.organization.projectV2 | [.id, (.fields.nodes|map(select(.name=="Status"))|.[0].id // ""), (.fields.nodes|map(select(.name=="Area"))|.[0].id // "")] | @tsv' \
+    2>/dev/null)" || tsv=""
+
+  # org 실패(owner 가 user 계정 → organization NOT_FOUND 로 gh exit 비0)거나
+  # project-id 칸(첫 칸)이 비면 user 쿼리로 폴백.
+  if [ -z "${tsv%%	*}" ]; then
+    # shellcheck disable=SC2016  # $o·$n 은 GraphQL 변수(shell 변수 아님) — 펼쳐지면 안 되고 -F 로 주입한다.
+    tsv="$(gh api graphql \
+      -f query='query($o:String!,$n:Int!){ user(login:$o){ projectV2(number:$n){ id fields(first:50){nodes{...on ProjectV2SingleSelectField{id name}}} } } }' \
+      -F o="$lookup_owner" -F n="$lookup_number" \
+      --jq '.data.user.projectV2 | [.id, (.fields.nodes|map(select(.name=="Status"))|.[0].id // ""), (.fields.nodes|map(select(.name=="Area"))|.[0].id // "")] | @tsv' \
+      2>/dev/null)" || tsv=""
+  fi
+
+  # project-id(첫 칸)가 비면 자동조회 실패. (Status/Area 칸이 비는 건 부분성공 —
+  #  여기선 성공으로 보고 빈 칸은 호출부가 주입 안 함 → self-check 가 최종 판정.)
+  if [ -z "${tsv%%	*}" ]; then
+    return 1
+  fi
+  printf '%s\n' "$tsv"
+  return 0
+}
+
+# ── config upsert — claude-commands 섹션의 키를 비어있을 때만 채움 ───────
+# 인자: <config-file> <key> <value>
+#   - claude-commands: 블록 안의 <key> 가 있고 값이 비어있을 때만 <value> 로 교체.
+#   - 값이 이미 있으면 보존(명시 우선). 키가 없으면 블록에 추가(블록 직속 들여쓰기).
+#   - claude-commands: 섹션 자체가 없으면 파일 끝에 섹션 생성 후 추가.
+#   - <value> 가 빈 문자열이면 아무것도 안 함(빈값으로 덮지 않음 — 호출부도 가드하지만 belt&suspenders).
+#
+# 리더 parity(중요 — install↔reader 가 같은 라인을 보게):
+#   ① 헤더 매칭은 리더 section() 과 정확히 동일하게 한다(`^claude-commands:[ \t]*$` —
+#      콜론 뒤 공백/탭만, 인라인 주석·내용 불허). 리더 section() 의
+#      `^claude-commands:\s*\n` 정규식은 헤더 라인 뒤에 공백/탭만 허용하고 즉시 개행하므로,
+#      `claude-commands:  # 주석` 같은 인라인 주석 헤더는 리더가 섹션을 못 읽는다. upsert 가
+#      그런 헤더를 채우면 self-check 가 방금 채운 키를 못 읽어 설치를 거부하게 된다(#2).
+#   ② 키 라인은 claude-commands "직속" 들여쓰기 레벨만 매칭한다. 리더 get_scalar_in 은
+#      claude-commands 블록(CC)에서 첫 매칭을 읽는데, 들여쓰기 무관이라 plan: 등 서브블록의
+#      동명 키가 텍스트상 먼저 나오면 그걸 읽는다(#1). upsert 가 임의 들여쓰기 첫 매칭을
+#      잡으면 서브블록 키에 자동조회값을 잘못 기록할 수 있다 → 직속 레벨로 한정해 막는다.
+# 리더가 python 을 쓰므로 여기도 python3 인라인으로 구현(일관·YAML 안전).
+upsert_claude_command_key() {
+  local config_file="$1" key="$2" value="$3"
+  [ -n "$value" ] || return 0
+  python3 - "$config_file" "$key" "$value" <<'PYEOF'
+import sys, re, json
+
+config_path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(config_path) as f:
+    lines = f.read().split('\n')
+
+# 값 직렬화 — json.dumps 로(YAML 은 JSON 상위집합이라 따옴표/특수문자 안전, codex F3).
+#   value 출처가 GraphQL ID라 실위험은 낮지만 저비용 방어.
+def yaml_value(v):
+    return json.dumps(v)
+
+# claude-commands: 최상위 키 라인 위치 찾기 — 리더 section() 헤더 매칭과 정확히 동일(#2 parity).
+#   리더는 `^claude-commands:\s*\n` (콜론 뒤 공백/탭만 후 즉시 개행)으로 섹션을 슬라이스하므로
+#   인라인 주석 헤더(`claude-commands:  # x`)는 섹션으로 인식하지 못한다. upsert 도 동일 기준.
+cc_idx = None
+for i, ln in enumerate(lines):
+    if re.match(r'^claude-commands:[ \t]*$', ln):
+        cc_idx = i
+        break
+
+# claude-commands: 블록 범위 [cc_idx+1, end) — 다음 최상위 키(들여쓰기 없는 비빈 줄) 직전까지.
+def block_end(start):
+    j = start
+    while j < len(lines):
+        ln = lines[j]
+        if ln.strip() == '' or ln.startswith((' ', '\t')):
+            j += 1
+            continue
+        break  # 들여쓰기 없는 비빈 줄 = 다음 최상위 키
+    return j
+
+def block_direct_indent(start, end):
+    """블록 직속(top-level of block) 들여쓰기 문자열을 탐지.
+       블록 안 비빈 줄들의 최소 들여쓰기 = 직속 키 레벨(보통 2칸). 비면 기본 2칸."""
+    best = None
+    for j in range(start, end):
+        ln = lines[j]
+        if ln.strip() == '':
+            continue
+        ind = ln[:len(ln) - len(ln.lstrip(' \t'))]
+        if best is None or len(ind) < len(best):
+            best = ind
+    return best if best is not None else '  '
+
+if cc_idx is None:
+    # claude-commands 섹션 없음 — 파일 끝에 섹션 생성 후 키 추가.
+    # 끝의 빈 줄 정리 후 섹션을 append.
+    while lines and lines[-1].strip() == '':
+        lines.pop()
+    lines.append('claude-commands:')
+    lines.append(f'  {key}: {yaml_value(value)}')
+else:
+    end = block_end(cc_idx + 1)
+    direct_indent = block_direct_indent(cc_idx + 1, end)
+    # 직속 레벨 key 라인만 매칭 — 서브블록(plan: 등)의 동명 키를 건드리지 않게(#1).
+    KEY_RE = re.compile(r'^(' + re.escape(direct_indent) + r')'
+                        + re.escape(key) + r':[ \t]*(.*)$')
+    # 블록 안에서 직속 key 라인 탐색
+    found = None
+    for i in range(cc_idx + 1, end):
+        m = KEY_RE.match(lines[i])
+        if m:
+            found = (i, m.group(1), m.group(2))
+            break
+    if found is not None:
+        i, indent, cur = found
+        # 인라인 주석 보존용 — 원본 값 부분에서 줄끝 인라인 주석을 분리해 둔다(#7).
+        inline_comment = ''
+        v = cur.strip()
+        if v.startswith(('"', "'")):
+            # 따옴표 값 — 닫는 따옴표까지가 값, 그 뒤는 인라인 주석일 수 있음
+            q = v[0]
+            mq = re.match(rf'{q}([^{q}\n]*){q}(.*)$', v)
+            if mq:
+                v = mq.group(1)
+                rest = mq.group(2).strip()
+                if rest.startswith('#'):
+                    inline_comment = rest
+            else:
+                v = v.strip(q)
+        else:
+            # 무따옴표 — # 이전이 값, # 이후가 인라인 주석
+            parts = v.split('#', 1)
+            v = parts[0].strip().strip('\'"')
+            if len(parts) > 1:
+                inline_comment = '#' + parts[1]
+        if v == '':
+            # 비어있을 때만 교체(들여쓰기 보존 + 인라인 주석 보존)
+            suffix = f'  {inline_comment}' if inline_comment else ''
+            lines[i] = f'{indent}{key}: {yaml_value(value)}{suffix}'
+        # 값이 있으면 보존(아무것도 안 함)
+    else:
+        # 키 없음 — 블록 끝(섹션 내부 마지막 비빈 줄 다음)에 직속 들여쓰기로 삽입.
+        # end 직전의 trailing 빈 줄들은 블록 밖으로 밀지 말고 그 앞에 삽입.
+        k = end - 1
+        while k > cc_idx and lines[k].strip() == '':
+            k -= 1
+        insert_at = k + 1
+        lines.insert(insert_at, f'{direct_indent}{key}: {yaml_value(value)}')
+
+with open(config_path, 'w') as f:
+    f.write('\n'.join(lines))
+PYEOF
+}
+
 # ── Pipeline config 생성 (플러그인 런타임 리더용) ──────────────
 # 입력 config($CONFIG_FILE)를 워크스페이스 루트($WORKING_DIR)의
-# .claude/pipeline-config.yml 로 그대로 복사한다.
+# .claude/pipeline-config.yml 로 복사하고, 비어있는 GraphQL 식별자는 자동조회로 채운다.
 #
 # 배경:
 #   P3 에서 슬래시커맨드 배포 방식이 ".tmpl 치환·복사" → "플러그인 + 런타임 config 읽기"
@@ -716,13 +897,19 @@ generate_package_lock() {
 #   (plugin/skills/*/scripts/pipeline-config.sh) 프로젝트값을 주입한다.
 #   이 함수는 그 런타임 config 파일을 영역 워크스페이스에 배치하는 역할.
 #
-# 설계 결정(D=ⓐ 복사 방식):
+# 설계 결정(D=ⓐ 복사 방식 + 자동조회):
 #   런타임 리더(pipeline-config.sh)와 install.sh 의 parse_config() 는 동일 스키마의
-#   같은 pipeline-config.yml 을 읽는다. 따라서 입력 config 를 (거의) 그대로 복사하면
-#   되고, 키를 재추출해 재직렬화하지 않는다 — parity 표면을 새로 만들지 않기 위함.
+#   같은 pipeline-config.yml 을 읽는다. 입력 config 를 (거의) 그대로 복사하되,
+#   project-id·status-field-id·area-field-id 가 비어있으면 owner+project-number 로
+#   자동조회해 빈 키만 채운다("명시 > 자동 > 실패"). 명시값은 절대 덮어쓰지 않는다.
+#   (이식 UX — 사용자는 알기 쉬운 project-number 만 채우면 나머지는 자동.)
+#
+# self-check 필수 키:
+#   owner·project-number(영역/이슈 식별) + project-id·status-field-id·area-field-id
+#   (GraphQL Project v2 조작). reviewer.enabled=true 면 reviewer-* 3키도 조건부 추가.
 #
 # 원자성: 임시 파일에 쓰고 self-check 통과 후 mv.
-# 멱등: 재실행 시 덮어쓰기 — 항상 입력 config 와 동일 상태로 수렴.
+# 멱등: 재실행 시 덮어쓰기 — 항상 입력 config 와 동일 상태로 수렴(이미 채워진 키는 보존).
 generate_pipeline_config() {
   # 배포 대상 — working-directory 재사용
   if [ -z "${WORKING_DIR:-}" ]; then
@@ -741,8 +928,8 @@ generate_pipeline_config() {
 
   echo "  Pipeline config 복사 중... (→ $dest)" >&2
 
-  # 런타임 리더 경로 — 3개 skill 의 리더는 동일 스키마를 읽으므로 self-check 엔
-  # 아무거나 써도 무방. kickoff 리더를 기준으로 검증한다(공통 키 owner·project-number).
+  # 런타임 리더 경로 — 3개 skill 의 리더는 동일 스키마를 읽으므로 self-check·값읽기엔
+  # 아무거나 써도 무방. kickoff 리더를 기준으로 한다.
   local reader="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
   if [ ! -f "$reader" ]; then
     error "pipeline-config 생성 실패 — 런타임 리더 없음: $reader"
@@ -766,13 +953,92 @@ generate_pipeline_config() {
 
   cp "$CONFIG_FILE" "$tmp_file"
 
-  # self-check — 런타임 리더로 핵심 키가 실제로 읽히는지 검증.
-  #   리더의 --require 인터페이스(하나라도 비면 exit 1)를 그대로 사용한다.
-  #   owner·project-number 는 모든 흐름의 필수 식별자라 검증 기준으로 적합.
+  # ── 자동조회로 빈 GraphQL 식별자 채우기 ("명시 > 자동 > 실패") ──────────
+  #   owner·project-number 는 eval 전역변수($OWNER 등)에 의존하지 않고 리더로 읽는다
+  #   (단위호출·테스트에서 parse_config 가 안 돌아도 안전하게).
+  local cur_owner cur_pnum cur_pid cur_sfid cur_afid
+  cur_owner="$(PIPELINE_CONFIG="$tmp_file" bash "$reader" owner 2>/dev/null)"
+  cur_pnum="$(PIPELINE_CONFIG="$tmp_file" bash "$reader" project-number 2>/dev/null)"
+  cur_pid="$(PIPELINE_CONFIG="$tmp_file" bash "$reader" project-id 2>/dev/null)"
+  cur_sfid="$(PIPELINE_CONFIG="$tmp_file" bash "$reader" status-field-id 2>/dev/null)"
+  cur_afid="$(PIPELINE_CONFIG="$tmp_file" bash "$reader" area-field-id 2>/dev/null)"
+
+  # 자동조회를 실제로 시도했는지 추적 — self-check 실패 메시지 분기에 사용(#5/F).
+  #   owner·project-number 가 비어 자동조회를 아예 스킵한 경우와, 시도했으나 못 채운
+  #   경우를 구분해야 한다(스킵인데 "자동조회 시도했으나 실패" 라고 오도하지 않도록).
+  local auto_attempted=false
+  # 3키 중 하나라도 비고, owner·project-number 가 있으면 자동조회 시도.
+  #   (owner/pnum 자체가 비면 자동조회 입력이 없으니 시도 무의미 → 스킵, self-check 가 잡음.)
+  if { [ -z "$cur_pid" ] || [ -z "$cur_sfid" ] || [ -z "$cur_afid" ]; } \
+     && [ -n "$cur_owner" ] && [ -n "$cur_pnum" ]; then
+    auto_attempted=true
+    local resolved
+    if resolved="$(resolve_project_field_ids "$cur_owner" "$cur_pnum")"; then
+      # tsv: project-id<TAB>status-field-id<TAB>area-field-id (빈 칸 가능 — 못 찾은 필드)
+      local r_pid r_sfid r_afid
+      IFS=$'\t' read -r r_pid r_sfid r_afid <<<"$resolved"
+      # 빈 키만 자동조회값으로 채움(명시값 보존, 자동조회 빈 칸은 주입 안 함).
+      [ -z "$cur_pid" ]  && [ -n "$r_pid" ]  && upsert_claude_command_key "$tmp_file" project-id "$r_pid"
+      [ -z "$cur_sfid" ] && [ -n "$r_sfid" ] && upsert_claude_command_key "$tmp_file" status-field-id "$r_sfid"
+      [ -z "$cur_afid" ] && [ -n "$r_afid" ] && upsert_claude_command_key "$tmp_file" area-field-id "$r_afid"
+      # "성공" 메시지는 빈 키가 실제로 다 채워졌을 때만(#4). 부분 충족이면 못 채운 키를
+      #   알리는 중립 메시지 — 직후 self-check 실패와의 모순을 없앤다.
+      local still_missing=()
+      { [ -z "$cur_pid" ]  && [ -z "$r_pid" ]; }  && still_missing+=(project-id)
+      { [ -z "$cur_sfid" ] && [ -z "$r_sfid" ]; } && still_missing+=(status-field-id)
+      { [ -z "$cur_afid" ] && [ -z "$r_afid" ]; } && still_missing+=(area-field-id)
+      if [ ${#still_missing[@]} -eq 0 ]; then
+        info "Project v2 식별자 자동조회 성공 (project-number=$cur_pnum)"
+      else
+        warn "Project v2 식별자 자동조회 — 일부만 채움 (project-number=$cur_pnum). 못 채운 키: ${still_missing[*]} (커스텀 필드명일 수 있어 config 명시 필요할 수 있음)"
+      fi
+    else
+      # 자동조회 실패 — 경고만 하고 진행. 최종 판정은 아래 self-check.
+      #   read:project 스코프 부재가 흔한 원인이라 힌트를 함께 노출(#3/G).
+      warn "Project v2 식별자 자동조회 실패 (owner=$cur_owner, project-number=$cur_pnum) — config 명시값으로 폴백합니다."
+      warn "gh 토큰에 read:project(Projects 읽기) 스코프가 없으면 자동조회가 전부 실패할 수 있습니다 — \`gh auth refresh -s read:project\` 로 보강하세요."
+    fi
+  fi
+
+  # ── self-check — 런타임 리더로 필수 키가 실제로 읽히는지 검증 ──────────
+  #   필수 키를 배열 하나로 SSOT 화(require·에러메시지가 같은 출처를 보게).
+  #   기본 5키: owner·project-number(영역/이슈 식별) + project-id·status-field-id·
+  #   area-field-id(GraphQL Project v2 조작 — Status/Area 변경). reviewer.enabled=true
+  #   면 reviewer-* 3키를 조건부 추가(codex Finding 2). 이 키들이 비면 원격쓰기 전
+  #   fail-fast 한다(P4 — Reclip 실적용에서 런타임 필수키 확정).
+  local required_keys=(owner project-number project-id status-field-id area-field-id)
+  # reviewer.enabled 는 검증 대상인 tmp_file 에서 직접 읽는다(#8/F2 — 다른 5키와 동일
+  #   하게 tmp_file 이 판정 출처가 되도록). 이전엔 parse_config 가 $CONFIG_FILE 에서 eval 로
+  #   흘린 전역 REVIEWER_ENABLED 에 의존했는데, 검증 대상(tmp_file)과 출처가 갈렸다.
+  #   parse_config 의 정규식(reviewer:\n  enabled:) 을 그대로 재사용한다.
+  local reviewer_enabled_in_tmp
+  reviewer_enabled_in_tmp="$(python3 - "$tmp_file" <<'PYEOF'
+import sys, re
+content = open(sys.argv[1]).read()
+m = re.search(r'reviewer:\s*\n\s+enabled:\s*(\w+)', content)
+print((m.group(1).strip().lower() if m else 'false'))
+PYEOF
+)"
+  if [ "$reviewer_enabled_in_tmp" = "true" ]; then
+    required_keys+=(reviewer-app-id reviewer-bot-slug reviewer-token-key)
+  fi
+
   #   PIPELINE_CONFIG env 로 임시본 경로를 주입 → 대상에 옮기기 전에 검증.
-  if ! PIPELINE_CONFIG="$tmp_file" bash "$reader" --require owner project-number >/dev/null 2>&1; then
-    error "pipeline-config self-check 실패 — 런타임 리더가 필수 키(owner·project-number)를 읽지 못했습니다."
-    error "입력 config 의 project.owner / project.project-numbers 를 확인하세요. 배치 중단: $CONFIG_FILE"
+  #   실패 시 리더의 stderr(누락 키 목록)를 사용자에게 그대로 보여준다(codex Finding 3).
+  local selfcheck_err
+  if ! selfcheck_err="$(PIPELINE_CONFIG="$tmp_file" bash "$reader" \
+       --require "${required_keys[@]}" 2>&1 >/dev/null)"; then
+    error "pipeline-config self-check 실패 — 런타임 리더가 필수 키를 읽지 못했습니다."
+    error "필수 키: ${required_keys[*]}"
+    [ -n "$selfcheck_err" ] && printf '%s\n' "$selfcheck_err" >&2
+    # 안내 메시지 분기(#5/F) — 자동조회를 실제 시도했는지에 따라 원인이 다르다:
+    #   · 시도 안 함(owner/project-number 자체가 빔) → 그 값들을 채우라고 정확히 안내.
+    #   · 시도했으나 못 채움 → Area 등 커스텀 필드 수동입력 안내.
+    if [ "$auto_attempted" = "true" ]; then
+      error "project-number 로 자동조회를 시도했으나 채우지 못한 키가 있습니다 — Area 등 커스텀 필드는 config 의 claude-commands 에 수동 입력이 필요할 수 있습니다. 배치 중단: $CONFIG_FILE"
+    else
+      error "자동조회를 건너뛰었습니다(owner·project-number 가 비어 입력이 없음) — config 의 project.owner / project.project-numbers / claude-commands 의 누락 키를 확인하세요. 배치 중단: $CONFIG_FILE"
+    fi
     return 1
   fi
 
