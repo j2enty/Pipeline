@@ -214,3 +214,15 @@ examples/
 | `strict-review-bot-check` | boolean | `true` | Reviewer 봇 CHANGES_REQUESTED만 차단 기준으로 볼지 |
 
 - **레포 등록 제외**: `modules-ignore`에 있는 모듈은 `modules:`에 있어도 `install.sh`가 레포 등록(secret/variable/yml)·폴러 dispatch에서 제외한다. "config는 알지만 자동화 레포 관리는 안 하는 모듈"(예: Design)을 표현.
+
+### `/plan` 동작 키 카탈로그 (`claude-commands:` 항목)
+
+`/plan` skill 이 실행 시 리더(`pipeline-config.sh`)로 읽는 동작 토글·도구 키. 새 동작 키가 필요하면 SKILL 에서 즉흥적으로 만들지 말고 이 카탈로그에 먼저 추가한다.
+
+| 키 | 위치 | 타입 | 기본값(미지정) | 의미 |
+|---|---|---|---|---|
+| `completeness-critic-enabled` | `claude-commands.plan` | boolean | `true` | ③ 완결성 critic on/off |
+| `consistency-critic-enabled` | `claude-commands.plan` | boolean | `true` | ⑤ 정합성 critic on/off |
+| `consistency-critic-dual-model` | `claude-commands.plan` | boolean | `true` | ⑤ 2차 모델 교차검증 on/off (on 이면 `cross-check-tool` 사용) |
+| `contract-doc-enabled` | `claude-commands.plan` | boolean | `true` | ② 영역 간 공유 계약 문서 생성 on/off |
+| `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어, 옛 oh-my-claudecode:ask 의 Pipeline 자체 대체) |

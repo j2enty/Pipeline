@@ -484,13 +484,27 @@ Agent(
 
 (체크리스트 전문 — 사람용↔AI용 일대일 대응·미승인 결정·가정 반영·영역교차·의도추적 — 은 `pipeline:critic` 시스템프롬프트에 이미 승격되어 있다. 호출은 모드 키워드와 문서 경로만 전달한다.)
 
-**`$DUAL`이 `true`이면 2단계 실행:**
+**`$DUAL`이 `true`이면 2단계 실행 — 외부 2차 모델 교차검증 (범용 `pipeline:ask` 에이전트를 교차검증 용도로 best-effort 호출):**
+
+사용할 2차 도구는 config 키 `cross-check-tool`(기본 `codex`)에서 읽어 주입한다. codex 하드코딩이 아니라 도구명을 주입받는 방식이라, 다른 도구(gemini 등)로도 바꿀 수 있다.
+
+```bash
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+TOOL="$(bash "$CFG" cross-check-tool)"   # 기본 codex (config 누락 시 codex)
+echo "cross-check-tool = $TOOL"
+```
 
 ```
-Skill("oh-my-claudecode:ask", args="codex 아래 두 문서의 정합성을 검토해줘. [사람용·AI용 문서 내용 전달] 체크리스트: 사람용↔AI용 일대일 대응 / 미승인 결정 / 가정 반영 / 영역교차 일치 / 의도추적")
+Agent(
+  description="⑤ 정합성 critic 2차 — 외부 모델 교차검증",
+  subagent_type="pipeline:ask",
+  prompt="도구=${TOOL}. 정책=best-effort(도구 없으면 조용히 스킵). 작업=정합성 교차검증.
+          아래 두 문서의 정합성을 검토해줘: [사람용·AI용 문서 내용 전달]
+          체크리스트: 사람용↔AI용 일대일 대응 / 미승인 결정 / 가정 반영 / 영역교차 일치 / 의도추적"
+)
 ```
 
-오케스트레이터가 없는 환경에서 `oh-my-claudecode:ask`를 쓸 수 없다면 Claude critic을 한 번 더 다른 관점(보안·인터페이스 집중)으로 실행하세요.
+(범용 `pipeline:ask` 에이전트를 교차검증 용도로 best-effort 호출하므로, 도구 미설치·실패·무응답 시 자동 스킵된다. 2차 의견을 못 얻어도 파이프라인은 막히지 않고 1단계 Claude critic 결과만으로 진행한다. 즉 `dual-model=true` 라도 2차 도구가 없으면 단일 critic 으로 동작하므로, 2모델 교차를 보장하려면 `cross-check-tool` 도구를 러너에 설치해야 한다 — Pipeline 프로토콜의 "Codex 교차검증은 best-effort" 정책과 일치.)
 
 **결과 처리:**
 - 불일치 발견 → Edit 도구로 해당 파일 직접 수정

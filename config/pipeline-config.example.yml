@@ -135,6 +135,12 @@ claude-commands:
   #   예: Docs/claude/context
   docs-context-dir: ""
 
+  # plan 교차검증용 외부 도구 CLI 이름 (기본 codex) — 범용 pipeline:ask 에이전트에 전달.
+  #   plan.consistency-critic-dual-model 이 true 일 때 범용 pipeline:ask 에이전트를 교차검증
+  #   용도로 best-effort 호출해 이 도구로 2차 의견을 구한다(미설치·실패 시 스킵 — 파이프라인은 막히지 않음).
+  #   기본이 codex 라 보통은 생략 가능. 다른 도구로 바꿀 때만 명시(예: gemini).
+  # cross-check-tool: "codex"
+
   # ── 구버전 area-ids 맵 — 이제 modules[].area-id 사용 권장 ──────────────
   # 영역(모듈)명 → Project v2 Area 옵션 ID(해시) 매핑.
   # 런타임 리더는 modules[].area-id 를 우선 읽고, 없을 때만 이 맵으로 폴백한다.
