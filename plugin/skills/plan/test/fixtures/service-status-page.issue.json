@@ -1,0 +1,11 @@
+{
+  "number": 12,
+  "title": "서비스 상태 페이지",
+  "body": "## 배경\n\n서비스가 살아있는지(정상 동작 중인지)를 **외부에 공개**로 보여주는 상태 페이지를 만든다. 사용자·외부 관계자가 로그인 없이 접속해서 현재 서비스 가동 여부를 한눈에 확인할 수 있어야 한다.\n\n## 하려는 것\n\n- 누구나 접근 가능한 **인증 없는 공개 엔드포인트** `/status` 신설 — 별도 로그인·토큰 없이 응답\n- 백엔드 버전, 빌드 시각, **DB 연결 상태(connected / disconnected)** 를 응답에 포함해 외부로 노출\n- Admin 화면에도 같은 상태를 보여주는 상태 카드 추가\n- 사용자 공개 웹(**Frontend 레포)을 이번에 처음 출범** — Next.js 초기 스캐폴딩 포함해서 첫 페이지를 띄운다\n\n## 영역\n\n- Backend: `/status` 엔드포인트 + DB 헬스체크\n- Admin: 상태 카드 컴포넌트\n- Frontend: 신규 레포 첫 스캐폴딩 + 공개 상태 페이지\n\n## 참고\n\n- 응답에 현재 UTC 시각도 같이 내려준다 (용도는 아직 미정)\n- 과거 상태 이력·알림(다운 시 통지)은 이번 범위 밖, 다음으로 미룬다\n",
+  "author": {
+    "login": "test-operator"
+  },
+  "assignees": [],
+  "labels": [],
+  "url": "https://github.com/EXAMPLE_ORG/EXAMPLE_PARENT/issues/12"
+}
