@@ -3,8 +3,9 @@
 #
 # SKILL.md 가 가져야 할 구조 불변식을 단언한다(P3.1: 배포 SSOT 가 SKILL.md 로 일원화돼
 # templates/claude-commands/ 의존을 제거함. dry-run 가드 분석기도 plugin 내부 사본 사용):
-#   (A) skill 변환 불변식: placeholder 0, oh-my-claudecode ref(codex 폴백 외) 0,
-#       pipeline:planner·critic(완결성·정합성 모드) 호출, 토글 config 읽기,
+#   (A) skill 변환 불변식: placeholder 0, oh-my-claudecode ref 0(P3.5: codex 폴백도
+#       범용 pipeline:ask 에이전트로 대체 — 완전 탈종속),
+#       pipeline:planner·critic(완결성·정합성 모드)·ask(교차검증 best-effort) 호출, 토글 config 읽기,
 #       disable-model-invocation, config 리더(--dump) 주입,
 #       모듈 동작은 리더 인터페이스(--modules-table/--modules-where planner, default-status·
 #       cross-area-group·area-id 플래그)로 읽음 — 모듈명·Status 하드코딩 제거(#42).
@@ -36,6 +37,9 @@ fail() { FAIL=$((FAIL+1)); printf "${C_RED}✗${C_NC} %s\n" "$1" >&2; }
 has()  { if grep -q "$1" "$2"; then pass "$3"; else fail "$3"; fi; }
 hasE() { if grep -Eq "$1" "$2"; then pass "$3"; else fail "$3"; fi; }
 absent() { if grep -q "$1" "$2"; then fail "$3"; else pass "$3"; fi; }
+# absentE — 확장정규식(grep -E) 부재 단언. (P3.5 전까지 정의 누락으로 A-2/A-9b/A-9c 가
+#  command-not-found 로 조용히 no-op 되던 것을 정의 추가로 실제 실행되게 함.)
+absentE() { if grep -Eq "$1" "$2"; then fail "$3"; else pass "$3"; fi; }
 
 echo ""
 echo -e "${C_CYAN}══ /pipeline:plan skill 구조 테스트 (P2) ══${C_NC}"
@@ -47,13 +51,17 @@ echo -e "\n${C_CYAN}── (A) skill 변환 불변식 ──${C_NC}"
 if grep -qoE '__[A-Z_]+__' "$SKILL"; then fail "(A-1) SKILL.md placeholder 0"; else pass "(A-1) SKILL.md placeholder 0"; fi
 if grep -rqoE '__[A-Z_]+__' "$REF"; then fail "(A-1) reference/ placeholder 0"; else pass "(A-1) reference/ placeholder 0"; fi
 
-# A-2 oh-my-claudecode ref: codex ask(폴백) 외 0
-omc_non_codex="$(grep -nE 'oh-my-claudecode' "$SKILL" | grep -vE 'ask.*codex|오케스트레이터가 없는' || true)"
-if [ -z "$omc_non_codex" ]; then pass "(A-2) oh-my-claudecode ref 는 codex 폴백뿐(planner/critic 스왑 완료)"; else fail "(A-2) oh-my-claudecode 잔존: $omc_non_codex"; fi
+# A-2 oh-my-claudecode ref 0 (P3.5: codex 폴백도 범용 pipeline:ask 에이전트로 대체 — 완전 0)
+absentE 'oh-my-claudecode' "$SKILL" "(A-2) SKILL.md oh-my-claudecode ref 0"
+if grep -rqE 'oh-my-claudecode' "$REF"; then fail "(A-2) reference/ oh-my-claudecode ref 0"; else pass "(A-2) reference/ oh-my-claudecode ref 0"; fi
 
 # A-3 pipeline 에이전트 호출
 has 'subagent_type="pipeline:planner"' "$SKILL" "(A-3) pipeline:planner 호출"
 has 'subagent_type="pipeline:critic"' "$SKILL" "(A-3) pipeline:critic 호출"
+# P3.5: codex 교차검증을 범용 pipeline:ask 에이전트로 best-effort 호출 (OMC ask 대체)
+has 'subagent_type="pipeline:ask"' "$SKILL" "(A-3) pipeline:ask 호출(2차 교차검증, best-effort)"
+absent 'subagent_type="pipeline:cross-check"' "$SKILL" "(A-3) pipeline:cross-check 에이전트 잔재 0(ask 로 일반화)"
+has '"$CFG" cross-check-tool' "$SKILL" "(A-3) cross-check-tool 런타임 읽기(도구명 주입 — config 키는 유지)"
 has '완결성 모드' "$SKILL" "(A-4) critic 완결성 모드 키워드"
 has '정합성 모드' "$SKILL" "(A-4) critic 정합성 모드 키워드"
 

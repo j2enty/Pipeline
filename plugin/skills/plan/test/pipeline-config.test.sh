@@ -108,6 +108,21 @@ assert_key area-field-id PVTSSF_area9
 assert_key local-account blue-dev
 assert_key docs-context-dir Docs/claude/context
 
+# ── cross-check-tool (외부 2차 의견 도구 — 기본 codex) ──
+# 픽스처엔 키가 없으므로 기본값 codex 여야 한다.
+assert_key cross-check-tool codex
+# config 에 명시되면 그 값(gemini) 반환
+CCT_FIX="$(mktemp)"; printf 'claude-commands:\n  cross-check-tool: gemini\n' > "$CCT_FIX"
+assert_key cross-check-tool gemini "$CCT_FIX"
+rm -f "$CCT_FIX"
+# 명시적 빈 따옴표("")·빈값도 codex 폴백 — "항상 비지 않은 도구명" 불변식(빈따옴표 회귀 잠금, finder 반영)
+CCT_EMPTY="$(mktemp)"; printf 'claude-commands:\n  cross-check-tool: ""\n' > "$CCT_EMPTY"
+assert_key cross-check-tool codex "$CCT_EMPTY"
+rm -f "$CCT_EMPTY"
+# config 파일 부재 시에도 기본값 codex (빈 값 아님 — 다른 claude-commands 스칼라와 다름)
+CCT_MISSING="$(mktemp -u)/none.yml"
+assert_key cross-check-tool codex "$CCT_MISSING"
+
 # ── area-id ──
 assert_key area-id.Backend aa11bb22
 assert_key area-id.iOS cc33dd44

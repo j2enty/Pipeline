@@ -28,6 +28,7 @@
 #   author-login                   claude-commands.author-login
 #   local-account                  claude-commands.local-account
 #   docs-context-dir               claude-commands.docs-context-dir
+#   cross-check-tool               claude-commands.cross-check-tool (기본 codex — plan 교차검증용 외부 도구, 범용 pipeline:ask 에이전트에 전달됨)
 #   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
 #   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
 #                                  planner·review·kickoff·lead·default-status·cross-area-group)
@@ -62,12 +63,13 @@ if [ ! -f "$CONFIG_PATH" ]; then
   echo "⚠️  pipeline-config: config 파일 없음: $CONFIG_PATH (빈 값 반환)" >&2
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
+    cross-check-tool) printf 'codex\n' ;;  # 외부 2차 의견 도구 — 기본 codex (다른 스칼라와 달리 빈값 아님)
     # --keys 는 정적 지원키 카탈로그라 config 유무와 무관하게 항상 동일 출력
     # (아래 python 블록의 --keys 분기와 동일 목록). --dump 는 config 내용 요약이라 부재 시 빈 게 맞음.
     --keys) printf '%s\n' \
       'owner' 'parent-repository' 'parent-repo-name' 'project-number' 'slack-channel' \
       'project-name' 'project-id' 'status-field-id' 'area-field-id' \
-      'author-login' 'local-account' 'docs-context-dir' 'area-id.<Name>' \
+      'author-login' 'local-account' 'docs-context-dir' 'cross-check-tool' 'area-id.<Name>' \
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
       'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
       '--list-modules' 'module.<Name>.<flag>' '--modules-where <flag>=<val>' '--modules-table' ;;
@@ -257,7 +259,12 @@ def resolve(key):
     # project 섹션 스칼라
     if key in ('owner', 'parent-repository', 'slack-channel'):
         return get_scalar_in(PROJECT, key)
-    # claude-commands 섹션 스칼라
+    # claude-commands 섹션 스칼라 — cross-check-tool 만 기본값 codex (나머지는 빈 값 기본)
+    if key == 'cross-check-tool':
+        # 키 부재뿐 아니라 명시적 빈값(cross-check-tool: "" / '')도 codex 로 폴백 —
+        # get_scalar_in 의 default 는 키 부재 시만 적용되므로(#57 빈따옴표 → 빈문자열),
+        # 빈값을 한 번 더 codex 로 보정해 "항상 비지 않은 도구명" 불변식을 보장한다.
+        return get_scalar_in(CC, 'cross-check-tool', 'codex') or 'codex'
     if key in ('project-name', 'project-id', 'status-field-id', 'area-field-id',
                'author-login', 'local-account', 'docs-context-dir'):
         return get_scalar_in(CC, key)
@@ -292,7 +299,7 @@ elif arg == '--keys':
     print('\n'.join([
         'owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
         'project-name', 'project-id', 'status-field-id', 'area-field-id',
-        'author-login', 'local-account', 'docs-context-dir', 'area-id.<Name>',
+        'author-login', 'local-account', 'docs-context-dir', 'cross-check-tool', 'area-id.<Name>',
         'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
         'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled',
         # modules 인터페이스 — 모듈 동작 의미론(planner/review/kickoff/lead 등)
@@ -301,7 +308,7 @@ elif arg == '--keys':
 elif arg == '--dump':
     keys = ['owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
             'project-name', 'project-id', 'status-field-id', 'area-field-id',
-            'author-login', 'local-account', 'docs-context-dir',
+            'author-login', 'local-account', 'docs-context-dir', 'cross-check-tool',
             'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
             'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled']
     for k in keys:
