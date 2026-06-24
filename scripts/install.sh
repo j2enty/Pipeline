@@ -141,6 +141,18 @@ check_requirements() {
     error "gh 인증 안 됨 — gh auth login 실행 필요"
     ok=false
   fi
+  # self-hosted 러너 요구사항 — review.yml 의 fix-loop 가 claude 호출을 step 단위
+  #   timeout/gtimeout(#20 hung 방지)으로 감싼다. (kickoff·critic·critic-dispatch 는
+  #   TIMEOUT_CMD 미사용 — job-level timeout-minutes 로 hung 을 막으므로 coreutils 불요.)
+  #   macOS 는 기본 timeout 이 없어 gtimeout(brew coreutils)이 필요하다.
+  #   ⚠️ 이 체크는 "install 을 실행하는 머신" 기준이라, install 머신과 러너가 다르면
+  #   (예: Linux 에서 install + macOS 러너) 거짓 안심을 줄 수 있다 — 실제 요구는 review 가
+  #   도는 self-hosted 러너 OS 다. install 자체는 중단하지 않는다(경고만).
+  if command -v gtimeout &>/dev/null || command -v timeout &>/dev/null; then
+    info "timeout/gtimeout 확인 (review 타임아웃 — 단 실제 요구는 review 가 도는 self-hosted 러너 OS)"
+  else
+    warn "timeout/gtimeout 미설치 — self-hosted 러너에서 review 자동화(fix-loop)가 claude 호출 전 실패합니다(#20). install 은 계속 진행됩니다. macOS: brew install coreutils (대부분의 Linux 는 coreutils 포함 — BusyBox 등 최소 이미지는 예외)"
+  fi
   [ "$ok" = "true" ] || exit 1
 }
 
