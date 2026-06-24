@@ -2,7 +2,7 @@
 
 > **이 문서는 무엇인가**: Pipeline의 첫 적용 사례인 Reclip 프로젝트 세션에서, 운영자(사용자)와 함께 `/plan` 스킬을 전면 재설계했다. 그 설계 결과를 **Pipeline 세션에서 구현하기 위해** 빠짐없이 이관한 문서다. 이 문서 하나로 자족적이며, Reclip 쪽 대화나 다른 파일을 보지 않아도 구현에 착수할 수 있도록 작성했다.
 >
-> **작성일**: 2026-06-01 / **대상 파일**: `templates/claude-commands/plan.md.tmpl`
+> **작성일**: 2026-06-01 / **대상 파일**: `templates/claude-commands/plan.md.tmpl` (→ P3.4 에서 `plugin/skills/plan/SKILL.md` 로 이관·삭제됨)
 > **작업 성격**: 설계는 확정됨. 남은 것은 구현. (단 일부 미해결 판단 항목은 §8에 정리)
 
 ---
@@ -488,7 +488,7 @@
 - service-status-page 이슈로 ③⑤ critic을 처음 실제 실행 검증 (planner Agent → critic Agent 분리).
 - **발견**: sonnet critic이 핵심 함정 rate limit 누락을 놓침 / opus는 잡음 → plan.md.tmpl이 critic 모델 미명시라 운영서 약한 모델로 떨어지면 구멍 놓칠 위험.
 - **보강(이중 안전장치)**: ①③⑤ critic Agent에 `model="opus"` 명시 ②③ 체크리스트에 조건부 강제 룰(서버연산·DB·메타데이터 반환하는 인증 없는 공개 엔드포인트면 rate limit·정보노출 반드시 점검). → 보강 후 sonnet도 rate limit 잡음(robust 입증).
-- 골든 정답지: `templates/claude-commands/test/fixtures/service-status-page.expected.md` (키워드 presence 기준, 수동 판정).
+- 골든 정답지(당시): `templates/claude-commands/test/fixtures/service-status-page.expected.md` (키워드 presence 기준, 수동 판정). ※ P3.4 에서 templates 삭제 — plugin 시대의 plan 검증은 `plugin/skills/plan/test/structure.test.sh`(SKILL 본문 직접 검사)가 대체.
 - 이중리뷰(Claude architect+Codex): 종속성제로·"메우지말고분류" 위반 없음. 과적합 3건 보정("색상구분"→일반화 / rate limit 발동조건 축소 / expected.md 과적합 가드).
 
 **완료: Reclip 재배포 (`c3f6bad`)**
@@ -514,7 +514,8 @@
 
 **운영 주의사항**:
 - 맥미니 운영 App `.env` 건드리지 말 것. `install.sh` 풀 재실행 금지 → `--update-commands-only` / `--reapply`만.
-- 테스트 기준: `bash scripts/test/run-tests.sh` → 91개 + `templates/claude-commands/test/run-tests.sh` → 4개 스크립트.
+  (P3.4 이후 `--update-commands-only` 의 실역할 = 런타임 config `.claude/pipeline-config.yml` 재생성. 슬래시커맨드 본체는 플러그인 skill 로 전환됨.)
+- 테스트 기준: `bash scripts/test/run-tests.sh` (옛 `templates/claude-commands/test/run-tests.sh` 는 P3.4 에서 plugin 내부 테스트로 이관·삭제됨 — `plugin/skills/*/test/` 참조).
 
 ---
 

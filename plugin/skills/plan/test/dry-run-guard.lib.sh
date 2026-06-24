@@ -2,7 +2,7 @@
 # dry-run-guard.lib.sh — /pipeline:plan 의 --dry-run 안전 가드 정적 분석 라이브러리.
 #
 # (P3.1) templates/claude-commands/test/dry-run-guard.test.sh 를 plugin 내부로 이식한 사본.
-#   배포 SSOT 가 SKILL.md 로 일원화돼(P3.4 에서 templates/claude-commands/ 제거 예정),
+#   배포 SSOT 가 SKILL.md 로 일원화되고(P3.4 에서 templates/claude-commands/ 제거 완료),
 #   /pipeline:plan 의 dry-run 안전 가드 검증이 templates/ 디렉토리에 의존하지 않도록 plugin
 #   자산으로 자족화했다. TEMPLATE 환경변수로 검사 대상(보통 SKILL.md)을 주입받는 범용 분석기다.
 #

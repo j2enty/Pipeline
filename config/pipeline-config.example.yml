@@ -96,15 +96,15 @@ pipeline:
   ref: main
 
 claude-commands:
-  # Claude 슬래시커맨드(/review, /kickoff, /plan)를 워크스페이스 루트의
-  # .claude/commands/ 에 로컬 파일로 배포할지 여부.
-  # install.sh가 templates/claude-commands/*.md.tmpl 을 아래 값으로 치환해 배포한다.
-  # 배포 대상 디렉토리 = project.working-directory + "/.claude/commands"
-  # (별도 경로 항목 없음 — working-directory 재사용)
+  # Claude 슬래시커맨드(/review, /kickoff, /plan)가 실행 시 읽는 프로젝트값 모음.
+  # (P3 전환: 옛 ".tmpl 치환·배포" 방식 폐기 → 플러그인 skill 이 런타임에 이 값들을
+  #  pipeline-config.sh 리더로 읽어 주입한다. install.sh 는 이 config 를 워크스페이스
+  #  루트의 .claude/pipeline-config.yml 로 복사만 한다.)
   #
-  # 아래 일부 값(__ORG__/__PARENT_REPO_NAME__/__PROJECT_NUMBER__/__SLACK_CHANNEL__)은
-  # project 섹션에서 자동 파생되므로 여기 다시 적지 않는다 (설정 중복 방지).
-  enabled: false
+  # 일부 값(owner·parent-repo-name·project-number·slack-channel)은 project 섹션에서
+  # 자동 파생되므로 여기 다시 적지 않는다 (설정 중복 방지).
+  #
+  # 섹션명은 하위호환 위해 'claude-commands' 유지(리더 키가 이 경로를 가리킴).
 
   # 프로젝트 표시 이름 (커맨드 본문에서 프로젝트명으로 사용)
   project-name: ""
@@ -137,10 +137,9 @@ claude-commands:
 
   # ── 구버전 area-ids 맵 — 이제 modules[].area-id 사용 권장 ──────────────
   # 영역(모듈)명 → Project v2 Area 옵션 ID(해시) 매핑.
-  # 리더·install.sh 는 modules[].area-id 를 우선 읽고, 없을 때만 이 맵으로 폴백한다.
+  # 런타임 리더는 modules[].area-id 를 우선 읽고, 없을 때만 이 맵으로 폴백한다.
   # 신규 이식에서는 위 modules[].area-id 에 적는 것을 권장(이 맵은 하위호환 폴백용).
-  # 키 이름은 모듈명과 동일하게 — install.sh가 대문자로 바꿔 placeholder 와 매칭
-  #   (예: Backend → __AREA_ID_BACKEND__).
+  # 키 이름은 모듈명과 동일하게 적는다 (리더가 area-id.<Name> 으로 조회).
   # area-ids:
   #   Backend: ""
   #   Admin: ""

@@ -18,16 +18,12 @@
 READER="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
 FIX="$FIXTURES_DIR/config-empty-quote.yml"
 
-# T-EQ-1: 모듈 area-id '' + legacy → legacy 폴백(install↔리더), '' 가 안 덮음
-it "T-EQ-1 모듈 area-id: '' + legacy → belegacy ('' 가 legacy 안 덮음)"
+# T-EQ-1: 모듈 area-id '' + legacy → legacy 폴백, '' 가 안 덮음.
+#   area-id resolve 는 P3.4 에서 install.sh 에서 제거 → 리더가 단일 SSOT.
+it "T-EQ-1 모듈 area-id: '' + legacy → belegacy ('' 가 legacy 안 덮음) (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  # install: '' 는 falsy(빈문자열)라 module override 안 함 → legacy belegacy 유지
-  assert_eq "belegacy" "${CMD_AREA_ID_BACKEND:-}" "install.sh: 빈 따옴표 area-id 가 legacy 를 덮음(config 오염)" || return
   rv="$(PIPELINE_CONFIG="$FIX" bash "$READER" module.Backend.area-id 2>/dev/null)"
-  assert_eq "belegacy" "$rv" "리더: 빈 따옴표 area-id legacy 폴백 실패" || return
-  assert_eq "${CMD_AREA_ID_BACKEND:-}" "$rv" "area-id '' 폴백 parity 불일치" && pass
+  assert_eq "belegacy" "$rv" "리더: 빈 따옴표 area-id legacy 폴백 실패" && pass
 )
 
 # T-EQ-2: 모듈 ci-workflow-name '' → 빈값(리터럴 '' 아님)
@@ -41,24 +37,16 @@ it "T-EQ-2 모듈 ci-workflow-name: '' → 빈값 (install↔리더)"
   assert_eq "$MODULE_0_CI" "$rv" "ci '' parity 불일치" && pass
 )
 
-# T-EQ-3: 모듈 area-id "" + legacy 없음 → 빈값
-it "T-EQ-3 모듈 area-id: \"\" + legacy 없음 → 빈값 (install↔리더)"
+# T-EQ-3: 모듈 area-id "" + legacy 없음 → 빈값 (리더 SSOT — install area 파싱 P3.4 제거)
+it "T-EQ-3 모듈 area-id: \"\" + legacy 없음 → 빈값 (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  assert_eq "" "${CMD_AREA_ID_ADMIN:-}" "install.sh: 빈 이중따옴표 area-id 가 리터럴 로 샘" || return
   rv="$(PIPELINE_CONFIG="$FIX" bash "$READER" module.Admin.area-id 2>/dev/null)"
   assert_eq "" "$rv" "리더: 빈 이중따옴표 area-id" && pass
 )
 
-# T-EQ-4: area-ids 맵 K: '' / "" → 빈값(리터럴 '' 아님)
-it "T-EQ-4 area-ids 맵 '' / \"\" → 빈값 (install↔리더)"
+# T-EQ-4: area-ids 맵 K: '' / "" → 빈값(리터럴 '' 아님) (리더 SSOT — install area 파싱 P3.4 제거)
+it "T-EQ-4 area-ids 맵 '' / \"\" → 빈값 (리더)"
 (
-  setup_install_env "$FIX"
-  eval "$(parse_config 2>/dev/null)"
-  # 빈 area-ids 항목은 빈 문자열이므로 CMD_AREA_ID_KSINGLE 도 빈값으로 emit
-  assert_eq "" "${CMD_AREA_ID_KSINGLE:-}" "install.sh: area-ids '' 가 리터럴 '' 로 샘" || return
-  assert_eq "" "${CMD_AREA_ID_KDOUBLE:-}" "install.sh: area-ids \"\" 가 리터럴 로 샘" || return
   rs="$(PIPELINE_CONFIG="$FIX" bash "$READER" area-id.KSingle 2>/dev/null)"
   rd="$(PIPELINE_CONFIG="$FIX" bash "$READER" area-id.KDouble 2>/dev/null)"
   assert_eq "" "$rs" "리더: area-id.KSingle '' 가 리터럴 로 샘" || return
@@ -83,11 +71,9 @@ it "T-EQ-6 빈 따옴표 → raw emit 가 리터럴 '' 아님 (eval collapse 우
   setup_install_env "$FIX"
   raw="$(parse_config 2>/dev/null)"
   # Backend(MODULE_0) ci-workflow-name: '' → 정확히 MODULE_0_CI='' 여야 함(리터럴 '' = '''' 아님)
+  # (area-ids 측 raw 검사는 P3.4 에서 install area 파싱 제거로 함께 폐기 — 리더가 SSOT.)
   ci_line="$(printf '%s\n' "$raw" | grep '^MODULE_0_CI=')"
-  assert_eq "MODULE_0_CI=''" "$ci_line" "install.sh: 빈 따옴표 ci 가 raw 에서 리터럴 '' 로 누출" || return
-  # area-ids KSingle: '' → CMD_AREA_ID_KSINGLE='' (리터럴 '' 아님)
-  ks_line="$(printf '%s\n' "$raw" | grep '^CMD_AREA_ID_KSINGLE=')"
-  assert_eq "CMD_AREA_ID_KSINGLE=''" "$ks_line" "install.sh: area-ids '' 가 raw 에서 리터럴 '' 로 누출" && pass
+  assert_eq "MODULE_0_CI=''" "$ci_line" "install.sh: 빈 따옴표 ci 가 raw 에서 리터럴 '' 로 누출" && pass
 )
 
 # T-EQ-7: 미종결 따옴표 모듈 — stderr 경고 + 정상 모듈 유지 (#57 minor, install↔리더 동작 일치)

@@ -84,8 +84,9 @@ pipeline:
   ref: main
 
 claude-commands:
-  # /review, /kickoff, /plan 슬래시커맨드를 워크스페이스 .claude/commands/ 에 배포
-  # __ORG__/__PARENT_REPO_NAME__/__PROJECT_NUMBER__/__SLACK_CHANNEL__ 은 project 섹션에서 자동 파생
+  # /review, /kickoff, /plan 슬래시커맨드(플러그인 skill)가 실행 시 읽는 프로젝트값.
+  # owner/parent-repo-name/project-number/slack-channel 은 project 섹션에서 자동 파생.
+  # (P3.4: 옛 .tmpl 배포 폐기 → 런타임 리더가 이 값들을 읽음. enabled 는 미사용 — 하위호환 잔존.)
   enabled: true
 
   project-name: Reclip
