@@ -62,9 +62,9 @@ printf "  정답지:       %s\n\n" "$EXPECTED_FILE"
 # 1. golden-check 블록 추출 — `<!-- golden-check` 줄 다음부터 `-->` 직전까지.
 #    awk 로 상태머신: 시작 마커를 만나면 켜고, 닫는 마커를 만나면 끈다(마커 줄 자체는 출력 안 함).
 BLOCK="$(awk '
-  /<!-- golden-check/ { ingth=1; next }
-  ingth && /-->/      { ingth=0; next }
-  ingth               { print }
+  /<!-- golden-check/         { ingth=1; next }
+  ingth && /^[[:space:]]*-->/ { ingth=0; next }
+  ingth                       { print }
 ' "$EXPECTED_FILE")"
 
 if [ -z "$BLOCK" ]; then

@@ -124,6 +124,6 @@ minimal pair 픽스처라고 critic이 **아무것도 안 잡으면** 그건 그
 # 단 '무인증 /changelog 근거로' 떠야 한다는 표면 귀속까지는 presence 로 못 봄 → 사람 재확인.
 # N-1~N-3(안 떠야)·H급은 자동화 안 함(사람 몫).
 C-1 = rate limit | 요청 제한 | 호출 제한
-C-2 = 정보 노출 | fingerprinting | 버전 | 배포 시각
+C-2 = 정보 노출 | fingerprinting | 버전 노출 | 배포 시각
 -->
 
