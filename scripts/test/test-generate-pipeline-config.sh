@@ -314,3 +314,133 @@ YML
   rm -f "$cfg"
   assert_file_present "$WORKING_DIR/.claude/pipeline-config.yml" "통과해야 하는데 대상 미생성" && pass
 )
+
+# ── 적대적 코드리뷰 CONFIRMED 버그 회귀 테스트 (A~E) ──────────────────────
+
+# T-GPC-14 (버그 D): org NOT_FOUND + user 응답 → user 폴백으로 채워져 배치(개인계정 시나리오).
+#   org env 미설정(=org 쿼리 NOT_FOUND→exit1) + GH_STUB_PROJECT_TSV_USER 만 설정.
+it "T-GPC-14 (D) org NOT_FOUND + user 응답: user 폴백으로 자동조회 성공"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  unset GH_STUB_PROJECT_TSV GH_STUB_PROJECT_TSV_ORG   # org 쿼리는 NOT_FOUND
+  export GH_STUB_PROJECT_TSV_USER=$'PVT_useracct\tPVTSSF_us\tPVTSSF_ua'
+  cfg="$(_mk_empty_ids_config myuser 5)"
+  CONFIG_FILE="$cfg"
+  generate_pipeline_config >/dev/null 2>&1 || { fail "user 폴백 가능한데 generate 실패"; rm -f "$cfg"; return; }
+  rm -f "$cfg"; unset GH_STUB_PROJECT_TSV_USER
+  dest="$WORKING_DIR/.claude/pipeline-config.yml"
+  reader="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
+  assert_eq "PVT_useracct" "$(PIPELINE_CONFIG="$dest" bash "$reader" project-id 2>/dev/null)" "user 폴백 project-id 미주입" || return
+  assert_eq "PVTSSF_ua"    "$(PIPELINE_CONFIG="$dest" bash "$reader" area-field-id 2>/dev/null)" "user 폴백 area-field-id 미주입" && pass
+)
+
+# T-GPC-15 (버그 D): org/user 둘 다 NOT_FOUND → 자동조회 실패 → self-check fail-fast(배치 거부).
+it "T-GPC-15 (D) org/user 둘 다 실패: 자동조회 실패 → 배치 거부"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  unset GH_STUB_PROJECT_TSV GH_STUB_PROJECT_TSV_ORG GH_STUB_PROJECT_TSV_USER   # 둘 다 NOT_FOUND
+  cfg="$(_mk_empty_ids_config nobody 9)"
+  CONFIG_FILE="$cfg"
+  rc=0
+  generate_pipeline_config >/dev/null 2>&1 || rc=$?
+  rm -f "$cfg"
+  assert_ne "0" "$rc" "org/user 둘 다 실패인데 0 종료(fail-fast 미작동)" || return
+  assert_file_absent "$WORKING_DIR/.claude/pipeline-config.yml" "거부됐는데 대상 생성됨" && pass
+)
+
+# T-GPC-16 (버그 A): 인라인 주석 헤더(`claude-commands:  # x`) → upsert 가 리더 parity 헤더로
+#   복구해 self-check 통과(방금 채운 키를 리더가 읽음). parity 깨졌으면 거부됐을 것.
+it "T-GPC-16 (A) 인라인 주석 헤더: upsert↔reader 헤더 parity 로 self-check 통과"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export GH_STUB_PROJECT_TSV=$'PVT_hdr\tPVTSSF_hs\tPVTSSF_ha'   # org 응답(별칭)
+  cfg="$(mktemp)"
+  # 헤더에 인라인 주석 — 리더 section() 은 이 헤더를 섹션으로 못 읽는다.
+  cat > "$cfg" <<'YML'
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+reviewer:
+  enabled: false
+claude-commands:  # 인라인 주석 헤더 — 리더 parity 깨짐 재현
+  project-id: ""
+  status-field-id: ""
+  area-field-id: ""
+YML
+  CONFIG_FILE="$cfg"
+  generate_pipeline_config >/dev/null 2>&1 || { fail "인라인 주석 헤더 — upsert 가 parity 복구 못 해 self-check 실패"; rm -f "$cfg"; return; }
+  rm -f "$cfg"
+  dest="$WORKING_DIR/.claude/pipeline-config.yml"
+  reader="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
+  assert_eq "PVT_hdr" "$(PIPELINE_CONFIG="$dest" bash "$reader" project-id 2>/dev/null)" "parity 복구 후 project-id 미읽힘" && pass
+)
+
+# T-GPC-17 (버그 B): claude-commands.plan 서브블록에 동명 project-id 가 먼저 있어도
+#   upsert 는 직속 키만 채우고 서브블록 키는 보존한다(임의 들여쓰기 첫 매칭 오작동 방지).
+it "T-GPC-17 (B) 중첩키: upsert 가 claude-commands 직속 키만 채움(plan 서브블록 보존)"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"   # install.sh source — upsert 함수 로드됨
+  cfg="$(mktemp)"
+  cat > "$cfg" <<'YML'
+claude-commands:
+  enabled: false
+  plan:
+    project-id: NESTED_KEEP
+  project-id: ""
+YML
+  upsert_claude_command_key "$cfg" project-id AUTO_DIRECT
+  # 서브블록 값 보존 + 직속만 채워졌는지 확인
+  nested="$(grep -c 'project-id: NESTED_KEEP' "$cfg")"
+  direct="$(grep -c 'project-id: "AUTO_DIRECT"' "$cfg")"
+  rm -f "$cfg"
+  assert_eq "1" "$nested" "plan 서브블록 project-id 가 변형됨(직속만 건드려야 함)" || return
+  assert_eq "1" "$direct" "직속 project-id 가 자동조회값으로 안 채워짐" && pass
+)
+
+# T-GPC-18 (버그 E): 부분 자동조회(area 칸 빔)면 "자동조회 성공" 대신 못 채운 키 알리는
+#   중립 경고 — 직후 self-check 실패와 모순되는 "성공" 메시지를 내지 않는다.
+it "T-GPC-18 (E) 부분 자동조회: '성공' 대신 못 채운 키 안내(area-field-id)"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export GH_STUB_PROJECT_TSV=$'PVT_part\tPVTSSF_ps\t'   # area 칸 빈값(부분조회)
+  cfg="$(_mk_empty_ids_config test-org 1)"
+  CONFIG_FILE="$cfg"
+  out="$(generate_pipeline_config 2>&1 || true)"
+  rm -f "$cfg"
+  assert_contains "$out" "일부만 채움" "부분조회인데 성공/중립 메시지 미출력" || return
+  assert_not_contains "$out" "자동조회 성공" "부분조회인데 '자동조회 성공' 오출력(모순)" && pass
+)
+
+# T-GPC-19 (버그 C): reviewer.enabled 판정이 tmp_file 출처여야 함 — 전역 REVIEWER_ENABLED 가
+#   엇갈려도(=true) tmp_file 이 enabled:false 면 reviewer 키 require 가 끼지 않아 통과.
+it "T-GPC-19 (C) reviewer.enabled 판정 출처 = tmp_file (전역 변수 비의존)"
+(
+  setup_install_env "$FIXTURES_DIR/config-basic.yml"
+  WORKING_DIR="$(_mk_workdir)"
+  export REVIEWER_ENABLED=true   # 전역은 true 로 엇갈리게 — 그래도 tmp_file(false)이 출처여야
+  cfg="$(mktemp)"
+  cat > "$cfg" <<'YML'
+project:
+  owner: test-org
+  parent-repository: test-org/parent-repo
+  project-numbers: [1]
+  working-directory: /tmp/test-workspace
+reviewer:
+  enabled: false
+claude-commands:
+  enabled: false
+  project-id: PVT_x
+  status-field-id: PVTSSF_s
+  area-field-id: PVTSSF_a
+YML
+  CONFIG_FILE="$cfg"
+  generate_pipeline_config >/dev/null 2>&1 || { fail "tmp_file enabled=false 인데 전역 true 로 reviewer require 끼어 거부됨"; rm -f "$cfg"; unset REVIEWER_ENABLED; return; }
+  rm -f "$cfg"; unset REVIEWER_ENABLED
+  assert_file_present "$WORKING_DIR/.claude/pipeline-config.yml" "tmp_file 출처 판정 실패(통과해야 함)" && pass
+)
