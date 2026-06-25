@@ -174,6 +174,12 @@ claude-commands:
     # ② 영역 간 공유 계약 문서(contract.md) — 2개 이상 영역이 만날 때 생성 (기본 ON)
     contract-doc-enabled: true
 
+  metrics:
+    # 이슈/PR 1건 처리 시 claude 호출의 시간·토큰·비용을 대상 이슈/PR 코멘트로 박제.
+    # 기본 OFF(opt-in) — 켜면 kickoff/review/critic 의 각 claude 호출이 `📊 usage …`
+    # 코멘트를 남긴다. 비용·효율 측정용. 미설정 시 false(계측 없음 = 기존 동작).
+    usage-tracking-enabled: false
+
 tracking:
   # finding(리뷰 지적) 추적 이슈 자동 생성 on/off (미설정 시 false)
   # true 이면 install.sh 가 영역 레포 + parent 레포에 추적 라벨을 자동 등록한다.
