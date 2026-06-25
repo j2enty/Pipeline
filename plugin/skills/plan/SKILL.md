@@ -893,33 +893,32 @@ fi
 그래도 self-guard 를 둬 혹시 모를 도달 시 원격 코멘트만 막는다.)
 
 ```bash
+# (1) 항상: 사람이 읽는 콘솔 표를 §10 최종 리포트 직전에 출력(원격쓰기 아님 — 가드 불필요).
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" report "$TSV" || true
+```
+```bash
+# (2) 토글 ON + dry-run 아님 → parent 이슈에 '📊 plan timing' 코멘트로 박제(best-effort).
+#     [R2 self-guard] 이 펜스는 원격 쓰기(gh issue comment)를 한다. 규약상 원격쓰기 펜스는
+#     첫 원격쓰기보다 먼저 표준 self-guard 로 dry-run 을 차단해야 한다(아래 case 줄).
+#     실제 dry-run 은 §6a 정지선에서 이미 종료돼 여기 도달하지 않지만(콘솔 요약도 거기서 출력됨),
+#     규약을 따라 가드를 둔다.
+case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] plan timing 코멘트 스킵"; exit 0 ;; esac
 METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
-
-# (1) 항상: 사람이 읽는 콘솔 표를 §10 최종 리포트 직전에 출력.
-bash "$METRICS" report "$TSV" || true
-
-# (2) 토글 ON + dry-run 아님 → parent 이슈에 '📊 plan timing' 코멘트로 박제(best-effort).
-#     [R2 self-guard] 이 펜스는 원격 쓰기(gh issue comment)를 할 수 있다 — $ARGUMENTS 로 dry-run 차단.
-#     (dry-run 은 코멘트만 스킵하고 위 콘솔 (1) 은 이미 출력됨.)
-POST_COMMENT=true
-case " $ARGUMENTS " in *" --dry-run "*) POST_COMMENT=false ;; esac
-# 계측 토글(metrics.usage-tracking-enabled, 기본 false=opt-in)이 true 일 때만 박제.
+# 계측 토글(metrics.usage-tracking-enabled, 기본 false=opt-in)이 true 이고 owner/parent-repo-name
+# config 게이트(빈 값으로 엉뚱한 이슈에 코멘트하는 것 차단)를 통과할 때만 박제.
 TOGGLE="$(bash "$CFG" metrics.usage-tracking-enabled 2>/dev/null || echo false)"
-[ "$TOGGLE" = "true" ] || POST_COMMENT=false
-
-if [ "$POST_COMMENT" = true ]; then
-  # [필수 config 게이트] 빈 owner/parent-repo-name 으로 엉뚱한 이슈에 코멘트하는 것 차단.
-  if bash "$CFG" --require owner parent-repo-name; then
-    OWNER="$(bash "$CFG" owner)"
-    PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
-    BODY="$(bash "$METRICS" report-comment "$TSV" || true)"
-    # 데이터 없으면 report-comment 가 빈 출력 → 코멘트 스킵.
-    if [ -n "$BODY" ] && command -v gh >/dev/null 2>&1; then
-      gh issue comment "<parent-N>" --repo "$OWNER/$PARENT_REPO_NAME" --body "$BODY" >/dev/null 2>&1 \
-        || echo "⚠️  plan timing 코멘트 박제 실패(best-effort 스킵)" >&2
-    fi
+if [ "$TOGGLE" = "true" ] && bash "$CFG" --require owner parent-repo-name; then
+  OWNER="$(bash "$CFG" owner)"
+  PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
+  BODY="$(bash "$METRICS" report-comment "$TSV" || true)"
+  # 데이터 없으면 report-comment 가 빈 출력 → 코멘트 스킵.
+  if [ -n "$BODY" ] && command -v gh >/dev/null 2>&1; then
+    gh issue comment "<parent-N>" --repo "$OWNER/$PARENT_REPO_NAME" --body "$BODY" >/dev/null 2>&1 \
+      || echo "⚠️  plan timing 코멘트 박제 실패(best-effort 스킵)" >&2
   fi
 fi
 

@@ -115,7 +115,7 @@ done
 has 'date +%s' "$METRICS_SH" "(M-3) 헬퍼가 shell date +%s 로 기록(추정 금지)"
 # M-4 dry-run 안전: 코멘트 박제는 toggle ON + non-dry-run 게이트 뒤에만.
 has 'metrics.usage-tracking-enabled' "$SKILL" "(M-4) 코멘트 박제는 계측 토글로 게이트"
-hasE 'case " \$ARGUMENTS " in \*" --dry-run "\*\) POST_COMMENT=false' "$SKILL" "(M-4) dry-run 이면 코멘트 스킵(self-guard)"
+hasE 'case " \$ARGUMENTS " in \*" --dry-run "\*\).*exit 0' "$SKILL" "(M-4) dry-run 이면 코멘트 스킵(표준 self-guard: exit 0)"
 # M-5 상태파일 정리(rm) 가 있음.
 hasE 'rm -f "\$TSV"' "$SKILL" "(M-5) 상태파일 정리(rm)"
 # M-6 첫 펜스에서 reset(truncate) — 잔여 TSV 누적 오염(특히 토큰 합산) 차단.
