@@ -227,6 +227,14 @@ examples/
 | `contract-doc-enabled` | `claude-commands.plan` | boolean | `true` | ② 영역 간 공유 계약 문서 생성 on/off |
 | `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어, 옛 oh-my-claudecode:ask 의 Pipeline 자체 대체) |
 
+### 계측 토글 카탈로그 (`claude-commands.metrics:` 항목)
+
+워크플로의 claude 호출 래퍼(`scripts/claude-with-usage.sh`)가 실행 시 리더(`pipeline-config.sh`)로 읽는 계측 토글. `/plan` 토글과 달리 **기본 OFF(opt-in)** — 이식 안전성(새 프로젝트는 계측이 꺼진 상태로 시작)을 위해 install.sh 가 강제하지 않고, 사용자가 config 에 명시할 때만 켜진다.
+
+| 키 | 위치 | 타입 | 기본값(미지정) | 의미 |
+|---|---|---|---|---|
+| `usage-tracking-enabled` | `claude-commands.metrics` | boolean | `false` | 이슈/PR 1건 처리 시 claude 호출의 시간·토큰·비용을 대상 이슈/PR 코멘트로 박제 on/off. on 이면 kickoff/review/critic/critic-dispatch 의 각 claude 호출이 `📊 usage …` 코멘트를 남긴다(`--output-format stream-json` 의 `result` 이벤트에서 추출). off 면 claude 직접 호출과 100% 동일 동작(코멘트 없음). |
+
 ### GraphQL Project v2 식별자 카탈로그 (`claude-commands:` 항목) — 자동조회 대상
 
 `/kickoff`·`/review`·`/plan` 가 GitHub Project v2 를 GraphQL 로 조작(Status·Area 필드 변경)할 때 쓰는 노드 ID 들. 사용자가 알기 어려운 해시값이라 `install.sh` 가 **자동조회**한다.

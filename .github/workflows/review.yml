@@ -151,12 +151,19 @@ jobs:
           MAX_ATTEMPTS: ${{ inputs.max-attempts }}
           # input 우선, 없으면 Pipeline 레포 vars에서 (호출자가 vars에서 전달 권장)
           REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login != '' && inputs.reviewer-bot-login || vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+          # 계측 래퍼 주입 — 토글 ON 일 때만 시간·토큰·비용 코멘트 박제(아래 두 claude 호출 공통).
+          # 토글 OFF·리더 부재 시 기존과 100% 동일(같은 exit/로그/timeout 분기). 래퍼 주석 참조.
+          PIPELINE_CONFIG_READER: ${{ github.workspace }}/.pipeline-action-checkout/plugin/skills/review/scripts/pipeline-config.sh
         run: |
           set -euo pipefail
           attempt=0
           APPROVED=false
           # [bot] suffix 제거 — startswith 검색용
           BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
+
+          # 계측 래퍼 경로 — plugin 설치 소스 체크아웃 안(종속성 제로). timeout 은 래퍼 "밖"에
+          # 그대로 걸어 124(timeout) 가 기존 `|| { rc=$?; [124 분기] }` 로 전파되게 한다.
+          CLAUDE_WRAPPER="${GITHUB_WORKSPACE}/.pipeline-action-checkout/scripts/claude-with-usage.sh"
 
           # macOS(self-hosted)는 gtimeout(brew coreutils), Linux는 timeout — 이식성 확보 (#20)
           TIMEOUT_CMD=$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null) || {
@@ -169,7 +176,9 @@ jobs:
             # 단일 review 실행 최대 30분 — hung 방지 (#20 버그 수정)
             # /pipeline:* 슬래시커맨드는 위 "Pipeline plugin 설치" step 이 user scope 로
             # 설치한 plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
-            "$TIMEOUT_CMD" 30m claude --dangerously-skip-permissions -p "/pipeline:review $PR_URL --bot" || {
+            # 계측 대상=PR. timeout 은 래퍼 밖 — 124 전파 보존. exit code 도 래퍼가 보존.
+            USAGE_METRICS_TARGET="$PR_URL" USAGE_METRICS_LABEL="review" \
+              "$TIMEOUT_CMD" 30m bash "$CLAUDE_WRAPPER" "/pipeline:review $PR_URL --bot" || {
               rc=$?
               if [ "$rc" -eq 124 ]; then
                 echo "::warning::review timeout (30분 초과) — 다음 attempt 로"
@@ -196,7 +205,9 @@ jobs:
               echo "REQUEST_CHANGES — /pipeline:kickoff --bot 실행..."
               # kickoff 최대 15분 — hung 방지 (#20); 실패 시 non-timeout 에러도 전파
               # plugin 로드는 위 review 호출과 동일(설치본 사용).
-              "$TIMEOUT_CMD" 15m claude --dangerously-skip-permissions -p "/pipeline:kickoff $PARENT_URL --bot" || {
+              # 계측 대상=parent 이슈. timeout 은 래퍼 밖 — 124 전파 보존. exit code 도 래퍼 보존.
+              USAGE_METRICS_TARGET="$PARENT_URL" USAGE_METRICS_LABEL="kickoff" \
+                "$TIMEOUT_CMD" 15m bash "$CLAUDE_WRAPPER" "/pipeline:kickoff $PARENT_URL --bot" || {
                 rc=$?
                 if [ "$rc" -eq 124 ]; then
                   echo "::warning::kickoff timeout (15분 초과) — 다음 attempt 에서 재시도"

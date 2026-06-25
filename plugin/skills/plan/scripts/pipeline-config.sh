@@ -40,6 +40,7 @@
 #   plan.consistency-critic-enabled        (기본 true)
 #   plan.consistency-critic-dual-model     (기본 true)
 #   plan.contract-doc-enabled              (기본 true)
+#   metrics.usage-tracking-enabled         claude-commands.metrics.* (기본 false — opt-in)
 #
 # fail-soft: config 부재·키 부재 시 빈 값(토글은 기본 true) + stderr 경고, exit 0.
 #   (dry-run/플랜 흐름이 config 없다고 중단되지 않도록 — 호출부가 빈 값 처리.)
@@ -63,6 +64,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
   echo "⚠️  pipeline-config: config 파일 없음: $CONFIG_PATH (빈 값 반환)" >&2
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
+    metrics.*-enabled) printf 'false\n' ;;  # 계측 토글 기본 OFF — opt-in (이식 안전)
     cross-check-tool) printf 'codex\n' ;;  # 외부 2차 의견 도구 — 기본 codex (다른 스칼라와 달리 빈값 아님)
     # --keys 는 정적 지원키 카탈로그라 config 유무와 무관하게 항상 동일 출력
     # (아래 python 블록의 --keys 분기와 동일 목록). --dump 는 config 내용 요약이라 부재 시 빈 게 맞음.
@@ -72,6 +74,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
       'author-login' 'local-account' 'docs-context-dir' 'cross-check-tool' 'area-id.<Name>' \
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
       'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
+      'metrics.usage-tracking-enabled' \
       '--list-modules' 'module.<Name>.<flag>' '--modules-where <flag>=<val>' '--modules-table' ;;
     --dump) : ;;
     # modules 인터페이스 — config 부재 시 모듈 없음(빈 출력). 단 표는 헤더행만.
@@ -139,6 +142,11 @@ CC = section(content, 'claude-commands')
 plan_m = re.search(r'^([ \t]+)plan:\s*\n(.*?)(?=^\1\S|\Z)', CC, re.MULTILINE | re.DOTALL)
 PLAN_BLOCK = plan_m.group(2) if plan_m else ''
 
+# claude-commands.metrics 서브블록 (plan 과 동일 앵커 — 들여쓰기 \1 캡처).
+# 계측(시간·토큰·비용) 토글 모음. 키 부재 시 metrics_bool 이 기본 false 로 폴백한다.
+metrics_m = re.search(r'^([ \t]+)metrics:\s*\n(.*?)(?=^\1\S|\Z)', CC, re.MULTILINE | re.DOTALL)
+METRICS_BLOCK = metrics_m.group(2) if metrics_m else ''
+
 # claude-commands.area-ids 서브블록
 ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', CC, re.MULTILINE)
 AREA_BLOCK = ai.group(2) if ai else ''
@@ -147,6 +155,13 @@ def plan_bool(key, default='true'):
     """true/false 만 인정(따옴표 허용). 오타·누락 → default. install.sh get_plan_bool 동일."""
     m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
                   PLAN_BLOCK, re.MULTILINE | re.IGNORECASE)
+    return m.group(1).lower() if m else default
+
+def metrics_bool(key, default='false'):
+    """metrics 서브블록 boolean — true/false 만 인정(따옴표 허용). 오타·누락 → default.
+       계측 토글은 opt-in 이라 기본 false (plan_bool 의 기본 true 와 대비)."""
+    m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
+                  METRICS_BLOCK, re.MULTILINE | re.IGNORECASE)
     return m.group(1).lower() if m else default
 
 def project_number():
@@ -256,6 +271,9 @@ def resolve(key):
         return resolve_module_flag(mname, flag)
     if key.startswith('plan.'):
         return plan_bool(key.split('.', 1)[1])
+    if key.startswith('metrics.'):
+        # 계측 토글 — 기본 false(opt-in). claude-commands.metrics.<key> 에서 읽음.
+        return metrics_bool(key.split('.', 1)[1])
     # project 섹션 스칼라
     if key in ('owner', 'parent-repository', 'slack-channel'):
         return get_scalar_in(PROJECT, key)
@@ -302,6 +320,8 @@ elif arg == '--keys':
         'author-login', 'local-account', 'docs-context-dir', 'cross-check-tool', 'area-id.<Name>',
         'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
         'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled',
+        # 계측 토글 (기본 false — opt-in). 워크플로 claude 래퍼가 읽어 코멘트 박제 on/off.
+        'metrics.usage-tracking-enabled',
         # modules 인터페이스 — 모듈 동작 의미론(planner/review/kickoff/lead 등)
         '--list-modules', 'module.<Name>.<flag>', '--modules-where <flag>=<val>', '--modules-table',
     ]))
@@ -335,6 +355,7 @@ if [ "$rc" -ne 0 ] && [ "${1:-}" != "--require" ]; then
   echo "⚠️  pipeline-config: 파싱 실패(exit $rc) — fail-soft 처리" >&2
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;
+    metrics.*-enabled) printf 'false\n' ;;  # 계측 토글 기본 OFF — opt-in
     *) printf '\n' ;;
   esac
   exit 0
