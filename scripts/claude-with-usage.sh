@@ -85,22 +85,29 @@ fi
 # ── claude 실행 (stream-json + verbose, 라이브 로그 tee 보존) ───────────────
 # result 이벤트 캡처용 임시 파일. 캡처 실패가 claude 실행을 막지 않도록 mktemp 실패도 fail-soft.
 RESULT_CAPTURE="$(mktemp 2>/dev/null || echo "")"
-# 스크립트 종료 시 정리(성공/실패/시그널 무관). RETURN 이 아니라 EXIT — 이 파일은 최상위 스크립트.
+# 캡처 임시 파일 정리 함수(EXIT trap 으로 호출 — 아래 실행 블록에서 등록).
 # (trap 으로 간접 호출 — shellcheck 가 직접 호출을 못 봐 SC2329 오탐.)
 # shellcheck disable=SC2329
 cleanup_capture() { [ -n "${RESULT_CAPTURE:-}" ] && rm -f "$RESULT_CAPTURE"; }
-trap cleanup_capture EXIT
 
 # claude stdout 을 tee 로 라이브 로그(터미널)에 흘리면서, 동시에 capture_result_line 로
 # "마지막 {"type":"result"} 한 줄"만 RESULT_CAPTURE 에 남긴다(전체 트랜스크립트를 파일에
 # 쌓지 않아 메모리/디스크 절약 + 파싱 단순화). capture 가 비활성(파일 없음)이면 그냥 cat.
+#
+# 매칭: claude stream-json 은 compact JSON(공백 없음)이라 `"type":"result"` 부분문자열로
+# 충분하지만, CLI 버전이 공백 포맷(`"type": "result"`)을 낼 가능성에 대비해 공백 허용
+# 정규식으로도 받는다(코드리뷰 반영). 이 매칭은 prefilter 일 뿐 — 최종 권위는 아래 python
+# 의 json.loads + type=='result' 검증이다(오탐 라인은 파싱 실패→코멘트 스킵, fail-soft).
+# 가장 마지막 매칭 라인만 남으므로 여러 result 이벤트가 와도 최종(누적) 것이 채택된다.
 capture_result_line() {
   if [ -n "${RESULT_CAPTURE:-}" ]; then
-    # 각 줄을 통과시키면서 result 이벤트면 RESULT_CAPTURE 를 갱신(마지막 것이 최종 남음).
     while IFS= read -r line; do
       printf '%s\n' "$line"
+      # compact 우선 매칭 + 공백 허용 정규식 폴백.
       case "$line" in
         *'"type":"result"'*) printf '%s\n' "$line" > "$RESULT_CAPTURE" ;;
+        *) [[ "$line" =~ \"type\"[[:space:]]*:[[:space:]]*\"result\" ]] \
+             && printf '%s\n' "$line" > "$RESULT_CAPTURE" ;;
       esac
     done
   else
@@ -108,15 +115,61 @@ capture_result_line() {
   fi
 }
 
-# [동작 보존 핵심] claude | capture 파이프라인에서 claude 의 exit code 를 PIPESTATUS[0]
-# 으로 보존한다. set -o pipefail 이 켜져 있어도 capture(우측)의 exit 가 0 이라 그대로 두면
-# 파이프 종료코드가 claude 코드가 되지만, capture 가 비정상 종료할 가능성을 배제하려
-# 명시적으로 PIPESTATUS[0] 을 읽는다(가장 방어적).
-set +e
+# [동작 보존 핵심 — exit code + timeout 시그널 전파] ────────────────────────
+# 기존 호출부는 `timeout 30m claude ...` 라 timeout 이 claude(직접 자식)에게 직접
+# SIGTERM 을 보내 깨끗이 죽였다. 이 래퍼를 끼우면 호출부는 `timeout 30m bash 이파일`
+# 이 되어 timeout 의 직접 자식은 bash(이 래퍼)이고, claude 는 그 자식이다. timeout/gtimeout
+# 은 기본적으로 직접 자식(bash)에게만 SIGTERM 을 보내므로, trap 없이 두면 래퍼만 죽고
+# claude 는 고아로 살아남아 다음 attempt 의 claude 와 동시 실행(중복 리뷰·상태파일 경합·
+# 토큰 낭비)되는 회귀가 생긴다(코드리뷰 blocker). → 받은 종료 시그널을 자식 claude 에
+# forward 한다.
+#
+# 구현: claude 를 "직접" 백그라운드로 띄워 그 PID 를 잡는다. stdout 캡처는 파이프(|) 대신
+# 프로세스치환(> >(capture)) 으로 붙인다 — 파이프로 묶으면 $! 가 capture(우측) PID 가 되어
+# claude PID 를 못 잡지만, 프로세스치환은 claude 가 직접 백그라운드 job 이라 $! 가 claude PID
+# 다(setsid 불요 — macOS self-hosted 러너에 setsid 가 없어 프로세스그룹 kill 대신 PID 직접
+# kill 로 이식성 확보). SIGTERM/SIGINT 를 받으면 그 PID 에 forward.
+# exit code: wait "$CLAUDE_PID" 가 claude 종료코드를 그대로 준다(PIPESTATUS 불요).
+# errexit 는 켜지 않는다(헤더 set -uo pipefail 유지 — 계측 블록 가드 누락이 조용히 claude
+# exit code 를 삼키지 않도록).
+trap cleanup_capture EXIT
+
+# claude 를 직접 백그라운드 — stdout(+stderr)을 프로세스치환 capture 로 흘린다.
 claude --dangerously-skip-permissions --output-format stream-json --verbose \
-  -p "$PROMPT" "$@" 2>&1 | capture_result_line
-CLAUDE_RC="${PIPESTATUS[0]}"
-set -e
+  -p "$PROMPT" "$@" > >(capture_result_line) 2>&1 &
+CLAUDE_PID=$!
+
+# 시그널 전파 — timeout 발화 시(SIGTERM)/인터럽트(SIGINT) 를 claude 자식에게 직접 forward.
+# shellcheck disable=SC2329
+forward_signal() { kill -"$1" "$CLAUDE_PID" 2>/dev/null || true; }
+# shellcheck disable=SC2329
+on_term() { forward_signal TERM; }
+# shellcheck disable=SC2329
+on_int() { forward_signal INT; }
+trap on_term TERM
+trap on_int INT
+
+# claude 완료 대기 → 종료코드 보존. trap(시그널) 발화로 wait 가 조기 리턴할 수 있으므로
+# claude 가 아직 살아있으면 다시 wait 해 최종 종료코드를 확정한다(좀비 방지 + 코드 보존).
+wait "$CLAUDE_PID"
+CLAUDE_RC=$?
+while kill -0 "$CLAUDE_PID" 2>/dev/null; do
+  wait "$CLAUDE_PID"
+  CLAUDE_RC=$?
+done
+trap - TERM INT
+
+# 프로세스치환 capture 가 RESULT_CAPTURE 쓰기를 끝낼 시간을 보장한다 — claude 가 종료하며
+# stdout 을 닫으면 capture 가 EOF 로 마무리되지만 비동기라 미세한 드레인 지연이 있다.
+# RESULT_CAPTURE 가 비어 있으면(아직 안 써짐) 짧게 대기하며 폴링(최대 ~2초). 토글 OFF·대상
+# 없음이면 어차피 코멘트를 안 달므로 폴링도 스킵(빠른 종료).
+if [ "$METRICS_ENABLED" = "true" ] && [ -n "${USAGE_METRICS_TARGET:-}" ] \
+   && [ -n "${RESULT_CAPTURE:-}" ]; then
+  for _ in $(seq 1 20); do
+    [ -s "$RESULT_CAPTURE" ] && break
+    sleep 0.1
+  done
+fi
 
 # ── 계측 코멘트 박제 (토글 ON + 대상 + 캡처 성공일 때만, best-effort) ───────
 # 이 블록의 어떤 실패도 claude 의 exit code 를 바꾸지 않는다(아래에서 CLAUDE_RC 로 exit).
@@ -124,6 +177,10 @@ if [ "$METRICS_ENABLED" = "true" ] && [ -n "${USAGE_METRICS_TARGET:-}" ] \
    && [ -n "${RESULT_CAPTURE:-}" ] && [ -s "$RESULT_CAPTURE" ]; then
   # result 이벤트에서 필드 추출 — python3 로 안전 파싱(jq 미설치 러너 대비 + 견고).
   # 파싱/코멘트 실패는 경고만 하고 넘어간다(|| true 와 서브셸 격리).
+  # [caveat — 미검증/CLI 버전 의존] result 이벤트의 usage·total_cost_usd 는 "이 run 전체
+  # 누적값"이라는 가정 위에서 집계한다(단일 턴 합산 아님). 같은 run 의 서브에이전트(executor
+  # 등) 소비도 여기 누적된다고 가정한다. CLI 출력 스키마가 바뀌면(예: usage 가 마지막 턴만)
+  # 수치가 어긋날 수 있다 — best-effort 계측이라 동작·안전엔 무영향이나 비용 해석 시 주의.
   COMMENT_BODY="$(
     python3 - "$RESULT_CAPTURE" "${USAGE_METRICS_LABEL:-}" 2>/dev/null <<'PYEOF' || true
 import json, sys

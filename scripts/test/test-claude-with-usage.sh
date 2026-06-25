@@ -196,3 +196,43 @@ it "WU-9 config 부재(키 없음) → 기본 OFF, 코멘트 없음"
   assert_eq "" "$(cat "$ghlog")" "키 부재(기본 OFF)인데 코멘트 발생" || { rm -rf "$dir"; return; }
   rm -rf "$dir"; pass
 )
+
+# ── WU-10: SIGTERM(timeout 모사) → 자식 claude 에 시그널 forward(고아 미발생) ──
+# 회귀 방어(코드리뷰 blocker): 래퍼를 `timeout bash 래퍼` 로 감쌌을 때 timeout 이 보내는
+# SIGTERM 이 손자 claude 까지 전파돼야 한다. 안 그러면 claude 가 고아로 살아남아 다음
+# attempt 와 동시 실행된다. 느린 claude 스텁이 "지연 후 alive 마커"를 남기게 하고, 래퍼에
+# SIGTERM 을 보낸 뒤 마커가 "안 생겼는지"로 자식이 죽었음을 검증한다.
+it "WU-10 SIGTERM → 자식 claude forward(고아 방지)"
+(
+  dir="$(mktemp -d)"; bin="$dir/bin"; mkdir -p "$bin"
+  marker="$dir/claude-still-alive"
+  # 느린 claude — 2초 자고 나서 alive 마커를 쓴다. SIGTERM 으로 죽으면 마커가 안 생긴다.
+  # (trap 미설정 → 기본 SIGTERM 동작으로 죽음. 시그널이 도달하는지가 검증 포인트.)
+  cat > "$bin/claude" <<EOF
+#!/usr/bin/env bash
+sleep 2
+echo alive > "$marker"
+echo '{"type":"result","total_cost_usd":0.1,"usage":{"input_tokens":1,"output_tokens":1},"num_turns":1,"duration_ms":2000}'
+EOF
+  chmod +x "$bin/claude"
+  cat > "$bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+EOF
+  chmod +x "$bin/gh"
+  cfg="$dir/cfg.yml"; printf 'project:\n  owner: x\nclaude-commands:\n  metrics:\n    usage-tracking-enabled: true\n' > "$cfg"
+
+  # 래퍼를 백그라운드로 띄우고 0.5초 뒤 SIGTERM(timeout 발화 모사) 전송.
+  PATH="$bin:$PATH" GH_LOG="$dir/gh.log" PIPELINE_CONFIG="$cfg" \
+    USAGE_METRICS_TARGET="https://github.com/org/Repo/issues/3" \
+    bash "$WRAPPER" "/pipeline:review X --bot" >/dev/null 2>&1 &
+  wpid=$!
+  sleep 0.5
+  kill -TERM "$wpid" 2>/dev/null || true
+  wait "$wpid" 2>/dev/null || true
+  # claude 가 forward 받아 죽었다면(2초 sleep 도달 전 0.5초 시점 SIGTERM) 마커가 없어야 한다.
+  sleep 2  # claude 가 살아있었다면 이 사이 마커를 썼을 것.
+  assert_file_absent "$marker" "SIGTERM 이 자식 claude 로 forward 되지 않아 고아가 살아남음" \
+    || { rm -rf "$dir"; return; }
+  rm -rf "$dir"; pass
+)
