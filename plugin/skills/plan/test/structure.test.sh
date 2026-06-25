@@ -118,6 +118,8 @@ has 'metrics.usage-tracking-enabled' "$SKILL" "(M-4) 코멘트 박제는 계측 
 hasE 'case " \$ARGUMENTS " in \*" --dry-run "\*\) POST_COMMENT=false' "$SKILL" "(M-4) dry-run 이면 코멘트 스킵(self-guard)"
 # M-5 상태파일 정리(rm) 가 있음.
 hasE 'rm -f "\$TSV"' "$SKILL" "(M-5) 상태파일 정리(rm)"
+# M-6 첫 펜스에서 reset(truncate) — 잔여 TSV 누적 오염(특히 토큰 합산) 차단.
+hasE '"\$METRICS" reset "\$TSV"' "$SKILL" "(M-6) 첫 펜스 reset(잔여 TSV 누적 오염 차단)"
 
 echo -e "\n${C_CYAN}── (B) 이동한 내용 보존 ──${C_NC}"
 # B-1 critic 체크리스트 → pipeline:critic 에이전트 (skill 에서 빠진 게 사라진 게 아님)

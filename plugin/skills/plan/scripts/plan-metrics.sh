@@ -69,6 +69,19 @@ fmt_duration_pair() {
   fmt_duration_seconds $(( end - start ))
 }
 
+# ── 상태 파일 초기화(truncate) ───────────────────────────────────────────────
+#   왜: mark/token 은 append(>>) 만 한다. TSV 경로는 parent·slug 로만 결정돼 실행 간
+#   동일하므로, 이전 실행이 §9.7 정리(rm) 전에 중단되면 잔여 TSV 가 남고, 같은 parent
+#   재실행 시 _aggregate 의 토큰 합산(intok[label]+=val)이 옛 값까지 더해 실측이 부풀려진다.
+#   → 첫 계측 펜스(§0 planner start 직전)에서 reset 으로 truncate 해 누적 오염을 차단한다.
+#   (best-effort — truncate 실패해도 plan 흐름을 막지 않는다.)
+cmd_reset() {
+  local tsv="$1"
+  [ -n "$tsv" ] || { err "reset: tsv 경로가 필요합니다"; return 2; }
+  mkdir -p "$(dirname "$tsv")" 2>/dev/null || true
+  : > "$tsv" 2>/dev/null || true
+}
+
 # ── 단계 경계 시각 기록 ──────────────────────────────────────────────────────
 cmd_mark() {
   local tsv="$1" label="$2" phase="$3"
@@ -137,13 +150,18 @@ _aggregate() {
 }
 
 # 사람용 라벨 — 내부 식별자 → 읽기 좋은 이름(없으면 원본 그대로).
+#   동그라미 번호는 일부러 빼 둔다: report 는 라벨을 TSV 등장순으로 출력하므로, 원본 /plan
+#   섹션번호(③·⑤ 등)를 붙이면 표가 '⑤ planner → ③ 완결성 → ⑤ 정합성' 처럼 뒤죽박죽 보이고
+#   ⑤ 가 중복돼 단계 순서를 오해시킨다. 단계명만 두는 게 읽기 명확하다.
+#   (interview 는 §0 가 '선택적'이라 명시한 라벨 — 현재 1단계 SKILL.md 펜스에선 emit 하지
+#    않으나, --deep 인터뷰 계측을 후속에서 켤 때를 위해 매핑은 남겨 둔다.)
 _pretty_label() {
   case "$1" in
-    interview)            printf '④ 인터뷰' ;;
-    planner)              printf '⑤ planner(영역 플래닝)' ;;
-    completeness-critic)  printf '③ 완결성 critic' ;;
-    consistency-critic)   printf '⑤ 정합성 critic' ;;
-    codex-crosscheck)     printf '⑤ 교차검증(codex 등)' ;;
+    interview)            printf '인터뷰(선택)' ;;
+    planner)              printf 'planner(영역 플래닝)' ;;
+    completeness-critic)  printf '완결성 critic' ;;
+    consistency-critic)   printf '정합성 critic' ;;
+    codex-crosscheck)     printf '교차검증(codex 등)' ;;
     *)                    printf '%s' "$1" ;;
   esac
 }
@@ -207,19 +225,37 @@ cmd_report_comment() {
   fi
 }
 
+# ── 사용법(usage) — 헤더 docblock 통째 긁기(shebang·내부주석 노이즈) 대신 간결 요약 ──
+usage() {
+  cat <<'USAGE'
+plan-metrics.sh — /plan 단계별 소요시간·토큰 계측 헬퍼
+
+사용법:
+  plan-metrics.sh reset  <tsv>                       # 상태파일 초기화(첫 펜스에서 1회 — 누적 오염 차단)
+  plan-metrics.sh mark   <tsv> <label> start|end     # 단계 경계 시각 기록(date +%s)
+  plan-metrics.sh token  <tsv> <label> <kind> <n>    # 단계 토큰 수 기록(정수만 — 추정 금지)
+  plan-metrics.sh report <tsv>                       # 단계별 소요시간(+토큰) 콘솔 표
+  plan-metrics.sh report-comment <tsv>               # parent 코멘트용 마크다운 표
+  plan-metrics.sh fmt-duration <start-epoch> <end-epoch>   # epoch 쌍 → "3m12s"
+  plan-metrics.sh fmt-seconds  <seconds>                   # 초 → "3m12s"
+
+라벨: planner · completeness-critic · consistency-critic · codex-crosscheck (선택: interview)
+USAGE
+}
+
 # ── 디스패치 ─────────────────────────────────────────────────────────────────
 SUB="${1:-}"
 case "$SUB" in
+  reset)           shift; cmd_reset "${1:-}" ;;
   mark)            shift; cmd_mark "${1:-}" "${2:-}" "${3:-}" ;;
   token)           shift; cmd_token "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   report)          shift; cmd_report "${1:-}" ;;
   report-comment)  shift; cmd_report_comment "${1:-}" ;;
   fmt-duration)    shift; fmt_duration_pair "${1:-}" "${2:-}"; printf '\n' ;;
   fmt-seconds)     shift; fmt_duration_seconds "${1:-}"; printf '\n' ;;
-  ''|-h|--help)
-    grep '^#' "$0" | sed 's/^# \{0,1\}//'
-    [ -z "$SUB" ] && exit 2 || exit 0 ;;
+  -h|--help)       usage; exit 0 ;;
+  '')              usage >&2; exit 2 ;;
   *)
-    err "알 수 없는 서브커맨드 '$SUB'. 사용: mark|token|report|report-comment|fmt-duration"
+    err "알 수 없는 서브커맨드 '$SUB'. 사용: reset|mark|token|report|report-comment|fmt-duration|fmt-seconds"
     exit 2 ;;
 esac

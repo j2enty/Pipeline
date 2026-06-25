@@ -112,6 +112,26 @@ assert_absent "$out3" "추정불가" "(D) 비정수 토큰은 기록 안 됨"
 # TSV 에 비정수 token 줄이 안 들어갔는지 직접 확인.
 assert_absent "$(cat "$t3")" "추정불가" "(D) TSV 에도 비정수 미기록"
 
+echo -e "\n${C_CYAN}── (D2) reset 으로 누적 오염 차단 ──${C_NC}"
+# 잔여 TSV(이전 중단 실행) 위에 reset 없이 또 token 을 쌓으면 합산돼 부풀려지는 회귀를
+# reset 이 막는지 검증. reset 후 단일 실행분만 남아야 한다.
+t4="$(mk)"
+bash "$METRICS" token "$t4" planner in 100   # 잔여(옛 실행)
+bash "$METRICS" token "$t4" planner in 100   # 잔여
+# 새 실행 — 첫 펜스에서 reset 하면 옛 200 이 사라지고 50 만 남아야 한다.
+bash "$METRICS" reset "$t4"
+bash "$METRICS" mark "$t4" planner start
+bash "$METRICS" mark "$t4" planner end
+bash "$METRICS" token "$t4" planner in 50
+out4="$(bash "$METRICS" report "$t4")"
+assert_has   "$out4" "50"  "(D2) reset 후 새 토큰(50) 표시"
+# 200(=100+100 누적) 이 남으면 안 됨.
+assert_absent "$out4" "200" "(D2) reset 이 옛 누적 토큰(200) 제거"
+# reset 직후 TSV 는 비어 있어야(누적분 제거) — 이후 append 만 들어감.
+e2="$(mk)"; printf 'token\tplanner\tin\t999\n' > "$e2"
+bash "$METRICS" reset "$e2"
+assert_eq "" "$(cat "$e2")" "(D2) reset → TSV 비워짐(truncate)"
+
 echo -e "\n${C_CYAN}── (E) report-comment 마크다운 ──${C_NC}"
 oc="$(bash "$METRICS" report-comment "$t3")"
 assert_has "$oc" "📊 plan timing"      "(E) 코멘트 헤더"

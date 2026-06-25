@@ -419,6 +419,9 @@ done
 ```bash
 METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
 TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+# 첫 계측 펜스 — 이전 실행이 §9.7 정리 전에 중단돼 남은 잔여 TSV 의 누적 오염(특히 토큰
+#   합산)을 차단하려고 여기서 1회 truncate 한다(이후 mark/token 은 append).
+bash "$METRICS" reset "$TSV"
 bash "$METRICS" mark "$TSV" planner start
 ```
 
@@ -914,7 +917,7 @@ if [ "$POST_COMMENT" = true ]; then
     BODY="$(bash "$METRICS" report-comment "$TSV" || true)"
     # 데이터 없으면 report-comment 가 빈 출력 → 코멘트 스킵.
     if [ -n "$BODY" ] && command -v gh >/dev/null 2>&1; then
-      gh issue comment <parent-N> --repo "$OWNER/$PARENT_REPO_NAME" --body "$BODY" >/dev/null 2>&1 \
+      gh issue comment "<parent-N>" --repo "$OWNER/$PARENT_REPO_NAME" --body "$BODY" >/dev/null 2>&1 \
         || echo "⚠️  plan timing 코멘트 박제 실패(best-effort 스킵)" >&2
     fi
   fi
@@ -942,11 +945,11 @@ Slug: <parent-N>-<slug>
   - Frontend#N [Status=Ready]
 
 📊 plan 단계별 소요시간 (§9.7 집계 — 예시):
-  ⑤ planner(영역 플래닝)   3m12s
-  ③ 완결성 critic          4m05s
-  ⑤ 정합성 critic          4m40s
-  ⑤ 교차검증(codex 등)     2m10s
-  합계(측정 구간)          14m07s
+  planner(영역 플래닝)   3m12s
+  완결성 critic          4m05s
+  정합성 critic          4m40s
+  교차검증(codex 등)     2m10s
+  합계(측정 구간)        14m07s
 
 ▶ 다음: /kickoff <parent-issue-url>
 ```
