@@ -97,6 +97,30 @@ for rf in interview-guide contract-template requirements-template design-placeho
   if [ -f "$REF/$rf.md" ]; then pass "(A-8) reference 파일 존재: $rf.md"; else fail "(A-8) reference 파일 없음: $rf.md"; fi
 done
 
+echo -e "\n${C_CYAN}── (M) 단계별 계측 (#83) ──${C_NC}"
+# M-0 계측 헬퍼 스크립트 존재 + 실행권한.
+METRICS_SH="$TEST_DIR/../scripts/plan-metrics.sh"
+if [ -x "$METRICS_SH" ]; then pass "(M-0) plan-metrics.sh 존재+실행권한"; else fail "(M-0) plan-metrics.sh 없음/비실행: $METRICS_SH"; fi
+# M-1 SKILL.md 가 헬퍼를 참조(경로 주입)하고 mark/report 펜스를 가짐.
+has 'scripts/plan-metrics.sh' "$SKILL" "(M-1) SKILL.md 가 plan-metrics.sh 참조"
+hasE '"\$METRICS" mark "\$TSV"' "$SKILL" "(M-1) mark 펜스(date 경계 기록) 존재"
+hasE '"\$METRICS" report "\$TSV"' "$SKILL" "(M-1) report 펜스(콘솔 집계) 존재"
+has 'report-comment' "$SKILL" "(M-1) report-comment(코멘트 박제) 존재"
+# M-2 4개 무거운 단계 라벨이 start/end 경계로 박혀 있음 (planner 는 페이즈 경계).
+for lbl in planner completeness-critic consistency-critic codex-crosscheck; do
+  hasE "mark \"\\\$TSV\" $lbl start" "$SKILL" "(M-2) $lbl start 경계"
+  hasE "mark \"\\\$TSV\" $lbl end"   "$SKILL" "(M-2) $lbl end 경계"
+done
+# M-3 시각은 LLM 추정이 아니라 shell date — 헬퍼가 date +%s 를 쓰는지(스크립트 측).
+has 'date +%s' "$METRICS_SH" "(M-3) 헬퍼가 shell date +%s 로 기록(추정 금지)"
+# M-4 dry-run 안전: 코멘트 박제는 toggle ON + non-dry-run 게이트 뒤에만.
+has 'metrics.usage-tracking-enabled' "$SKILL" "(M-4) 코멘트 박제는 계측 토글로 게이트"
+hasE 'case " \$ARGUMENTS " in \*" --dry-run "\*\).*exit 0' "$SKILL" "(M-4) dry-run 이면 코멘트 스킵(표준 self-guard: exit 0)"
+# M-5 상태파일 정리(rm) 가 있음.
+hasE 'rm -f "\$TSV"' "$SKILL" "(M-5) 상태파일 정리(rm)"
+# M-6 첫 펜스에서 reset(truncate) — 잔여 TSV 누적 오염(특히 토큰 합산) 차단.
+hasE '"\$METRICS" reset "\$TSV"' "$SKILL" "(M-6) 첫 펜스 reset(잔여 TSV 누적 오염 차단)"
+
 echo -e "\n${C_CYAN}── (B) 이동한 내용 보존 ──${C_NC}"
 # B-1 critic 체크리스트 → pipeline:critic 에이전트 (skill 에서 빠진 게 사라진 게 아님)
 has '메우지 말고 분류' "$CRITIC_AGENT" "(B-1) '메우지 말고 분류' → critic 에이전트"
