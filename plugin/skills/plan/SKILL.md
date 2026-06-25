@@ -97,6 +97,45 @@ bash "$CFG" module.<Name>.cross-area-group     # 특정 모듈의 그룹값(빈 
 
 ## 수행 순서
 
+### 0. 단계별 계측 (소요시간·토큰) — 무거운 단계 경계마다
+
+> **왜**: `/plan` 1회가 ~20분 걸리는데 어느 무거운 단계(planner·완결성 critic·정합성
+> critic·codex 교차검증)가 범인인지 **데이터로** 드러내기 위함. LLM 추정이 아니라 각 단계의
+> **시작 직전·종료 직후에 shell `date +%s`** 로 상태 파일(TSV)에 박는다. 코드펜스는 펜스 간
+> 변수 전파가 안 되므로(이 SKILL.md 가 명시) 시각은 **반드시 상태 파일**에 기록한다.
+
+계측 헬퍼: `${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh` (순수 bash, 종속성 제로).
+상태 파일 경로는 모든 펜스가 동일하게 재계산할 수 있도록 **parent 번호·slug 로만** 결정한다
+(셸 변수 전파 불가 → 경로를 placeholder 로 고정):
+
+```
+<적절한 temp 경로> = ${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv
+```
+
+각 무거운 단계는 아래 두 펜스로 감싼다 (라벨: `planner`·`completeness-critic`·
+`consistency-critic`·`codex-crosscheck`, 선택적으로 `interview`):
+
+```bash
+# 단계 시작 직전
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" <라벨> start
+```
+```bash
+# 단계 종료 직후
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" <라벨> end
+# [토큰 — best-effort, 선택] 이 단계 Agent 호출 결과에 **표기된** 서브에이전트 usage 토큰이
+#   보이면 같은 파일에 기록한다. 추정 금지 — 결과에 명시된 정수만(없으면 시간만 남는다):
+#   bash "$METRICS" token "$TSV" <라벨> in  <input_tokens>
+#   bash "$METRICS" token "$TSV" <라벨> out <output_tokens>
+```
+
+> **계측은 plan 산출물을 절대 바꾸지 않는다**: 위 펜스는 temp TSV 에만 쓰고, 로컬
+> 문서(requirements/plans)·원격 반영에 전혀 손대지 않는다. 따라서 `--dry-run` 의 로컬
+> 산출물은 계측 유무와 무관하게 동일하다(골든 불변). 최종 리포트(§9.7)에서만 표로 드러난다.
+
 ### 1. 입력 파싱
 
 - `$ARGUMENTS`에서 parent 이슈 URL 또는 번호, `--deep`, `--bot`, `--dry-run`, `--issue-fixture <path>` 플래그 추출
@@ -374,6 +413,15 @@ done
 # → 동일 비어있지 않은 값이 2개 이상인 그룹의 영역들에 한해 'Cross-area 일관성' 섹션 추가.
 ```
 
+**[계측] planner 페이즈 시작** — planner 는 여러 영역을 **병렬** 호출하므로, 첫 호출 직전에
+페이즈 경계(start)를 한 번 박는다 (개별 영역이 아니라 "모든 planner 호출"을 한 구간으로 측정):
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" planner start
+```
+
 선택된 `planner=true` 영역마다 Agent 호출:
 
 ```
@@ -394,6 +442,18 @@ Agent(
 - 여러 영역은 **병렬 실행**
 - **Cross-area 3축 명시 룰**: 같은 `cross-area-group` 값을 가진 영역이 2개 이상 선택된 경우, 그 그룹 각 영역 플랜에 위 3축을 미리 명시해 격차 예방.
 
+**[계측] planner 페이즈 종료** — 모든 planner 호출이 반환된 직후 페이즈 경계(end)를 박는다.
+토큰이 각 planner 호출 결과에 표기됐으면 best-effort 로 기록(없으면 시간만):
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" planner end
+# [선택·추정금지] 각 planner 호출 결과에 표기된 input/output 토큰이 보이면 합산해 기록:
+#   bash "$METRICS" token "$TSV" planner in  <표기된 input_tokens 합>
+#   bash "$METRICS" token "$TSV" planner out <표기된 output_tokens 합>
+```
+
 ### 5.5. ③ 완결성 critic
 
 > **이 단계는 실행 시 config 토글로 결정됩니다: `plan.completeness-critic-enabled`**
@@ -412,6 +472,14 @@ Step 5에서 생성한 각 영역 플랜(LLM 컨텍스트의 planner 출력)을 
 > **모델 고정**: critic 품질은 모델에 민감하다(G-1 검증서 sonnet은 rate limit 누락을 놓치고 opus는 잡음).
 > 약한 모델로 떨어지면 핵심 구멍을 놓치므로 **반드시 `model="opus"`로 호출**한다.
 
+**[계측] 완결성 critic 시작** — toggle 이 `true`라 이 단계를 실제로 도는 경우에만 (스킵 시엔 안 박음):
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" completeness-critic start
+```
+
 ```
 Agent(
   description="③ 완결성 critic — AI용 명세 검토",
@@ -423,6 +491,17 @@ Agent(
 ```
 
 (체크리스트 전문 — 표준 보안 누락·에러경계·영역 인터페이스·acceptance 검증가능성·모호어·인터뷰 제약 반영 — 은 `pipeline:critic` 시스템프롬프트에 이미 승격되어 있다. 호출은 모드 키워드만 전달한다.)
+
+**[계측] 완결성 critic 종료** — Agent 반환 직후:
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" completeness-critic end
+# [선택·추정금지] 결과에 표기된 토큰이 보이면:
+#   bash "$METRICS" token "$TSV" completeness-critic in  <표기된 input_tokens>
+#   bash "$METRICS" token "$TSV" completeness-critic out <표기된 output_tokens>
+```
 
 **결과 반영 규칙 (Step 6a 문서 생성 시 적용):**
 - "명세 보강 가능" 항목 → AI용 명세 파일에 직접 포함
@@ -470,6 +549,14 @@ Step 6a에서 생성한 사람용 + AI용 문서를 대상으로 정합성을 �
 
 **1단계 — Claude critic** (정합성 모드, ③과 동일 이유로 **반드시 `model="opus"`** — 약한 모델은 핵심 누락을 놓친다):
 
+**[계측] 정합성 critic(Claude) 시작** — toggle 이 `true`라 이 단계를 실제로 도는 경우에만:
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" consistency-critic start
+```
+
 ```
 Agent(
   description="⑤ 정합성 critic (Claude) — 사람용↔AI용 대조",
@@ -484,6 +571,17 @@ Agent(
 
 (체크리스트 전문 — 사람용↔AI용 일대일 대응·미승인 결정·가정 반영·영역교차·의도추적 — 은 `pipeline:critic` 시스템프롬프트에 이미 승격되어 있다. 호출은 모드 키워드와 문서 경로만 전달한다.)
 
+**[계측] 정합성 critic(Claude) 종료** — Claude critic Agent 반환 직후 (codex 교차검증은 별도 라벨로 측정):
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" consistency-critic end
+# [선택·추정금지] 결과에 표기된 토큰이 보이면:
+#   bash "$METRICS" token "$TSV" consistency-critic in  <표기된 input_tokens>
+#   bash "$METRICS" token "$TSV" consistency-critic out <표기된 output_tokens>
+```
+
 **`$DUAL`이 `true`이면 2단계 실행 — 외부 2차 모델 교차검증 (범용 `pipeline:ask` 에이전트를 교차검증 용도로 best-effort 호출):**
 
 사용할 2차 도구는 config 키 `cross-check-tool`(기본 `codex`)에서 읽어 주입한다. codex 하드코딩이 아니라 도구명을 주입받는 방식이라, 다른 도구(gemini 등)로도 바꿀 수 있다.
@@ -492,6 +590,16 @@ Agent(
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 TOOL="$(bash "$CFG" cross-check-tool)"   # 기본 codex (config 누락 시 codex)
 echo "cross-check-tool = $TOOL"
+```
+
+**[계측] codex 교차검증 시작** — `$DUAL`이 `true`라 2단계를 실제로 도는 경우에만 (best-effort
+호출이라 도구가 없어 즉시 스킵돼도 start~end 구간이 ~0초로 나오는 게 정상 — 그 자체가 "교차검증
+비용 없음"의 증거):
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" codex-crosscheck start
 ```
 
 ```
@@ -505,6 +613,14 @@ Agent(
 ```
 
 (범용 `pipeline:ask` 에이전트를 교차검증 용도로 best-effort 호출하므로, 도구 미설치·실패·무응답 시 자동 스킵된다. 2차 의견을 못 얻어도 파이프라인은 막히지 않고 1단계 Claude critic 결과만으로 진행한다. 즉 `dual-model=true` 라도 2차 도구가 없으면 단일 critic 으로 동작하므로, 2모델 교차를 보장하려면 `cross-check-tool` 도구를 러너에 설치해야 한다 — Pipeline 프로토콜의 "Codex 교차검증은 best-effort" 정책과 일치.)
+
+**[계측] codex 교차검증 종료** — 2차 Agent 반환(또는 스킵) 직후:
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+bash "$METRICS" mark "$TSV" codex-crosscheck end
+```
 
 **결과 처리:**
 - 불일치 발견 → Edit 도구로 해당 파일 직접 수정
@@ -532,6 +648,11 @@ if [ "$DRY_RUN" = true ]; then
   echo "  - Docs/claude/requirements/<parent-N>-<slug>.md"
   echo "  - Docs/claude/plans/<parent-N>-<slug>-*.md"
   echo "[DRY-RUN] 여기서 멈춤. Step 6b(git/PR)·Step 7(sub-issue)·Step 8(Project)·Step 9(parent 본문)는 실행하지 않습니다."
+  # [계측] dry-run 도 콘솔 요약은 출력(원격 코멘트만 스킵). 출력 후 상태파일 정리.
+  METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+  TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+  bash "$METRICS" report "$TSV" || true
+  rm -f "$TSV" 2>/dev/null || true
   exit 0
 fi
 ```
@@ -761,6 +882,48 @@ fi
 
 누락 항목은 즉시 보정. 보정 불가(권한/네트워크 등)면 최종 리포트에 ⚠️ 표기하여 사용자에게 이관.
 
+### 9.7. 단계별 소요시간 리포트 (계측 집계 — §0 의 상태파일 읽기)
+
+§0 에서 무거운 단계마다 박은 상태파일(TSV)을 읽어 **단계별 소요시간(+있으면 토큰) 표**를
+집계한다. 이 단계는 **읽기 전용 집계 + (토글 ON 일 때만) parent 코멘트 박제**라 plan 산출물을
+바꾸지 않는다. (dry-run 은 위 🛑 정지선에서 이미 콘솔 요약 후 종료했으므로 이 펜스엔 도달하지 않음 —
+그래도 self-guard 를 둬 혹시 모를 도달 시 원격 코멘트만 막는다.)
+
+```bash
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+
+# (1) 항상: 사람이 읽는 콘솔 표를 §10 최종 리포트 직전에 출력.
+bash "$METRICS" report "$TSV" || true
+
+# (2) 토글 ON + dry-run 아님 → parent 이슈에 '📊 plan timing' 코멘트로 박제(best-effort).
+#     [R2 self-guard] 이 펜스는 원격 쓰기(gh issue comment)를 할 수 있다 — $ARGUMENTS 로 dry-run 차단.
+#     (dry-run 은 코멘트만 스킵하고 위 콘솔 (1) 은 이미 출력됨.)
+POST_COMMENT=true
+case " $ARGUMENTS " in *" --dry-run "*) POST_COMMENT=false ;; esac
+# 계측 토글(metrics.usage-tracking-enabled, 기본 false=opt-in)이 true 일 때만 박제.
+TOGGLE="$(bash "$CFG" metrics.usage-tracking-enabled 2>/dev/null || echo false)"
+[ "$TOGGLE" = "true" ] || POST_COMMENT=false
+
+if [ "$POST_COMMENT" = true ]; then
+  # [필수 config 게이트] 빈 owner/parent-repo-name 으로 엉뚱한 이슈에 코멘트하는 것 차단.
+  if bash "$CFG" --require owner parent-repo-name; then
+    OWNER="$(bash "$CFG" owner)"
+    PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
+    BODY="$(bash "$METRICS" report-comment "$TSV" || true)"
+    # 데이터 없으면 report-comment 가 빈 출력 → 코멘트 스킵.
+    if [ -n "$BODY" ] && command -v gh >/dev/null 2>&1; then
+      gh issue comment <parent-N> --repo "$OWNER/$PARENT_REPO_NAME" --body "$BODY" >/dev/null 2>&1 \
+        || echo "⚠️  plan timing 코멘트 박제 실패(best-effort 스킵)" >&2
+    fi
+  fi
+fi
+
+# (3) 상태파일 정리 — 집계·박제 끝났으면 제거(다음 실행 오염 방지).
+rm -f "$TSV" 2>/dev/null || true
+```
+
 ### 10. 최종 리포트
 
 사용자에게 요약 출력:
@@ -778,8 +941,19 @@ Slug: <parent-N>-<slug>
   - Backend#N  [Status=Ready]
   - Frontend#N [Status=Ready]
 
+📊 plan 단계별 소요시간 (§9.7 집계 — 예시):
+  ⑤ planner(영역 플래닝)   3m12s
+  ③ 완결성 critic          4m05s
+  ⑤ 정합성 critic          4m40s
+  ⑤ 교차검증(codex 등)     2m10s
+  합계(측정 구간)          14m07s
+
 ▶ 다음: /kickoff <parent-issue-url>
 ```
+
+> 위 "📊 plan 단계별 소요시간" 블록은 §9.7 이 `plan-metrics.sh report` 로 출력한 표를 그대로
+> 옮긴 것이다(실측값으로 채워짐). 계측 토글(`metrics.usage-tracking-enabled`)이 ON 이면 같은
+> 표가 parent 이슈에도 `📊 plan timing` 코멘트로 박제된다.
 
 ## 원칙 (지켜야 할 것)
 

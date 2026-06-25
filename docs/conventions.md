@@ -233,7 +233,7 @@ examples/
 
 | 키 | 위치 | 타입 | 기본값(미지정) | 의미 |
 |---|---|---|---|---|
-| `usage-tracking-enabled` | `claude-commands.metrics` | boolean | `false` | 이슈/PR 1건 처리 시 claude 호출의 시간·토큰·비용을 대상 이슈/PR 코멘트로 박제 on/off. on 이면 kickoff/review/critic/critic-dispatch 의 각 claude 호출이 `📊 usage …` 코멘트를 남긴다(`--output-format stream-json` 의 `result` 이벤트에서 추출). off 면 claude 직접 호출과 100% 동일 동작(코멘트 없음). |
+| `usage-tracking-enabled` | `claude-commands.metrics` | boolean | `false` | 이슈/PR 1건 처리 시 claude 호출의 시간·토큰·비용을 대상 이슈/PR 코멘트로 박제 on/off. on 이면 kickoff/review/critic/critic-dispatch 의 각 claude 호출이 `📊 usage …` 코멘트를 남긴다(`--output-format stream-json` 의 `result` 이벤트에서 추출). off 면 claude 직접 호출과 100% 동일 동작(코멘트 없음). **추가**: `/plan` 의 단계별 소요시간 계측(§9.7)도 이 토글로 게이트된다 — on 이면 parent 이슈에 `📊 plan timing` 코멘트(단계별 소요시간 표)를 남긴다. off 여도 콘솔 최종 리포트의 시간 표는 항상 출력된다(코멘트만 토글). 계측 자체는 `plugin/skills/plan/scripts/plan-metrics.sh` 가 단계 경계 시각(`date +%s`)을 temp 상태파일(`${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv`)에 기록·집계하며, plan 산출물·dry-run 로컬 문서는 바꾸지 않는다. |
 
 ### GraphQL Project v2 식별자 카탈로그 (`claude-commands:` 항목) — 자동조회 대상
 
