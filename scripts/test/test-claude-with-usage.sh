@@ -236,3 +236,81 @@ EOF
     || { rm -rf "$dir"; return; }
   rm -rf "$dir"; pass
 )
+
+# ── WU-11: stderr 잡음이 result 캡처를 오염시키지 않음(stdout 전용 캡처) ──
+# 회귀 방어(코드리뷰 minor): claude 가 정상 result 를 stdout 에 낸 "뒤" stderr 에
+# `"type":"result"` 부분문자열을 포함한 비-JSON 잡음 줄을 뱉어도, 그게 RESULT_CAPTURE 를
+# 덮어쓰면 안 된다(예전 2>&1 합류 버그). 그래도 코멘트가 진짜 usage 로 박제돼야 한다.
+it "WU-11 stderr 잡음 → 캡처 미오염, 진짜 usage 박제"
+(
+  dir="$(mktemp -d)"; bin="$dir/bin"; mkdir -p "$bin"
+  # stdout: 정상 result. stderr: result 부분문자열을 가진 비-JSON 잡음.
+  cat > "$bin/claude" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUT'
+{"type":"system","subtype":"init"}
+{"type":"result","subtype":"success","total_cost_usd":0.18342,"usage":{"input_tokens":1234,"output_tokens":5678},"num_turns":7,"duration_ms":42337}
+OUT
+# stderr 잡음 — result 부분문자열 포함하지만 JSON 아님. 캡처에 새면 json.loads 실패.
+echo 'noise "type":"result" noise not-json' >&2
+exit 0
+EOF
+  chmod +x "$bin/claude"
+  cat > "$bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+EOF
+  chmod +x "$bin/gh"
+  cfg="$dir/cfg.yml"; printf 'project:\n  owner: x\nclaude-commands:\n  metrics:\n    usage-tracking-enabled: true\n' > "$cfg"
+  ghlog="$dir/gh.log"; : > "$ghlog"
+  rc=0
+  PATH="$bin:$PATH" GH_LOG="$ghlog" PIPELINE_CONFIG="$cfg" \
+    USAGE_METRICS_TARGET="https://github.com/org/Repo/pull/9" USAGE_METRICS_LABEL="review" \
+    bash "$WRAPPER" "/pipeline:review X --bot" >/dev/null 2>&1 || rc=$?
+  assert_eq "0" "$rc" "exit 0 아님" || { rm -rf "$dir"; return; }
+  body="$(cat "$ghlog")"
+  # 캡처가 오염됐다면 json.loads 실패 → 코멘트 없음. 미오염이면 진짜 usage 박제.
+  assert_contains "$body" 'cost $0.1834' "stderr 잡음이 캡처를 오염시켜 코멘트 누락" || { rm -rf "$dir"; return; }
+  assert_contains "$body" "in 1,234·out 5,678 tok" "토큰 누락(캡처 오염 의심)" || { rm -rf "$dir"; return; }
+  rm -rf "$dir"; pass
+)
+
+# ── WU-12: timeout 발화 시 124 전파 + 자식 claude 고아 미발생 ──
+# 회귀 방어(Codex 지적): review.yml 은 `$TIMEOUT_CMD 30m bash 래퍼` 로 감싸 timeout 발화
+# 시 124 가 호출부 `[ "$rc" -eq 124 ]` 분기로 가야 한다. gtimeout/timeout 으로 래퍼를 짧게
+# 감싸고 claude 를 오래 sleep 시켜 (a)종료코드 124 (b)고아 마커 미생성 둘 다 검증.
+# 둘 다 없는 환경이면 skip(이식성 — 실패로 만들지 않음).
+it "WU-12 timeout 발화 → 124 전파 + 자식 고아 방지"
+(
+  TIMEOUT_CMD="$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null || true)"
+  if [ -z "$TIMEOUT_CMD" ]; then
+    echo "    (skip) gtimeout/timeout 없음 — 이식성 스킵"
+    pass; exit 0
+  fi
+  dir="$(mktemp -d)"; bin="$dir/bin"; mkdir -p "$bin"
+  marker="$dir/claude-still-alive"
+  # 오래 자는 claude — timeout(1s) 발화로 죽어야 마커가 안 생긴다.
+  cat > "$bin/claude" <<EOF
+#!/usr/bin/env bash
+sleep 10
+echo alive > "$marker"
+echo '{"type":"result","total_cost_usd":0.1,"usage":{"input_tokens":1,"output_tokens":1},"num_turns":1,"duration_ms":10000}'
+EOF
+  chmod +x "$bin/claude"
+  cat > "$bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+EOF
+  chmod +x "$bin/gh"
+  cfg="$dir/cfg.yml"; printf 'project:\n  owner: x\nclaude-commands:\n  metrics:\n    usage-tracking-enabled: true\n' > "$cfg"
+  rc=0
+  # 호출부 모사: timeout 1s 로 래퍼를 감싼다. 래퍼 밖 timeout → 124 가 그대로 와야 한다.
+  PATH="$bin:$PATH" GH_LOG="$dir/gh.log" PIPELINE_CONFIG="$cfg" \
+    USAGE_METRICS_TARGET="https://github.com/org/Repo/issues/3" \
+    "$TIMEOUT_CMD" 1s bash "$WRAPPER" "/pipeline:review X --bot" >/dev/null 2>&1 || rc=$?
+  assert_eq "124" "$rc" "timeout 발화인데 124 미전파(rc=$rc)" || { rm -rf "$dir"; return; }
+  # 자식 claude 가 forward 받아 죽었는지 — 10초 sleep 도달 전 죽으면 마커 없음.
+  sleep 2
+  assert_file_absent "$marker" "timeout 후 자식 claude 가 고아로 살아남음" || { rm -rf "$dir"; return; }
+  rm -rf "$dir"; pass
+)

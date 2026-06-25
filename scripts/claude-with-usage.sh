@@ -132,11 +132,19 @@ capture_result_line() {
 # exit code: wait "$CLAUDE_PID" 가 claude 종료코드를 그대로 준다(PIPESTATUS 불요).
 # errexit 는 켜지 않는다(헤더 set -uo pipefail 유지 — 계측 블록 가드 누락이 조용히 claude
 # exit code 를 삼키지 않도록).
+#
+# [stderr 분리 — 캡처 오염 방지, 코드리뷰 minor] stream-json 의 result 이벤트는 stdout
+# 전용이다. 예전엔 `2>&1` 로 stdout+stderr 를 합쳐 capture 로 흘렸는데, claude 가 stderr 에
+# `"type":"result"` 부분문자열을 포함한 비-JSON 잡음 한 줄이라도 뱉으면 그게 마지막 매칭으로
+# RESULT_CAPTURE 를 덮어써 → python json.loads 실패 → 계측 코멘트가 비결정적으로 누락됐다.
+# → stdout 만 capture 로, stderr 는 별도 프로세스치환(cat >&2)으로 흘려 Actions 라이브
+# 로그엔 그대로 보이되 capture 엔 절대 안 들어가게 분리한다. ($! 는 여전히 claude PID 다 —
+# 두 리다이렉션 모두 claude 한 프로세스에 붙고, 프로세스치환 자식들은 $! 에 안 잡힌다.)
 trap cleanup_capture EXIT
 
-# claude 를 직접 백그라운드 — stdout(+stderr)을 프로세스치환 capture 로 흘린다.
+# claude 를 직접 백그라운드 — stdout 만 capture(result 추출), stderr 는 라이브 로그로만.
 claude --dangerously-skip-permissions --output-format stream-json --verbose \
-  -p "$PROMPT" "$@" > >(capture_result_line) 2>&1 &
+  -p "$PROMPT" "$@" 2> >(cat >&2) > >(capture_result_line) &
 CLAUDE_PID=$!
 
 # 시그널 전파 — timeout 발화 시(SIGTERM)/인터럽트(SIGINT) 를 claude 자식에게 직접 forward.
