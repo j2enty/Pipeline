@@ -377,8 +377,15 @@ jobs:
           # /review 가 종료 직전 자기가 쓴 상태파일 경로를 sentinel 에 기록하도록 env 주입.
           # /pipeline:review 는 위 "Pipeline plugin 설치" step 이 user scope 로 설치한
           # plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
+          # 계측 래퍼로 감싼다 — REVIEW_STATE_SENTINEL 은 래퍼→claude 로 그대로 상속된다
+          # (래퍼는 받은 env 를 자식 claude 에 전파). 토글 ON 일 때만 parent 이슈에 코멘트 박제.
+          # 토글 OFF·리더 부재 시 기존과 100% 동일(같은 exit/로그/sentinel 동작). 래퍼 주석 참조.
           REVIEW_STATE_SENTINEL="$REVIEW_STATE_SENTINEL" \
-            claude --dangerously-skip-permissions -p "/pipeline:review $PARENT_URL --bot --critic-only"
+          USAGE_METRICS_TARGET="$PARENT_URL" \
+          USAGE_METRICS_LABEL="critic" \
+          PIPELINE_CONFIG_READER="${GITHUB_WORKSPACE}/.pipeline-action-checkout/plugin/skills/review/scripts/pipeline-config.sh" \
+            bash "${GITHUB_WORKSPACE}/.pipeline-action-checkout/scripts/claude-with-usage.sh" \
+              "/pipeline:review $PARENT_URL --bot --critic-only"
 
       - name: Critic verdict 파싱
         id: verdict

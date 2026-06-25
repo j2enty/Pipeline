@@ -105,11 +105,18 @@ jobs:
       - name: /pipeline:review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ inputs.parent-url }}
+          # 계측 래퍼 주입 — 토글 ON 일 때만 parent 이슈에 시간·토큰·비용 코멘트 박제.
+          # 토글 OFF·리더 부재 시 기존과 100% 동일(같은 exit/로그). 래퍼 주석 참조.
+          USAGE_METRICS_TARGET: ${{ inputs.parent-url }}
+          USAGE_METRICS_LABEL: critic-dispatch
+          PIPELINE_CONFIG_READER: ${{ github.workspace }}/.pipeline-action-checkout/plugin/skills/review/scripts/pipeline-config.sh
         run: |
           set -euo pipefail
           # /pipeline:review 는 위 "Pipeline plugin 설치" step 이 user scope 로 설치한
           # plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
-          claude --dangerously-skip-permissions -p "/pipeline:review $PARENT_URL --bot --critic-only"
+          # claude 직접 호출 대신 계측 래퍼로 감싼다 — exit code·로그·플래그 보존(래퍼 주석 참조).
+          bash "${GITHUB_WORKSPACE}/.pipeline-action-checkout/scripts/claude-with-usage.sh" \
+            "/pipeline:review $PARENT_URL --bot --critic-only"
 
       - name: 모든 영역 PR squash merge
         env:
