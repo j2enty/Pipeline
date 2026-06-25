@@ -126,6 +126,10 @@ claude-commands:
     # ② 영역 간 공유 계약 문서(contract.md) — 2개 이상 영역이 만날 때 생성 (기본 ON)
     contract-doc-enabled: true
 
+  # 📊 시간·토큰·비용 계측 — 각 claude 호출 usage 를 이슈/PR 코멘트로 박제 (기본 OFF, #82)
+  metrics:
+    usage-tracking-enabled: true
+
 tracking:
   # finding(리뷰 지적) 추적 이슈 자동 생성 on/off
   enabled: true
