@@ -154,30 +154,62 @@ else
 fi
 
 # C-2 (정적 회귀 가드, #88): 분석기 소스에 SIGPIPE 취약 패턴이 0건이어야 한다.
-#   `printf … | grep -q` 는 pipefail 환경에서 grep 의 조기종료 → printf SIGPIPE(141)
-#   → 파이프라인 실패 오판(비결정적 CI 실패)을 유발한다. here-string 으로만 작성할 것.
+#   취약 패턴 = "파이프로 grep 에 넘기는데 grep 이 조용히 조기종료(-q 류/--quiet)하는 형태".
+#   pipefail 환경에서 grep 이 첫 매칭에 즉시 종료·파이프를 닫으면, 아직 출력 중이던
+#   생산자(printf·echo·cat …)가 SIGPIPE(141)로 죽어 파이프라인 실패로 오판된다(비결정적 CI 실패).
+#   → here-string(`grep … <<< "$VAR"`)으로 작성해 파이프 자체를 없애야 한다.
+#
+#   탐지 정규식은 생산자 무관(printf/echo/cat 등 무엇이 좌변이든)으로 `| grep … -q류/--quiet` 를 잡는다.
+#   q 위치 변형(-qE·-Eq)·긴 옵션(--quiet) 포함. `grep -c` 는 입력 전체를 읽어 조기종료가 없으므로
+#   (생산자 SIGPIPE 무발생) 일부러 매칭에서 제외한다.
+#   한계: 단일 물리줄만 탐지 — 백슬래시 줄연속으로 `| grep -q` 가 다음 줄로 쪼개진 형태는 미탐(줄단위 grep 의 본질적 한계).
+SIGPIPE_RE='\| *grep ([^|]* )?(-[A-Za-z]*q[A-Za-z]*|--quiet)'
+
+# C-2a: 가드 정규식 자체 검증 — 양성은 잡고 음성은 안 잡는지(빈 껍데기 가드 방지).
+c2_re_ok=1
+for c2_pos in \
+  'echo "$x" | grep -q foo' \
+  "printf '%s' \"\$x\" | grep -qE bar" \
+  'cat f | grep --quiet baz'; do
+  printf '%s\n' "$c2_pos" | grep -Eq "$SIGPIPE_RE" || { c2_re_ok=0; printf '  양성 미탐: %s\n' "$c2_pos" >&2; }
+done
+for c2_neg in \
+  'grep -q foo <<< "$x"' \
+  "printf '%s' \"\$x\" | awk '{print}'" \
+  'grep -F x <<< "$v" | head -n1' \
+  "printf '%s' \"\$x\" | grep -c foo"; do
+  if printf '%s\n' "$c2_neg" | grep -Eq "$SIGPIPE_RE"; then c2_re_ok=0; printf '  음성 오탐: %s\n' "$c2_neg" >&2; fi
+done
+if [ "$c2_re_ok" -eq 1 ]; then
+  pass "(C-2a) SIGPIPE 가드 정규식이 양성 3종 탐지·음성 4종 미탐(클래스 식별 입증)"
+else
+  fail "(C-2a) SIGPIPE 가드 정규식 오탐/미탐 — 정규식 SIGPIPE_RE 조정 필요"
+fi
+
+# C-2b: 분석기 소스 실제 스캔 — 취약 패턴 0건.
 if [ -f "$DRY_RUN_GUARD" ]; then
   # 주석 줄(# 로 시작)은 제외 — 이 가드의 설명 주석 자체가 패턴 텍스트를 담아 자기검출되는 것 방지.
-  SIGPIPE_HITS="$(grep -nE 'printf[^|]*\| *grep -q' "$DRY_RUN_GUARD" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+  SIGPIPE_HITS="$(grep -nE "$SIGPIPE_RE" "$DRY_RUN_GUARD" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
   if [ -z "$SIGPIPE_HITS" ]; then
-    pass "(C-2) 분석기 소스에 SIGPIPE 취약 패턴(printf … | grep -q) 0건"
+    pass "(C-2b) 분석기 소스에 SIGPIPE 취약 패턴(| grep -q류/--quiet) 0건"
   else
-    fail "(C-2) 분석기 소스에 SIGPIPE 취약 패턴 잔존 — here-string 으로 바꿀 것:"
+    fail "(C-2b) 분석기 소스에 SIGPIPE 취약 패턴 잔존 — here-string 으로 바꿀 것:"
     printf '%s\n' "$SIGPIPE_HITS" >&2
   fi
 fi
 
-# C-3 (행동 회귀 가드, #88): 분석기를 SKILL.md 대상으로 20회 반복해 항상 exit 0 인지.
-#   본질적으로 레이스라 결정적이진 않지만(핵심 가드는 C-2 정적검사), 거친 회귀를 잡는다.
+# C-3 (행동 회귀 가드, #88): 분석기를 SKILL.md 대상으로 20회 반복해 항상 정상 종료(exit 0)인지.
+#   본질적으로 레이스라 결정적이진 않다(핵심 가드는 C-2 정적검사). exit≠0 은 'SIGPIPE 레이스'
+#   라고 단정하지 않는다 — 아무 가드나 실패해도 비0 이므로, C-1/C-2 와 함께 원인을 확인한다.
 if [ -f "$DRY_RUN_GUARD" ]; then
   C3_FAIL=0
   for _ in $(seq 1 20); do
     TEMPLATE="$SKILL" bash "$DRY_RUN_GUARD" >/dev/null 2>&1 || C3_FAIL=$((C3_FAIL+1))
   done
   if [ "$C3_FAIL" -eq 0 ]; then
-    pass "(C-3) 분석기 20회 반복 전부 exit 0 (SIGPIPE 레이스 회귀 없음)"
+    pass "(C-3) 분석기 20회 반복 전부 정상 종료(exit 0)"
   else
-    fail "(C-3) 분석기 20회 중 $C3_FAIL 회 실패 — SIGPIPE 레이스 의심"
+    fail "(C-3) 분석기 20회 중 $C3_FAIL 회 비정상 종료 — 원인은 C-1/C-2 함께 확인(SIGPIPE 레이스일 수도, 다른 가드 실패일 수도)"
   fi
 fi
 

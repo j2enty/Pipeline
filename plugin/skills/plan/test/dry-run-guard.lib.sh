@@ -114,6 +114,10 @@ fi
 
 # ── (b-1) 보조 정지선 라인번호 찾기 (코드펜스 내부) ──────────────────────────
 # 정지선 시그니처: if [ "$DRY_RUN" = true ]; then
+# 주: 뒤의 `| head -n1` 파이프는 grep 이 좌변(here-string 입력을 받아 출력하는 쪽)이라
+#   #88 의 `| grep -q`(grep 이 우변·조기종료로 생산자 SIGPIPE 유발) 와 방향이 정반대다.
+#   게다가 명령치환 $() 안이고 set -e 미설정이라, head 가 일찍 닫혀 grep 이 SIGPIPE 로
+#   죽어도 STOP_LINE 값엔 영향 없다(무해). 그래서 이 파이프는 here-string 전환 대상이 아니다.
 STOP_LINE="$(grep -F 'if [ "$DRY_RUN" = true ]; then' <<< "$BASH_LINES" \
   | head -n1 | cut -d: -f1)"
 
