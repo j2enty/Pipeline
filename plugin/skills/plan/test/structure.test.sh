@@ -153,6 +153,34 @@ else
   fail "(C-1) dry-run-guard.lib.sh 없음: $DRY_RUN_GUARD"
 fi
 
+# C-2 (정적 회귀 가드, #88): 분석기 소스에 SIGPIPE 취약 패턴이 0건이어야 한다.
+#   `printf … | grep -q` 는 pipefail 환경에서 grep 의 조기종료 → printf SIGPIPE(141)
+#   → 파이프라인 실패 오판(비결정적 CI 실패)을 유발한다. here-string 으로만 작성할 것.
+if [ -f "$DRY_RUN_GUARD" ]; then
+  # 주석 줄(# 로 시작)은 제외 — 이 가드의 설명 주석 자체가 패턴 텍스트를 담아 자기검출되는 것 방지.
+  SIGPIPE_HITS="$(grep -nE 'printf[^|]*\| *grep -q' "$DRY_RUN_GUARD" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+  if [ -z "$SIGPIPE_HITS" ]; then
+    pass "(C-2) 분석기 소스에 SIGPIPE 취약 패턴(printf … | grep -q) 0건"
+  else
+    fail "(C-2) 분석기 소스에 SIGPIPE 취약 패턴 잔존 — here-string 으로 바꿀 것:"
+    printf '%s\n' "$SIGPIPE_HITS" >&2
+  fi
+fi
+
+# C-3 (행동 회귀 가드, #88): 분석기를 SKILL.md 대상으로 20회 반복해 항상 exit 0 인지.
+#   본질적으로 레이스라 결정적이진 않지만(핵심 가드는 C-2 정적검사), 거친 회귀를 잡는다.
+if [ -f "$DRY_RUN_GUARD" ]; then
+  C3_FAIL=0
+  for _ in $(seq 1 20); do
+    TEMPLATE="$SKILL" bash "$DRY_RUN_GUARD" >/dev/null 2>&1 || C3_FAIL=$((C3_FAIL+1))
+  done
+  if [ "$C3_FAIL" -eq 0 ]; then
+    pass "(C-3) 분석기 20회 반복 전부 exit 0 (SIGPIPE 레이스 회귀 없음)"
+  else
+    fail "(C-3) 분석기 20회 중 $C3_FAIL 회 실패 — SIGPIPE 레이스 의심"
+  fi
+fi
+
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"
