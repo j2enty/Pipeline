@@ -135,6 +135,9 @@ bash "$METRICS" mark "$TSV" <라벨> end
 > **계측은 plan 산출물을 절대 바꾸지 않는다**: 위 펜스는 temp TSV 에만 쓰고, 로컬
 > 문서(requirements/plans)·원격 반영에 전혀 손대지 않는다. 따라서 `--dry-run` 의 로컬
 > 산출물은 계측 유무와 무관하게 동일하다(골든 불변). 최종 리포트(§9.7)에서만 표로 드러난다.
+> 단, **non-dry-run + 토글 ON** 실행은 §6b 에서 `<parent-N>-<slug>-timing.md` 1개를 추가
+> 커밋한다(영구 보존용). dry-run 은 🛑 정지선을 못 넘어 §6b 에 도달하지 않으므로 이 파일이
+> 생기지 않는다 → dry-run 산출물은 여전히 불변(골든 유지).
 
 ### 1. 입력 파싱
 
@@ -532,6 +535,10 @@ bash "$METRICS" mark "$TSV" completeness-critic end
   - `planner=true` 영역 → ②c planner 산출물을 저장.
   - `planner=false` 영역 → planner 호출 없이 [placeholder 템플릿](reference/design-placeholder-template.md) 으로 채운 placeholder 산출물 저장 (Parent 줄의 `<owner>/<parent-repo-name>` 은 위 주입된 설정값으로 채운다).
 
+> **(계측 산출물)** `Docs/claude/plans/<parent-N>-<slug>-timing.md` — 단계별 소요시간·토큰 표.
+> **non-dry-run + 계측 토글(`metrics.usage-tracking-enabled`) ON** 일 때만 §6b 에서 생성·커밋된다.
+> 여기 6a(dry-run 포함 공통 경로)에서는 만들지 않는다.
+
 #### 6.5. ⑤ 정합성 critic
 
 > **이 단계는 실행 시 config 토글로 결정됩니다: `plan.consistency-critic-enabled`**
@@ -674,6 +681,18 @@ OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
 cd Docs
 git checkout -b plan/<parent-N>-<slug>
+# [계측 영구보존] 토글 ON 일 때만 timing 파일을 생성해 이 plan PR 에 묻어 커밋한다.
+#   왜 6b 인가: plan PR 생성은 /plan 의 핵심 산출물(반드시 도는 단계)이라, 에필로그(§9.7)를
+#   건너뛰어도 계측이 파일로 남아 보존이 보장된다. 또 dry-run 은 위 🛑 정지선·이 펜스 상단
+#   self-guard 에서 이미 종료하므로 이 줄에 도달하지 않는다 → dry-run 산출물 불변(골든 유지).
+#   timing 파일은 **non-dry-run + 토글 ON** 일 때만 생긴다.
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
+TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
+if [ "$(bash "$CFG" metrics.usage-tracking-enabled 2>/dev/null || echo false)" = "true" ]; then
+  bash "$METRICS" report-file "$TSV" "claude/plans/<parent-N>-<slug>-timing.md" || true
+fi
+# 아래 글롭 claude/plans/<parent-N>-<slug>-*.md 가 위 timing.md 도 자동 포함해 함께 커밋한다.
 git add claude/requirements/<parent-N>-<slug>.md claude/plans/<parent-N>-<slug>-*.md
 git commit -m "[plan] <parent-issue-title> 기획서·플랜 추가 (#<parent-number>)"
 git push -u origin plan/<parent-N>-<slug>
@@ -834,6 +853,7 @@ Parent 이슈 본문 하단에 "📋 Plan 산출물" 섹션 추가 (또는 코�
   - Backend: [Docs/claude/plans/<parent-N>-<slug>-backend.md](링크)
   - Frontend: [Docs/claude/plans/<parent-N>-<slug>-frontend.md](링크)
   - ...
+- **계측 리포트:** [Docs/claude/plans/<parent-N>-<slug>-timing.md](링크) *(계측 토글 ON 일 때만)*
 - **Sub-issues:** (코드 영역만 — Docs는 sub-issue 없음)
   - <owner>/Backend#<N>
   - <owner>/Frontend#<N>
@@ -891,6 +911,10 @@ fi
 집계한다. 이 단계는 **읽기 전용 집계 + (토글 ON 일 때만) parent 코멘트 박제**라 plan 산출물을
 바꾸지 않는다. (dry-run 은 위 🛑 정지선에서 이미 콘솔 요약 후 종료했으므로 이 펜스엔 도달하지 않음 —
 그래도 self-guard 를 둬 혹시 모를 도달 시 원격 코멘트만 막는다.)
+
+> **영구 보존은 §6b 의 커밋된 `<parent-N>-<slug>-timing.md` 가 담당한다.** 이 §9.7 의 콘솔
+> 출력·이슈 코멘트 박제는 **best-effort 보조**다 — 에필로그를 건너뛰면 코멘트는 누락될 수 있지만,
+> 계측 데이터 자체는 plan PR 파일로 이미 보존돼 있다.
 
 ```bash
 # (1) 항상: 사람이 읽는 콘솔 표를 §10 최종 리포트 직전에 출력(원격쓰기 아님 — 가드 불필요).

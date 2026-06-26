@@ -8,6 +8,8 @@
 #   (D) token: 정수만 기록, 비정수(추정·미표기)는 조용히 스킵.
 #   (E) report-comment: 마크다운 표 + 데이터 없으면 빈 출력(호출자가 코멘트 스킵).
 #   (F) 빈/없는 TSV → 크래시 없이 안내 + exit 0.
+#   (G) report-file: 데이터 있으면 파일 생성(표 마커 포함), 데이터 없으면 파일 미생성(빈 timing.md 방지),
+#       파일 내용이 report-comment stdout 과 동일.
 #
 # structure.test.sh 의 pass/fail·색상·exit 규약 차용. 임시파일은 mktemp + trap 정리.
 # 종료코드: 전부 통과 0, 하나라도 실패 1.
@@ -153,6 +155,34 @@ bash "$METRICS" mark "$empty" planner bogus >/dev/null 2>&1; rc=$?
 assert_eq "2" "$rc" "(F) mark phase 오류 → exit 2"
 bash "$METRICS" bogus-subcmd >/dev/null 2>&1; rc=$?
 assert_eq "2" "$rc" "(F) 알 수 없는 서브커맨드 → exit 2"
+
+echo -e "\n${C_CYAN}── (G) report-file 파일 보존 ──${C_NC}"
+# (G1) 데이터 있는 TSV → 파일 생성 + report-comment 와 동일한 표 마커 포함.
+g1out="$(mk)"   # mktemp 가 만든 빈 파일 — report-file 이 덮어쓴다.
+bash "$METRICS" report-file "$t3" "$g1out"; rc=$?
+assert_eq "0" "$rc" "(G1) report-file exit 0"
+[ -f "$g1out" ] && pass "(G1) 데이터 있으면 파일 생성됨" || fail "(G1) 데이터 있으면 파일 생성됨"
+g1content="$(cat "$g1out")"
+assert_has "$g1content" "📊 plan timing" "(G1) 파일에 표 헤더 마커"
+assert_has "$g1content" "53120"          "(G1) 파일에 토큰 값 포함"
+# (G2) 데이터 없는 TSV → 파일 미생성(빈 timing.md 커밋 방지) + exit 0.
+g2out="${TMPDIR:-/tmp}/plan-metrics-g2-$$.md"
+rm -f "$g2out"; TMPFILES+=("$g2out")   # 존재하지 않는 경로에서 시작 + 정리 등록.
+bash "$METRICS" report-file "$empty" "$g2out"; rc=$?
+assert_eq "0" "$rc" "(G2) 빈 TSV report-file exit 0"
+[ ! -f "$g2out" ] && pass "(G2) 데이터 없으면 파일 미생성" || fail "(G2) 데이터 없으면 파일 미생성"
+# (G3) 파일 내용 == report-comment stdout (동일 렌더러 재사용 확인).
+assert_eq "$(bash "$METRICS" report-comment "$t3")" "$g1content" "(G3) 파일 == report-comment stdout"
+# (G4) tsv 인자 누락 → exit 2.
+bash "$METRICS" report-file >/dev/null 2>&1; rc=$?
+assert_eq "2" "$rc" "(G4) tsv 누락 → exit 2"
+# (G5) out 인자 누락(tsv 만 줌) → exit 2.
+bash "$METRICS" report-file "$t3" >/dev/null 2>&1; rc=$?
+assert_eq "2" "$rc" "(G5) out 누락 → exit 2"
+# (G6) 원자적 쓰기 — 정상 생성(G1) 후 이 out 의 임시파일($g1out.tmp.*)이 남지 않아야(성공 시 mv 가 소모).
+#   공유 temp 디렉토리의 무관한 *.tmp.* 오탐을 피하려 정확히 이 out 경로 접두로만 스코핑한다.
+leftover="$(ls "$g1out".tmp.* 2>/dev/null)"
+assert_eq "" "$leftover" "(G6) 잔여 임시파일($g1out.tmp.*) 없음"
 
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
