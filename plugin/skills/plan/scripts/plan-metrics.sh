@@ -28,6 +28,7 @@
 #   plan-metrics.sh token  <tsv> <label> <kind> <n>    # 단계 토큰 수 기록(best-effort, 정수만)
 #   plan-metrics.sh report <tsv>                       # 단계별 소요시간(+토큰) 표를 stdout 으로
 #   plan-metrics.sh report-comment <tsv>               # parent 코멘트용 마크다운 표를 stdout 으로
+#   plan-metrics.sh report-file <tsv> <out-path>       # report-comment 와 동일한 표를 파일로(데이터 없으면 미생성)
 #   plan-metrics.sh fmt-duration <start-epoch> <end-epoch>   # epoch 쌍 → "3m12s" (단위 테스트용)
 #
 # ── 종속성 제로 ─────────────────────────────────────────────────────────────
@@ -225,6 +226,34 @@ cmd_report_comment() {
   fi
 }
 
+# ── report-file: report-comment 와 동일한 마크다운을 파일로 영구 보존 ─────────
+#   왜: 계측 결과의 영구 보존을 §9.7(에필로그 코멘트 박제)에만 의존하면, 에필로그를
+#   건너뛰면 데이터가 전량 소실된다. plan PR 에 파일로 커밋해 두면 §6b(반드시 도는 산출물)에
+#   묻어가 보존이 보장된다. 렌더 로직은 중복 구현하지 않고 cmd_report_comment 를 그대로 재사용.
+#   데이터가 없으면(렌더가 빈 출력) 파일을 만들지 않는다 — 빈 timing.md 커밋 방지.
+#   (이미 같은 경로에 파일이 있어도 데이터 없으면 손대지 않는다.)
+#   쓰기는 **원자적**: 임시파일에 먼저 쓰고 성공해야 mv -f 로 교체한다 → 부분쓰기로 깨진
+#   timing.md 가 git add 글롭에 잡혀 커밋되는 것을 원천 차단. 쓰기·이동 실패는 silent 가
+#   아니라 err 로 경고하되 return 0 유지 — 계측은 보조 산출물이라 실패가 호출자(/plan 본체)를
+#   막으면 안 된다(silent 가 문제였지 비차단이 문제가 아니다).
+cmd_report_file() {
+  local tsv="$1" out="$2"
+  [ -n "$tsv" ] || { err "report-file: tsv 경로가 필요합니다"; return 2; }
+  [ -n "$out" ] || { err "report-file: out 경로가 필요합니다"; return 2; }
+  local body
+  body="$(cmd_report_comment "$tsv")"   # 동일 렌더러 재사용. 데이터 없으면 빈 문자열.
+  [ -n "$body" ] || return 0            # 데이터 없음 → 파일 생성/수정 안 함(빈 표 방지·정상 경로).
+  mkdir -p "$(dirname "$out")" 2>/dev/null || true
+  local tmp="$out.tmp.$$"
+  if printf '%s\n' "$body" > "$tmp" 2>/dev/null && mv -f "$tmp" "$out" 2>/dev/null; then
+    return 0
+  fi
+  # 부분쓰기 흔적(임시파일) 제거 — 깨진/잔여 파일이 남지 않게 한 뒤 실패를 보이게 경고.
+  rm -f "$tmp" 2>/dev/null || true
+  err "report-file: '$out' 쓰기 실패(best-effort 스킵)"
+  return 0
+}
+
 # ── 사용법(usage) — 헤더 docblock 통째 긁기(shebang·내부주석 노이즈) 대신 간결 요약 ──
 usage() {
   cat <<'USAGE'
@@ -236,6 +265,7 @@ plan-metrics.sh — /plan 단계별 소요시간·토큰 계측 헬퍼
   plan-metrics.sh token  <tsv> <label> <kind> <n>    # 단계 토큰 수 기록(정수만 — 추정 금지)
   plan-metrics.sh report <tsv>                       # 단계별 소요시간(+토큰) 콘솔 표
   plan-metrics.sh report-comment <tsv>               # parent 코멘트용 마크다운 표
+  plan-metrics.sh report-file <tsv> <out-path>       # 마크다운 표를 파일로(데이터 없으면 미생성)
   plan-metrics.sh fmt-duration <start-epoch> <end-epoch>   # epoch 쌍 → "3m12s"
   plan-metrics.sh fmt-seconds  <seconds>                   # 초 → "3m12s"
 
@@ -251,11 +281,12 @@ case "$SUB" in
   token)           shift; cmd_token "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   report)          shift; cmd_report "${1:-}" ;;
   report-comment)  shift; cmd_report_comment "${1:-}" ;;
+  report-file)     shift; cmd_report_file "${1:-}" "${2:-}" ;;
   fmt-duration)    shift; fmt_duration_pair "${1:-}" "${2:-}"; printf '\n' ;;
   fmt-seconds)     shift; fmt_duration_seconds "${1:-}"; printf '\n' ;;
   -h|--help)       usage; exit 0 ;;
   '')              usage >&2; exit 2 ;;
   *)
-    err "알 수 없는 서브커맨드 '$SUB'. 사용: reset|mark|token|report|report-comment|fmt-duration|fmt-seconds"
+    err "알 수 없는 서브커맨드 '$SUB'. 사용: reset|mark|token|report|report-comment|report-file|fmt-duration|fmt-seconds"
     exit 2 ;;
 esac
