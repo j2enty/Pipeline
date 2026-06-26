@@ -34,6 +34,15 @@
 
 set -uo pipefail
 
+# ── here-string 사용 이유 (#88) ──────────────────────────────────────────────
+# 아래에서 BASH_LINES 같은 큰 문자열을 grep 으로 검사할 때 `printf … | grep -q`
+# 파이프 대신 here-string(`grep … <<< "$VAR"`)을 쓴다.
+# 이유: `grep -q` 는 첫 매칭에서 즉시 종료하며 파이프를 닫는데, 그 순간 아직
+# 출력 중이던 `printf` 가 SIGPIPE 로 죽어 exit 141 이 된다. `set -o pipefail`
+# 때문에 파이프라인 전체가 실패 처리되어, 매칭이 실재해도 `if` 가 거짓이 되는
+# 비결정적 오판(타이밍 레이스)이 발생한다. here-string 은 파이프가 없어 SIGPIPE
+# 가 발생하지 않으므로 이 레이스를 원천 차단한다.
+
 # ── 경로 ─────────────────────────────────────────────────────────────────────
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # TEMPLATE 은 외부에서 주입받는 검사 대상 — 호출자(structure.test.sh)가 TEMPLATE="$SKILL" 로 넘긴다.
@@ -76,28 +85,28 @@ FENCE_RANGES="$(awk '
 ' "$TEMPLATE")"
 
 # ── (a-1) Step 1: DRY_RUN 실제 대입 코드 존재 검사 ───────────────────────────
-if printf '%s\n' "$BASH_LINES" | grep -qE 'DRY_RUN=(false|true)'; then
+if grep -qE 'DRY_RUN=(false|true)' <<< "$BASH_LINES"; then
   pass "(a-1) Step 1: DRY_RUN 변수 대입 코드 존재"
 else
   fail "(a-1) Step 1: DRY_RUN 변수 대입 코드 없음 (DRY_RUN=false 또는 DRY_RUN=true 필요)"
 fi
 
 # ── (a-2) Step 1: ISSUE_FIXTURE 실제 대입 코드 존재 검사 ─────────────────────
-if printf '%s\n' "$BASH_LINES" | grep -qE 'ISSUE_FIXTURE='; then
+if grep -qE 'ISSUE_FIXTURE=' <<< "$BASH_LINES"; then
   pass "(a-2) Step 1: ISSUE_FIXTURE 변수 대입 코드 존재"
 else
   fail "(a-2) Step 1: ISSUE_FIXTURE 변수 대입 코드 없음"
 fi
 
 # ── (a-3) Step 1: --issue-fixture 파싱 분기 존재 검사 ────────────────────────
-if printf '%s\n' "$BASH_LINES" | grep -qF -- '--issue-fixture)'; then
+if grep -qF -- '--issue-fixture)' <<< "$BASH_LINES"; then
   pass "(a-3) Step 1: --issue-fixture 파싱 분기 존재"
 else
   fail "(a-3) Step 1: --issue-fixture 파싱 분기 없음 (case '--issue-fixture)' 필요)"
 fi
 
 # ── (a-4) F3 가드: --issue-fixture 단독 사용 fail-fast 존재 검사 ─────────────
-if printf '%s\n' "$BASH_LINES" | grep -qF '[ -n "$ISSUE_FIXTURE" ] && [ "$DRY_RUN" != true ]'; then
+if grep -qF '[ -n "$ISSUE_FIXTURE" ] && [ "$DRY_RUN" != true ]' <<< "$BASH_LINES"; then
   pass "(a-4) F3 가드: --issue-fixture 단독 사용 fail-fast 존재"
 else
   fail "(a-4) F3 가드: --issue-fixture 단독 사용 fail-fast 없음"
@@ -105,8 +114,11 @@ fi
 
 # ── (b-1) 보조 정지선 라인번호 찾기 (코드펜스 내부) ──────────────────────────
 # 정지선 시그니처: if [ "$DRY_RUN" = true ]; then
-STOP_LINE="$(printf '%s\n' "$BASH_LINES" \
-  | grep -F 'if [ "$DRY_RUN" = true ]; then' \
+# 주: 뒤의 `| head -n1` 파이프는 grep 이 좌변(here-string 입력을 받아 출력하는 쪽)이라
+#   #88 의 `| grep -q`(grep 이 우변·조기종료로 생산자 SIGPIPE 유발) 와 방향이 정반대다.
+#   게다가 명령치환 $() 안이고 set -e 미설정이라, head 가 일찍 닫혀 grep 이 SIGPIPE 로
+#   죽어도 STOP_LINE 값엔 영향 없다(무해). 그래서 이 파이프는 here-string 전환 대상이 아니다.
+STOP_LINE="$(grep -F 'if [ "$DRY_RUN" = true ]; then' <<< "$BASH_LINES" \
   | head -n1 | cut -d: -f1)"
 
 if [ -z "$STOP_LINE" ]; then
@@ -332,7 +344,7 @@ fi
 
 # ── F8: 서브셸 exit 전파 가드 확인 ───────────────────────────────────────────
 # 3.5-b·3.5-c 서브셸 뒤에 || exit 1 이 있어야 한다.
-if printf '%s\n' "$BASH_LINES" | grep -qF ') || exit 1'; then
+if grep -qF ') || exit 1' <<< "$BASH_LINES"; then
   pass "(F8) 3.5-b/3.5-c 서브셸 뒤 || exit 1 전파 가드 존재"
 else
   fail "(F8) 3.5-b/3.5-c 서브셸 뒤 || exit 1 전파 가드 없음 — 서브셸 실패가 부모로 전파 안 됨"
