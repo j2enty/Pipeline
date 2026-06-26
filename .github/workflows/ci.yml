@@ -112,7 +112,10 @@ jobs:
           git fetch --no-tags origin "$BASE_REF"
 
           # 이 PR 이 plugin/ 아래 파일을 건드렸는가? (base...HEAD = 머지베이스 이후 변경분)
-          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q '^plugin/'; then
+          # 파이프 대신 here-string: set -o pipefail 하에서 grep -q 조기종료가 git diff 에
+          # SIGPIPE(141)를 유발해 게이트를 잘못 스킵하는 것 방지(#88 과 동일한 회피).
+          changed_files="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+          if grep -q '^plugin/' <<< "$changed_files"; then
             echo "plugin/ 변경 감지 — 버전 상승 여부 확인"
           else
             echo "plugin/ 변경 없음 — 버전 게이트 통과(스킵)"
