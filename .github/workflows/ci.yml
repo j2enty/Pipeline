@@ -88,3 +88,47 @@ jobs:
 
       - name: scripts 셸 테스트 실행
         run: bash scripts/test/run-tests.sh
+
+  # 버전 게이트 — plugin/ 코드가 바뀌었는데 plugin.json 의 version 을 안 올린 PR 을 차단.
+  # PR 컨텍스트에서만 동작(base 브랜치와 비교가 필요). push 빌드에서는 base 가 없어 자동 스킵.
+  version-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃 (전체 히스토리 — base 비교용)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: plugin/ 변경 시 버전 상승 강제
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          PLUGIN_JSON="plugin/.claude-plugin/plugin.json"
+
+          # base 브랜치를 명시적으로 가져온다(얕은 클론 방지는 fetch-depth:0 이 처리하지만,
+          # base ref 의 원격 추적 브랜치가 없을 수 있어 확실히 fetch).
+          git fetch --no-tags origin "$BASE_REF"
+
+          # 이 PR 이 plugin/ 아래 파일을 건드렸는가? (base...HEAD = 머지베이스 이후 변경분)
+          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q '^plugin/'; then
+            echo "plugin/ 변경 감지 — 버전 상승 여부 확인"
+          else
+            echo "plugin/ 변경 없음 — 버전 게이트 통과(스킵)"
+            exit 0
+          fi
+
+          # base 의 version 추출 (jq 불필요 — python3)
+          base_version="$(git show "origin/$BASE_REF:$PLUGIN_JSON" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+          head_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON")"
+
+          echo "base version=$base_version / head version=$head_version"
+
+          if [ "$base_version" = "$head_version" ]; then
+            echo "::error::plugin/ 코드가 바뀌었는데 버전을 안 올렸습니다. scripts/bump-version.sh 로 올리세요"
+            exit 1
+          fi
+
+          echo "버전 상승 확인($base_version → $head_version) — 게이트 통과"

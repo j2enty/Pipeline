@@ -164,6 +164,20 @@ STATUS_POLLER_INTERVAL_MS=300000  # 폴링 간격 (옵션, 기본 5분)
 
 ---
 
+## 버전 컨벤션
+
+플러그인 버전 = `plugin/.claude-plugin/plugin.json` 의 `version` (semver `X.Y.Z`).
+
+| 단계 | 의미 | 예시 |
+|---|---|---|
+| **major** (X) | 호환 깨짐 / 정식 출시 | `0.2.0` → `1.0.0` |
+| **minor** (Y) | 기능 추가 (하위호환) | `0.1.0` → `0.2.0` |
+| **patch** (Z) | 버그 수정 (하위호환) | `0.1.0` → `0.1.1` |
+
+올릴 때는 손으로 고치지 말고 `bash scripts/bump-version.sh <patch|minor|major>` 로 올린다(version 값만 치환, 나머지 형식 보존). `plugin/` 코드를 바꾼 PR 에서 버전을 안 올리면 CI 의 `version-gate` 잡이 빨강으로 막는다.
+
+---
+
 ## 설정 컨벤션
 
 ### 설정 파일 형태
