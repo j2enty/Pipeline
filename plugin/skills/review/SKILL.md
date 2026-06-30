@@ -251,6 +251,62 @@ STATE_FILE=".pipeline/state/reviews/pr-<repo>-<number>.json"
 - schemaVersion 1.1 은 finding 영구 보존 필드(`findingsSummary`·`findings.codeReview[]`·`findings.verifier`·`aggregate.criticFindings[]`)를 **추가만** 한 것이며 기존 필드·동작은 불변.
 - `prs.<area>.repo` 의 `<owner>` 는 config `owner` 로 채운다.
 
+#### 5-a. parent 필드 결정적 기록 (parent 모드 한정)
+
+> **#94: 이 write 가 빠지면 `.parent` 가 null 로 남아 소비자 critic 이 fail-closed 로 머지를 영구 차단한다 — 8-c-bis(`aggregate.verdict` write)와 동형 버그다.**
+
+parent 모드에서 상태 파일을 **처음 만든 직후**, Step 2-b 에서 이미 조회한 parent 이슈의 URL·number 를 `.parent` 에 **결정적으로** 기록한다. LLM 의 비결정적 채움에 의존하지 않는다. 소비자(`critic.yml` / `scripts/resolve-review-statefile.sh`)는 `.parent.url == PARENT_URL` 정확매칭으로 "이번 실행의 상태파일"을 식별하므로, 이 값이 비면 indeterminate → fail-closed.
+
+- **단일 PR 모드(`pr-<repo>-<number>.json`, `mode:single`)는 건드리지 않는다** — `parent:null` 이 정상이다. 이 단계는 **parent 모드에서만** 실행한다.
+- STATE_FILE 은 라이브 변수 `${SLUG}`(리터럴 `<slug>` 금지 — 별개 셸에서 치환 누락 시 존재하지 않는 경로가 되어 #94 회귀). 8-c-bis 와 동일 컨벤션.
+- fail-fast: parent URL 이 `https://github.com/*/issues/*` 패턴이 아니거나, number 가 비었거나 비정수거나, URL 말미 번호와 number 가 어긋나면 잘못된 값이 상태파일에 박히기 전에 즉시 중단(8-c-bis 의 verdict allowlist 게이트와 동형).
+
+```bash
+# parent 모드에서만 실행. 단일 PR 모드(mode:single)는 parent:null 이 정상이므로 건너뛴다.
+# STATE_FILE 은 Step 4/5/8-c-bis 와 동일한 라이브 변수 컨벤션(${SLUG}).
+#   리터럴 angle-bracket(<slug>)을 박으면 별개 셸에서 치환 누락 시 존재하지 않는 경로가 되어
+#   jq 가 "no such file" → `&& mv` 스킵 → parent 미기록 → #94(fail-closed) 회귀한다.
+STATE_FILE=".pipeline/state/reviews/${SLUG}.json"
+PARENT_URL="<Step 2-b 에서 조회한 parent 이슈 url>"     # gh issue view ... --json url 의 .url
+PARENT_NUMBER="<Step 2-b 에서 조회한 parent 이슈 number>"  # gh issue view ... --json number 의 .number
+
+# fail-fast: parent URL 이 issues URL 패턴이 아니거나 number 가 비면 즉시 중단.
+#   잘못된 null/이상치가 상태파일에 박히면 소비자 critic 이 indeterminate→fail-closed 로
+#   머지를 영구 차단하므로(#94), 잘못된 값 기록 자체를 여기서 막는다.
+case "$PARENT_URL" in
+  https://github.com/*/issues/*) ;;
+  *) echo "::error::parent URL 이상치('$PARENT_URL') — 5-a parent write 중단. Step 2-b 의 gh issue view .url 확인 필요." >&2; exit 1 ;;
+esac
+# number 게이트도 URL 게이트와 대칭으로 패턴 검증한다(빈값+비정수 모두 차단). 비정수면
+# 아래 --argjson 이 JSON 파싱 실패로 jq 를 죽여 parent 미기록(#94 회귀)되므로 미리 막는다.
+case "$PARENT_NUMBER" in
+  ''|*[!0-9]*) echo "::error::parent number 이상치('$PARENT_NUMBER') — 5-a parent write 중단. Step 2-b 의 gh issue view .number 확인 필요." >&2; exit 1 ;;
+esac
+# URL↔number 정합성 — 둘은 같은 gh issue view <parent-N> 호출(Step 2-b)에서 와야 하므로
+# URL 말미 번호와 PARENT_NUMBER 가 일치해야 한다. 어긋나면 서로 다른 이슈를 가리키는 배선
+# 실수이므로, 잘못된 parent 가 박혀 소비자가 엉뚱한 상태파일을 매칭하기 전에 차단한다.
+if [ "${PARENT_URL##*/issues/}" != "$PARENT_NUMBER" ]; then
+  echo "::error::parent URL 말미 번호(${PARENT_URL##*/issues/}) ≠ PARENT_NUMBER($PARENT_NUMBER) — 서로 다른 이슈 배선 의심, 5-a write 중단. Step 2-b 의 url·number 가 같은 이슈인지 확인." >&2; exit 1
+fi
+
+# parent 를 한 jq 트랜잭션으로 기록. 원자적 temp + mv (L250 규칙 준수).
+# [#94] jq 실패(STATE_FILE 부재/오염 등)는 loud 하게 exit 1 한다. `&& mv ... || rm -f` 로
+#   쓰면 마지막 rm -f 가 0 을 반환해 jq 실패가 전체 exit 0 으로 삼켜지고, parent 미기록인데
+#   무성 통과해 정확히 #94 가 회귀한다. 같은 5-a 블록의 URL/number 게이트가 exit 1 로
+#   fail-fast 하는 것과 일관되게, 실제 write 실패도 fail-closed 로 노출한다(8-c-bis 보다 강함).
+#   본파일은 temp 경유라 부분쓰기로 오염되지 않으며, 실패 시 orphan temp 만 정리하고 죽는다.
+TEMP="$STATE_FILE.tmp.$$"
+if jq --arg pu "$PARENT_URL" --argjson pn "$PARENT_NUMBER" \
+     '.parent = {url: $pu, number: $pn}' \
+     "$STATE_FILE" > "$TEMP"; then
+  mv "$TEMP" "$STATE_FILE"
+else
+  rm -f "$TEMP"
+  echo "::error::5-a parent write 실패(STATE_FILE 부재/오염 의심) — Step 5 상태파일 생성 여부 확인 필요." >&2
+  exit 1
+fi
+```
+
 ### 6. 리뷰 오케스트레이션 (C3 하이브리드)
 
 #### 6-a. Parent 모드 순서
