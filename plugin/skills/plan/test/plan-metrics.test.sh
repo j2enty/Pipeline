@@ -184,6 +184,62 @@ assert_eq "2" "$rc" "(G5) out 누락 → exit 2"
 leftover="$(ls "$g1out".tmp.* 2>/dev/null)"
 assert_eq "" "$leftover" "(G6) 잔여 임시파일($g1out.tmp.*) 없음"
 
+echo -e "\n${C_CYAN}── (H) cost-snapshot 비용 계측 (이슈 #92) ──${C_NC}"
+# provider 를 주입(PLAN_COST_PROVIDER)해 ccusage 네트워크 의존 없이 결정적으로 검증한다.
+# 시나리오: start=$12.5010(in 80000/out 6000/cache_read 180000/cache_create 150000),
+#           end  =$12.9230(in 88076/out 6639/cache_read 198571/cache_create 165287)
+#  → 델타 cost $0.4220 / in 8,076 / out 639 / cache r18,571·w15,287
+hc="$(mk)"
+PLAN_COST_PROVIDER='echo "cost 12.5010 in 80000 out 6000 cache_read 180000 cache_create 150000"' \
+  bash "$METRICS" cost-snapshot "$hc" start
+PLAN_COST_PROVIDER='echo "cost 12.9230 in 88076 out 6639 cache_read 198571 cache_create 165287"' \
+  bash "$METRICS" cost-snapshot "$hc" end
+bash "$METRICS" mark "$hc" planner start
+bash "$METRICS" mark "$hc" planner end
+hc_out="$(bash "$METRICS" report-comment "$hc")"
+assert_has "$hc_out" '📊 usage (plan)' "(H1) usage 줄 존재"
+assert_has "$hc_out" 'cost $0.4220'    "(H1) 델타 비용 정확(12.9230-12.5010)"
+assert_has "$hc_out" 'in 8,076·out 639 tok' "(H1) 델타 토큰 정확 + 천단위 콤마"
+assert_has "$hc_out" 'cache r18,571·w15,287' "(H1) cache 델타 정확"
+# (H2) cost 스냅샷 행이 가짜 단계(start/end)로 timing 표에 새지 않는다.
+assert_absent "$hc_out" "| start |" "(H2) cost 행이 timing 단계로 안 샘(start)"
+assert_absent "$hc_out" "| end |"   "(H2) cost 행이 timing 단계로 안 샘(end)"
+assert_has    "$hc_out" "planner"   "(H2) 진짜 단계(planner)는 표에 존재"
+# (H3) 비용 스냅샷 없음 → usage 줄 생략(timing 표만).
+hc3="$(mk)"
+bash "$METRICS" mark "$hc3" planner start; bash "$METRICS" mark "$hc3" planner end
+hc3_out="$(bash "$METRICS" report-comment "$hc3")"
+assert_absent "$hc3_out" '📊 usage (plan)' "(H3) 비용 없으면 usage 줄 생략"
+assert_has    "$hc3_out" '📊 plan timing'  "(H3) 시간 표는 그대로"
+# (H4) provider 실패(비0) → 스냅샷 스킵(TSV 에 cost 행 미기록) + exit 0.
+hc4="$(mk)"
+PLAN_COST_PROVIDER='exit 1' bash "$METRICS" cost-snapshot "$hc4" start; rc=$?
+assert_eq "0" "$rc" "(H4) provider 실패해도 exit 0(best-effort)"
+assert_absent "$(cat "$hc4")" "cost" "(H4) provider 실패 시 cost 행 미기록"
+# (H5) 잘못된 when → exit 2.
+bash "$METRICS" cost-snapshot "$hc4" middle >/dev/null 2>&1; rc=$?
+assert_eq "2" "$rc" "(H5) when 이 start|end 아니면 exit 2"
+# (H6) tsv 인자 누락 → exit 2.
+bash "$METRICS" cost-snapshot >/dev/null 2>&1; rc=$?
+assert_eq "2" "$rc" "(H6) tsv 누락 → exit 2"
+# (H7) 음수 비용(스냅샷 역순·이상) → usage 줄 생략(오해 방지).
+hc7="$(mk)"
+PLAN_COST_PROVIDER='echo "cost 13.0 in 100 out 10 cache_read 0 cache_create 0"' \
+  bash "$METRICS" cost-snapshot "$hc7" start
+PLAN_COST_PROVIDER='echo "cost 12.0 in 90 out 5 cache_read 0 cache_create 0"' \
+  bash "$METRICS" cost-snapshot "$hc7" end
+bash "$METRICS" mark "$hc7" planner start; bash "$METRICS" mark "$hc7" planner end
+assert_absent "$(bash "$METRICS" report-comment "$hc7")" '📊 usage (plan)' "(H7) 음수 비용 → usage 줄 생략"
+# (H8) cache 0 → cache 표기 생략(잡음 제거).
+hc8="$(mk)"
+PLAN_COST_PROVIDER='echo "cost 1.0 in 100 out 10 cache_read 0 cache_create 0"' \
+  bash "$METRICS" cost-snapshot "$hc8" start
+PLAN_COST_PROVIDER='echo "cost 1.5 in 200 out 20 cache_read 0 cache_create 0"' \
+  bash "$METRICS" cost-snapshot "$hc8" end
+hc8_out="$(bash "$METRICS" report-comment "$hc8")"
+assert_has    "$hc8_out" 'cost $0.5000' "(H8) cache 없어도 cost 렌더"
+assert_absent "$hc8_out" 'cache r'      "(H8) cache 0 이면 cache 표기 생략"
+
 echo ""
 echo -e "${C_CYAN}── 결과 ──${C_NC}"
 printf "통과 %d · 실패 %d\n" "$PASS" "$FAIL"
