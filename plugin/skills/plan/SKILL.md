@@ -425,6 +425,15 @@ TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
 # 첫 계측 펜스 — 이전 실행이 §9.7 정리 전에 중단돼 남은 잔여 TSV 의 누적 오염(특히 토큰
 #   합산)을 차단하려고 여기서 1회 truncate 한다(이후 mark/token 은 append).
 bash "$METRICS" reset "$TSV"
+# [계측 비용] 토글 ON 일 때만 세션 누적 비용 스냅샷(start). §6b 의 end 스냅샷과의 차이가
+#   이 plan 한 번의 실제 비용이다(ccusage). **반드시 'mark planner start' 보다 먼저** 찍는다 —
+#   ccusage 호출(npx)은 수 초 걸릴 수 있어, planner start 뒤에 두면 그 지연이 planner 단계
+#   소요시간(end-start)에 흡수돼 시간 계측을 오염시킨다(#83 의 단계별 귀속 목적 위반).
+#   ccusage 호출(npx)은 무거우므로 토글 OFF 면 건너뛴다(시간 계측은 무조건). 실패해도 무시.
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+if [ "$(bash "$CFG" metrics.usage-tracking-enabled 2>/dev/null || echo false)" = "true" ]; then
+  bash "$METRICS" cost-snapshot "$TSV" start || true
+fi
 bash "$METRICS" mark "$TSV" planner start
 ```
 
@@ -690,6 +699,9 @@ CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 METRICS="${CLAUDE_SKILL_DIR}/scripts/plan-metrics.sh"
 TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
 if [ "$(bash "$CFG" metrics.usage-tracking-enabled 2>/dev/null || echo false)" = "true" ]; then
+  # [계측 비용] end 스냅샷 — §0 start 와의 차이가 이 plan 의 실제 비용(report 가 "📊 usage
+  #   (plan)" 한 줄로 렌더). report-file 보다 먼저 찍어야 timing.md·§9.7 코멘트에 반영된다.
+  bash "$METRICS" cost-snapshot "$TSV" end || true
   bash "$METRICS" report-file "$TSV" "claude/plans/<parent-N>-<slug>-timing.md" || true
 fi
 # 아래 글롭 claude/plans/<parent-N>-<slug>-*.md 가 위 timing.md 도 자동 포함해 함께 커밋한다.

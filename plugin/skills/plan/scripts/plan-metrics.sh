@@ -13,27 +13,42 @@
 #
 # ── 상태 파일(TSV) 스키마 ────────────────────────────────────────────────────
 #   탭 구분, 헤더 없음. 한 줄 = 한 이벤트. 컬럼:
-#     1) kind   : "time" | "token"
-#     2) label  : 단계 라벨 (interview·planner·completeness-critic·consistency-critic·codex-crosscheck)
-#     3) phase  : kind=time 일 때 "start"|"end" / kind=token 일 때 토큰 종류("in"|"out"|"total" 등 자유)
+#     1) kind   : "time" | "token" | "cost"
+#     2) label  : kind=time/token 이면 단계 라벨(planner·completeness-critic 등)
+#                 kind=cost 이면 스냅샷 시점 "start"|"end"
+#     3) phase  : kind=time 이면 "start"|"end" / kind=token 이면 토큰 종류("in"|"out"|"total")
+#                 kind=cost 이면 필드명("cost"|"in"|"out"|"cache_read"|"cache_create")
 #     4) value  : kind=time 이면 epoch 초(date +%s) / kind=token 이면 정수 토큰 수
+#                 kind=cost 이면 누적값(cost 는 USD float, 토큰은 정수)
 #   예)
 #     time	planner	start	1719300000
 #     time	planner	end	1719300192
 #     token	planner	in	53120
 #     token	planner	out	8400
+#     cost	start	cost	12.5010
+#     cost	end	cost	12.9230
 #
 # ── 사용법 ──────────────────────────────────────────────────────────────────
 #   plan-metrics.sh mark   <tsv> <label> start|end     # 단계 경계 시각 기록(date +%s)
 #   plan-metrics.sh token  <tsv> <label> <kind> <n>    # 단계 토큰 수 기록(best-effort, 정수만)
+#   plan-metrics.sh cost-snapshot <tsv> start|end      # 세션 누적 비용·토큰 스냅샷(ccusage, best-effort)
 #   plan-metrics.sh report <tsv>                       # 단계별 소요시간(+토큰) 표를 stdout 으로
 #   plan-metrics.sh report-comment <tsv>               # parent 코멘트용 마크다운 표를 stdout 으로
 #   plan-metrics.sh report-file <tsv> <out-path>       # report-comment 와 동일한 표를 파일로(데이터 없으면 미생성)
 #   plan-metrics.sh fmt-duration <start-epoch> <end-epoch>   # epoch 쌍 → "3m12s" (단위 테스트용)
 #
+# ── 비용 계측(cost-snapshot) ─────────────────────────────────────────────────
+#   /plan 은 로컬 대화 세션에서 돌아 GHA 처럼 claude `result` 이벤트(비용 포함)를 못 잡는다.
+#   대신 ccusage(로컬 Claude Code 대화로그 JSONL 에서 토큰·비용을 계산하는 오픈소스 CLI)로
+#   "현재 세션 누적 비용·토큰"을 plan 시작·끝에 두 번 스냅샷하고, 그 **차이**가 이 plan 한 번의
+#   실제 비용이다. report 계열이 이를 GHA(#82)와 같은 "📊 usage (plan)" 한 줄로 렌더한다.
+#   세션 식별은 CLAUDE_CODE_SESSION_ID(Claude Code 표준 env) ↔ ccusage 의 period 키 매칭.
+#   ccusage 호출은 PLAN_COST_PROVIDER env 로 주입 가능하다(테스트 stub). best-effort —
+#   미설치·실패·세션 미매칭이면 조용히 스킵하고 시간 계측은 그대로 동작한다.
+#
 # ── 종속성 제로 ─────────────────────────────────────────────────────────────
-#   순수 bash(3.2 호환 지향) + date 만. 프로젝트 식별자(owner·모듈명 등) 하드코딩 없음.
-#   상태 파일 경로는 호출자가 인자로 주입한다(이 스크립트는 경로를 만들지 않는다).
+#   순수 bash(3.2 호환 지향) + date(+ 비용계측 시 npx ccusage·python3) 만. 프로젝트
+#   식별자(owner·모듈명 등) 하드코딩 없음. 상태 파일 경로는 호출자가 인자로 주입한다.
 #
 # 종료코드: 정상 0, 인자/사용 오류 2. (계측 보조 도구라 report 는 데이터가 부실해도 0.)
 
@@ -112,6 +127,137 @@ cmd_token() {
   printf 'token\t%s\t%s\t%s\n' "$label" "$kind" "$value" >> "$tsv" 2>/dev/null || true
 }
 
+# ── 정수 천단위 콤마 ──────────────────────────────────────────────────────────
+#   순수 awk(로케일 비의존). 정수 아니면 입력 그대로 반환(방어).
+_commas() {
+  awk -v x="$1" 'BEGIN{
+    if (x !~ /^[0-9]+$/) { print x; exit }
+    s=""; c=0;
+    for (i=length(x); i>=1; i--) { s=substr(x,i,1) s; if (++c%3==0 && i>1) s="," s }
+    print s
+  }'
+}
+
+# ── 비용 provider: 현재 세션 누적 비용·토큰을 "field value …" 한 줄로 ──────────
+#   출력 예: "cost 12.9230 in 80760 out 6390 cache_read 185710 cache_create 152870"
+#   PLAN_COST_PROVIDER 가 있으면 그 명령을 실행(테스트 stub). 없으면 ccusage 내장 호출:
+#   CLAUDE_CODE_SESSION_ID 와 ccusage 의 period(세션 UUID)를 매칭해 그 세션 행만 뽑는다.
+#   어떤 이유로든 못 구하면 비0 종료(호출자가 스냅샷 스킵). python3 가 stdin 전체를
+#   읽으므로(json.load) 파이프 조기종료(SIGPIPE) 위험 없음.
+_cost_provider() {
+  if [ -n "${PLAN_COST_PROVIDER:-}" ]; then
+    eval "$PLAN_COST_PROVIDER"
+    return $?
+  fi
+  local sid="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$sid" ] || return 1   # 세션 ID 없으면 어느 세션인지 특정 불가
+  # npx 호출에 타임아웃 상한 — npm 레지스트리 지연/불통 시 /plan 임계경로가 무한 stall 하지
+  # 않게 한다(있을 때만; 없으면 그대로 — 이식성). gtimeout 은 macOS coreutils.
+  local to=""
+  if command -v timeout >/dev/null 2>&1; then to="timeout 30"
+  elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout 30"; fi
+  # $to 가 빈 문자열이면 word splitting 으로 사라져 그냥 npx 가 된다(set -u 안전).
+  # shellcheck disable=SC2086
+  $to npx -y ccusage@latest session --json 2>/dev/null \
+    | SID="$sid" python3 -c '
+import json, os, sys
+sid = os.environ["SID"]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+# 같은 period(세션)가 여러 행(agent=claude/codex 등)으로 쪼개질 수 있어 first-match 가 아니라
+# 매칭 행을 전부 합산한다 — 한 행만 채택하면 그 세션의 실제 비용/토큰을 과소계상한다.
+cost = 0.0; tin = tout = tcr = tcw = 0; found = False
+for s in data.get("session", []):
+    if s.get("period") == sid:
+        found = True
+        cost += float(s.get("totalCost", 0) or 0)
+        tin  += int(s.get("inputTokens", 0) or 0)
+        tout += int(s.get("outputTokens", 0) or 0)
+        tcr  += int(s.get("cacheReadTokens", 0) or 0)
+        tcw  += int(s.get("cacheCreationTokens", 0) or 0)
+if not found:
+    sys.exit(1)   # 현재 세션이 아직 ccusage 에 안 잡힘
+print("cost %.4f in %d out %d cache_read %d cache_create %d" % (cost, tin, tout, tcr, tcw))
+'
+}
+
+# ── 비용 스냅샷 기록(best-effort) ─────────────────────────────────────────────
+#   when=start|end. provider 가 준 "field value …" 를 cost 행으로 TSV 에 append.
+#   provider 실패(미설치·세션 미매칭 등)는 조용히 스킵 — 시간 계측을 막지 않는다.
+cmd_cost_snapshot() {
+  local tsv="$1" when="$2"
+  case "$when" in
+    start|end) ;;
+    *) err "cost-snapshot when 은 start|end 여야 합니다: '$when'"; return 2 ;;
+  esac
+  [ -n "$tsv" ] || { err "cost-snapshot: tsv 경로가 필요합니다"; return 2; }
+  local snap
+  snap="$(_cost_provider 2>/dev/null)" || return 0   # provider 실패 → 스킵(정상)
+  [ -n "$snap" ] || return 0
+  mkdir -p "$(dirname "$tsv")" 2>/dev/null || true
+  # "field value field value …" 를 두 토큰씩 끊어 cost 행으로 기록.
+  # 공백 분리는 의도(IFS 기본)지만 glob(pathname expansion)은 억제한다(set -f) — provider
+  # 출력에 * ? [ 가 섞여도 cwd 파일명으로 확장돼 필드가 깨지지 않게. 직후 set +f 로 복원.
+  set -f
+  # shellcheck disable=SC2086
+  set -- $snap
+  set +f
+  while [ "$#" -ge 2 ]; do
+    printf 'cost\t%s\t%s\t%s\n' "$when" "$1" "$2" >> "$tsv" 2>/dev/null || true
+    shift 2
+  done
+}
+
+# ── 비용 델타: cost start/end 두 스냅샷의 차이를 "field value" 행으로 ──────────
+#   cost(USD) start·end 가 모두 있어야 출력(아니면 빈 출력 → usage 줄 생략).
+#   토큰 필드는 한쪽만 있으면 0 으로 본다(cost 존재가 게이트).
+_cost_delta() {
+  local tsv="$1"
+  [ -f "$tsv" ] || return 0
+  awk -F'\t' '
+    $1=="cost" { val[$2 SUBSEP $3]=$4 }
+    END {
+      if (!(("start" SUBSEP "cost") in val) || !(("end" SUBSEP "cost") in val)) exit 0
+      printf "cost\t%.4f\n", (val["end" SUBSEP "cost"] - val["start" SUBSEP "cost"])
+      n=split("in out cache_read cache_create", f, " ")
+      for (i=1;i<=n;i++) {
+        s=val["start" SUBSEP f[i]]; e=val["end" SUBSEP f[i]]
+        if (s=="") s=0; if (e=="") e=0
+        printf "%s\t%d\n", f[i], (e - s)
+      }
+    }
+  ' "$tsv"
+}
+
+# ── usage 한 줄 렌더(GHA #82 "📊 usage" 와 동일 포맷) ──────────────────────────
+#   비용 델타가 없으면 빈 출력(usage 줄 생략). 음수 비용(시계/집계 이상)도 빈 출력.
+_render_usage_line() {
+  local tsv="$1" delta cost intok outtok cr cw k v line
+  delta="$(_cost_delta "$tsv")"
+  [ -n "$delta" ] || return 0
+  cost=""; intok=0; outtok=0; cr=0; cw=0
+  while IFS=$'\t' read -r k v; do
+    case "$k" in
+      cost)         cost="$v" ;;
+      in)           intok="$v" ;;
+      out)          outtok="$v" ;;
+      cache_read)   cr="$v" ;;
+      cache_create) cw="$v" ;;
+    esac
+  done <<< "$delta"
+  [ -n "$cost" ] || return 0
+  # 음수 비용은 비정상(스냅샷 누락/역순) → 렌더 안 함.
+  case "$cost" in -*) return 0 ;; esac
+  line="$(printf '📊 usage (plan) — cost $%s / in %s·out %s tok' \
+    "$cost" "$(_commas "$intok")" "$(_commas "$outtok")")"
+  if [ "${cr:-0}" -gt 0 ] 2>/dev/null || [ "${cw:-0}" -gt 0 ] 2>/dev/null; then
+    line="$line / cache r$(_commas "${cr:-0}")·w$(_commas "${cw:-0}")"
+  fi
+  printf '%s\n' "$line"
+}
+
 # ── 집계 코어 ────────────────────────────────────────────────────────────────
 # TSV 를 읽어 "label<TAB>seconds<TAB>in_tok<TAB>out_tok" 행을 라벨 등장순으로 stdout.
 #   - 시간: 같은 label 의 마지막 start 와 마지막 end 로 구간 계산(펜스 재실행 대비 last-wins).
@@ -124,6 +270,9 @@ _aggregate() {
   awk -F'\t' '
     {
       kind=$1; label=$2; ph=$3; val=$4;
+      # cost 스냅샷 행(kind=cost, label=start|end)은 단계 집계와 무관 — 건너뛴다.
+      # (안 거르면 "start"/"end" 가 가짜 단계로 timing 표에 끼어든다.)
+      if (kind != "time" && kind != "token") next;
       if (!(label in seen)) { seen[label]=1; order[++n]=label; }
       if (kind=="time") {
         if (ph=="start") start[label]=val;
@@ -171,6 +320,10 @@ _pretty_label() {
 cmd_report() {
   local tsv="$1"
   [ -n "$tsv" ] || { err "report: tsv 경로가 필요합니다"; return 2; }
+  # usage 줄을 표 앞에 — report-comment 와 출력 순서를 통일(대조 시 혼선 방지). 비용 없으면 빈 출력.
+  local usage_line
+  usage_line="$(_render_usage_line "$tsv")"
+  [ -n "$usage_line" ] && printf '%s\n' "$usage_line"
   printf '📊 plan 단계별 소요시간\n'
   if [ ! -f "$tsv" ] || [ ! -s "$tsv" ]; then
     printf '  (계측 데이터 없음)\n'
@@ -206,7 +359,10 @@ cmd_report_comment() {
     return 0
   fi
   local total=0 any_time=0
-  local label secs intok outtok dur
+  local label secs intok outtok dur usage_line
+  # GHA(#82)와 동일 포맷의 비용 한 줄 — 비용 스냅샷이 있을 때만(없으면 빈 문자열).
+  usage_line="$(_render_usage_line "$tsv")"
+  [ -n "$usage_line" ] && printf '%s\n\n' "$usage_line"
   printf '📊 plan timing\n\n'
   printf '| 단계 | 소요 | in tok | out tok |\n'
   printf '|---|---|---|---|\n'
@@ -263,6 +419,7 @@ plan-metrics.sh — /plan 단계별 소요시간·토큰 계측 헬퍼
   plan-metrics.sh reset  <tsv>                       # 상태파일 초기화(첫 펜스에서 1회 — 누적 오염 차단)
   plan-metrics.sh mark   <tsv> <label> start|end     # 단계 경계 시각 기록(date +%s)
   plan-metrics.sh token  <tsv> <label> <kind> <n>    # 단계 토큰 수 기록(정수만 — 추정 금지)
+  plan-metrics.sh cost-snapshot <tsv> start|end      # 세션 누적 비용·토큰 스냅샷(ccusage, best-effort)
   plan-metrics.sh report <tsv>                       # 단계별 소요시간(+토큰) 콘솔 표
   plan-metrics.sh report-comment <tsv>               # parent 코멘트용 마크다운 표
   plan-metrics.sh report-file <tsv> <out-path>       # 마크다운 표를 파일로(데이터 없으면 미생성)
@@ -279,6 +436,7 @@ case "$SUB" in
   reset)           shift; cmd_reset "${1:-}" ;;
   mark)            shift; cmd_mark "${1:-}" "${2:-}" "${3:-}" ;;
   token)           shift; cmd_token "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+  cost-snapshot)   shift; cmd_cost_snapshot "${1:-}" "${2:-}" ;;
   report)          shift; cmd_report "${1:-}" ;;
   report-comment)  shift; cmd_report_comment "${1:-}" ;;
   report-file)     shift; cmd_report_file "${1:-}" "${2:-}" ;;
@@ -287,6 +445,6 @@ case "$SUB" in
   -h|--help)       usage; exit 0 ;;
   '')              usage >&2; exit 2 ;;
   *)
-    err "알 수 없는 서브커맨드 '$SUB'. 사용: reset|mark|token|report|report-comment|report-file|fmt-duration|fmt-seconds"
+    err "알 수 없는 서브커맨드 '$SUB'. 사용: reset|mark|token|cost-snapshot|report|report-comment|report-file|fmt-duration|fmt-seconds"
     exit 2 ;;
 esac
