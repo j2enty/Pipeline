@@ -425,14 +425,16 @@ TSV="${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv"
 # 첫 계측 펜스 — 이전 실행이 §9.7 정리 전에 중단돼 남은 잔여 TSV 의 누적 오염(특히 토큰
 #   합산)을 차단하려고 여기서 1회 truncate 한다(이후 mark/token 은 append).
 bash "$METRICS" reset "$TSV"
-bash "$METRICS" mark "$TSV" planner start
-# [계측 비용] 토글 ON 일 때만 세션 누적 비용 스냅샷(start). §6b 에서 end 스냅샷과의 차이가
-#   이 plan 한 번의 실제 비용이다(ccusage). ccusage 호출(npx)은 무거우므로 토글 OFF 면
-#   건너뛴다 — 비용 계측은 영구보존 토글에 종속(시간 계측은 무조건). 실패해도 무시(best-effort).
+# [계측 비용] 토글 ON 일 때만 세션 누적 비용 스냅샷(start). §6b 의 end 스냅샷과의 차이가
+#   이 plan 한 번의 실제 비용이다(ccusage). **반드시 'mark planner start' 보다 먼저** 찍는다 —
+#   ccusage 호출(npx)은 수 초 걸릴 수 있어, planner start 뒤에 두면 그 지연이 planner 단계
+#   소요시간(end-start)에 흡수돼 시간 계측을 오염시킨다(#83 의 단계별 귀속 목적 위반).
+#   ccusage 호출(npx)은 무거우므로 토글 OFF 면 건너뛴다(시간 계측은 무조건). 실패해도 무시.
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 if [ "$(bash "$CFG" metrics.usage-tracking-enabled 2>/dev/null || echo false)" = "true" ]; then
   bash "$METRICS" cost-snapshot "$TSV" start || true
 fi
+bash "$METRICS" mark "$TSV" planner start
 ```
 
 선택된 `planner=true` 영역마다 Agent 호출:

@@ -151,7 +151,14 @@ _cost_provider() {
   fi
   local sid="${CLAUDE_CODE_SESSION_ID:-}"
   [ -n "$sid" ] || return 1   # 세션 ID 없으면 어느 세션인지 특정 불가
-  npx -y ccusage@latest session --json 2>/dev/null \
+  # npx 호출에 타임아웃 상한 — npm 레지스트리 지연/불통 시 /plan 임계경로가 무한 stall 하지
+  # 않게 한다(있을 때만; 없으면 그대로 — 이식성). gtimeout 은 macOS coreutils.
+  local to=""
+  if command -v timeout >/dev/null 2>&1; then to="timeout 30"
+  elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout 30"; fi
+  # $to 가 빈 문자열이면 word splitting 으로 사라져 그냥 npx 가 된다(set -u 안전).
+  # shellcheck disable=SC2086
+  $to npx -y ccusage@latest session --json 2>/dev/null \
     | SID="$sid" python3 -c '
 import json, os, sys
 sid = os.environ["SID"]
@@ -159,16 +166,20 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
+# 같은 period(세션)가 여러 행(agent=claude/codex 등)으로 쪼개질 수 있어 first-match 가 아니라
+# 매칭 행을 전부 합산한다 — 한 행만 채택하면 그 세션의 실제 비용/토큰을 과소계상한다.
+cost = 0.0; tin = tout = tcr = tcw = 0; found = False
 for s in data.get("session", []):
     if s.get("period") == sid:
-        print("cost %.4f in %d out %d cache_read %d cache_create %d" % (
-            float(s.get("totalCost", 0) or 0),
-            int(s.get("inputTokens", 0) or 0),
-            int(s.get("outputTokens", 0) or 0),
-            int(s.get("cacheReadTokens", 0) or 0),
-            int(s.get("cacheCreationTokens", 0) or 0)))
-        sys.exit(0)
-sys.exit(1)   # 현재 세션이 아직 ccusage 에 안 잡힘
+        found = True
+        cost += float(s.get("totalCost", 0) or 0)
+        tin  += int(s.get("inputTokens", 0) or 0)
+        tout += int(s.get("outputTokens", 0) or 0)
+        tcr  += int(s.get("cacheReadTokens", 0) or 0)
+        tcw  += int(s.get("cacheCreationTokens", 0) or 0)
+if not found:
+    sys.exit(1)   # 현재 세션이 아직 ccusage 에 안 잡힘
+print("cost %.4f in %d out %d cache_read %d cache_create %d" % (cost, tin, tout, tcr, tcw))
 '
 }
 
@@ -187,9 +198,12 @@ cmd_cost_snapshot() {
   [ -n "$snap" ] || return 0
   mkdir -p "$(dirname "$tsv")" 2>/dev/null || true
   # "field value field value …" 를 두 토큰씩 끊어 cost 행으로 기록.
-  # 공백 분리가 의도(IFS 기본) — word splitting 경고 억제.
+  # 공백 분리는 의도(IFS 기본)지만 glob(pathname expansion)은 억제한다(set -f) — provider
+  # 출력에 * ? [ 가 섞여도 cwd 파일명으로 확장돼 필드가 깨지지 않게. 직후 set +f 로 복원.
+  set -f
   # shellcheck disable=SC2086
   set -- $snap
+  set +f
   while [ "$#" -ge 2 ]; do
     printf 'cost\t%s\t%s\t%s\n' "$when" "$1" "$2" >> "$tsv" 2>/dev/null || true
     shift 2
@@ -306,6 +320,10 @@ _pretty_label() {
 cmd_report() {
   local tsv="$1"
   [ -n "$tsv" ] || { err "report: tsv 경로가 필요합니다"; return 2; }
+  # usage 줄을 표 앞에 — report-comment 와 출력 순서를 통일(대조 시 혼선 방지). 비용 없으면 빈 출력.
+  local usage_line
+  usage_line="$(_render_usage_line "$tsv")"
+  [ -n "$usage_line" ] && printf '%s\n' "$usage_line"
   printf '📊 plan 단계별 소요시간\n'
   if [ ! -f "$tsv" ] || [ ! -s "$tsv" ]; then
     printf '  (계측 데이터 없음)\n'
@@ -330,9 +348,6 @@ cmd_report() {
   if [ "$any_time" -eq 1 ]; then
     printf '  %-26s %s\n' '합계(측정 구간)' "$(fmt_duration_seconds "$total")"
   fi
-  local usage_line
-  usage_line="$(_render_usage_line "$tsv")"
-  [ -n "$usage_line" ] && printf '%s\n' "$usage_line"
 }
 
 # ── report-comment: parent 이슈 코멘트용 마크다운 ────────────────────────────
