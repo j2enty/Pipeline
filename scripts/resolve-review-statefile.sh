@@ -129,8 +129,15 @@ if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ]; then
             to_abs_path "$SENTINEL_TARGET"
             exit 0
           fi
-          # 불일치 → 오염. 폴백으로 떨어지지 않고 indeterminate(fail-closed).
-          echo "resolve-review-statefile.sh: sentinel 의 .parent.url($SENTINEL_PARENT) 가 기대 PARENT_URL($PARENT_URL) 과 불일치 — 오염 의심, indeterminate" >&2
+          # 불일치 → 폴백으로 떨어지지 않고 indeterminate(fail-closed). 동작은 한 가지(머지 차단)지만
+          # 원인을 구분해 로그를 다르게 낸다: (a) .parent 가 비어있음(미기록) vs (b) 값이 다름(진짜 오염).
+          if [ -z "$SENTINEL_PARENT" ]; then
+            # (a) 미기록 — review(생산자)가 5-a parent write 를 안 돌려 .parent 가 null 로 남은 경우(#94).
+            echo "resolve-review-statefile.sh: sentinel 이 가리킨 상태파일의 .parent 가 비어있음(미기록) — review 가 parent 를 안 쓴 것으로 의심(#94), indeterminate" >&2
+          else
+            # (b) 진짜 오염 — .parent.url 에 값은 있으나 기대 PARENT_URL 과 다른 경우.
+            echo "resolve-review-statefile.sh: sentinel 의 .parent.url($SENTINEL_PARENT) 가 기대 PARENT_URL($PARENT_URL) 과 불일치 — 오염 의심, indeterminate" >&2
+          fi
           exit 1
         else
           # [수정 3] single 모드 sentinel 교차검증 — basename 이 기대 파일명과 일치해야 채택.
