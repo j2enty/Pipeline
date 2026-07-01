@@ -233,4 +233,36 @@ describe("notifyFailure", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(app.log.warn).toHaveBeenCalled();
   });
+
+  it("Janus·webhook 둘 다 설정됐고 둘 다 실패해도 throw 안 함 (never-throw 불변식)", async () => {
+    setJanusEnv();
+    process.env.SLACK_WEBHOOK_URL = "https://hooks.slack.com/test";
+    // Janus 1차 전송 + webhook 폴백 둘 다 reject → 두 경로 모두 실패 시나리오.
+    const fetchMock = vi.fn().mockRejectedValue(new Error("모든 경로 다운"));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const app = makeFakeApp();
+
+    await expect(
+      notifyFailure(app, { title: "t", context: "c" })
+    ).resolves.toBeUndefined();
+
+    // Janus(1) → webhook 폴백(2) 둘 다 시도했고, 실패는 warn 으로만 삼킴.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(app.log.warn).toHaveBeenCalled();
+  });
+
+  it("JANUS_SOURCE_ID 미설정 시 Janus body.source_id 는 기본값 'pipeline'", async () => {
+    setJanusEnv();
+    // base·token·channel 만 남기고 SOURCE_ID 제거 → 기본값 폴백 검증.
+    delete process.env.JANUS_SOURCE_ID;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const app = makeFakeApp();
+
+    await notifyFailure(app, { title: "t", context: "c" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.source_id).toBe("pipeline");
+  });
 });

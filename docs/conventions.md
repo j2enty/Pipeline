@@ -63,12 +63,13 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `REVIEWER_APP_ID` | review 부착 yml에서만 필수 | PR 리뷰 봇의 App ID |
 | `REVIEWER_PRIVATE_KEY` | 동일 | PEM |
 | `REVIEWER_INSTALLATION_ID` | 동일 | Installation ID |
-| `SLACK_WEBHOOK_URL` | 옵션 | 슬랙 인커밍 웹훅 — 미설정 시 알림 자동 스킵 |
+| `SLACK_WEBHOOK_URL` | 옵션 | 슬랙 인커밍 웹훅 — Janus 미설정·실패 시 장애 알림 폴백 경로 |
+| `JANUS_AUTH_TOKEN` | 옵션 | Janus 게이트웨이 Bearer 인증 토큰 — Janus 알림 경로 활성화에 필요 |
 
 옵셔널 동작:
 - Reviewer secret 미설정 + AI 리뷰 yml 미호출 → 정상 (사람이 리뷰하는 일반 자동화)
 - Reviewer secret 미설정 + AI 리뷰 yml 호출 → secret 누락으로 적절히 fail
-- Slack webhook 미설정 → notify 스크립트 자동 스킵
+- 장애 알림 경로: `JANUS_BASE_URL`·`JANUS_AUTH_TOKEN`·`JANUS_ALERT_CHANNEL` 셋 다 있어야 Janus 경로 활성, 아니면 `SLACK_WEBHOOK_URL` 웹훅 폴백. 셋 다 미설정 + webhook 도 미설정 → 알림 자동 스킵(본 로직은 정상 진행)
 
 ### 6. output 컨벤션
 
@@ -138,6 +139,17 @@ MODULES=["Backend","iOS"]       # 영역 모듈 이름 (폴러 dispatch 대상 �
 MODULES_IGNORE=["Design"]       # sibling 집계 시 제외할 모듈
 REVIEWER_BOT_LOGIN=             # Reviewer 봇 로그인 prefix (review 핸들러 검증용)
 STATUS_POLLER_INTERVAL_MS=300000  # 폴링 간격 (옵션, 기본 5분)
+```
+
+**장애 알림 경로** — App 이 장애 알림을 보낼 때 쓰는 설정(전부 옵션). Janus 게이트웨이를 우선하고, 비활성/실패 시 Slack 웹훅으로 폴백한다:
+
+```env
+# 활성 조건: 아래 3키가 모두 있으면 Janus 경로 활성, 하나라도 비면 웹훅 폴백.
+JANUS_BASE_URL=                 # Janus REST 베이스 URL (컨테이너→호스트: http://host.docker.internal:8700)
+JANUS_AUTH_TOKEN=               # Janus Bearer 인증 토큰 (secret 카탈로그에 등재)
+JANUS_ALERT_CHANNEL=            # Janus 알림 채널 ID
+JANUS_SOURCE_ID=pipeline        # 발신 소스 식별자 (옵션, 기본 "pipeline")
+SLACK_WEBHOOK_URL=              # Janus 미설정·실패 시 폴백 웹훅 (secret 카탈로그에 등재)
 ```
 
 ---

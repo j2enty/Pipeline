@@ -76,6 +76,30 @@ function buildAlertText(opts: {
   return text;
 }
 
+// Janus 경로 활성화에 반드시 필요한 env 3종.
+//   JANUS_SOURCE_ID 는 기본값("pipeline")이 있어 필수가 아니므로 여기서 제외한다.
+const JANUS_REQUIRED_ENV_KEYS = [
+  "JANUS_BASE_URL",
+  "JANUS_AUTH_TOKEN",
+  "JANUS_ALERT_CHANNEL",
+] as const;
+
+// 부분 설정(오설정) 감지 — 관측성용.
+//   필수 3키 중 '일부만' 채워져 Janus 가 조용히 비활성화되는 상황을 잡아낸다.
+//   - 0개 설정(완전 미설정) → 정상 시나리오 → [] (경고 대상 아님)
+//   - 3개 모두 설정(완전 설정) → 정상 → []
+//   - 1~2개만 설정(오설정) → 누락된 키 '이름'만 반환 (값·토큰은 절대 노출 안 함)
+function findPartialJanusMisconfig(): string[] {
+  const missingKeys = JANUS_REQUIRED_ENV_KEYS.filter((key) => !process.env[key]);
+  if (
+    missingKeys.length === 0 ||
+    missingKeys.length === JANUS_REQUIRED_ENV_KEYS.length
+  ) {
+    return [];
+  }
+  return [...missingKeys];
+}
+
 // Janus 게이트웨이 발송 타깃 — 아웃바운드 알림을 Slack 대신 Janus REST 로 보낸다.
 //   JANUS_BASE_URL/JANUS_AUTH_TOKEN/JANUS_ALERT_CHANNEL 이 모두 있어야 활성화.
 //   컨테이너에서 호스트 Janus 는 http://host.docker.internal:8700 로 닿는다.
@@ -155,6 +179,17 @@ export async function notifyFailure(
   opts: { title: string; context: string; url?: string; key?: string }
 ): Promise<void> {
   const janus = resolveJanusTarget();
+
+  // 부분 설정(오설정) 관측성 — 필수 3키 중 일부만 채워져 Janus 가 비활성화되면
+  // 조용히 넘어가지 않고 한 줄 경고를 남긴다(누락 키 '이름'만, 값·토큰은 미노출).
+  const partialJanusMissingKeys = findPartialJanusMisconfig();
+  if (partialJanusMissingKeys.length > 0) {
+    app.log.warn(
+      { missing: partialJanusMissingKeys },
+      `Janus 부분 설정 감지 — 비활성화 (누락: ${partialJanusMissingKeys.join(", ")})`
+    );
+  }
+
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!janus && !webhookUrl) {
     app.log.warn(
