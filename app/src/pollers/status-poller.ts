@@ -71,10 +71,21 @@ export function startStatusPoller(
   return setInterval(() => void tick(), options.intervalMs);
 }
 
-async function runPollingTick(
+// 매 tick 의 실제 작업 본체.
+//
+// 실패 처리 원칙 — "조용한 실패 → 시끄러운 실패":
+//   - 프로젝트 '일부' 조회 실패 → 알림(쿨다운) + 로그 후 계속 (부분 실패는 tick 성공).
+//   - 프로젝트 '전부' 조회 실패 → throw 로 승격 → tick() 의 catch 가 잡아
+//     recordTick() 을 건너뛰게 만든다. lastTickAt 이 정체되면 evaluateHealth 가
+//     두 주기 뒤 'degraded' 로 승격 → 헬스체크가 무음 정지를 드러낸다.
+//
+// 이 함수는 테스트에서 직접 호출·검증하기 위해 export 한다.
+export async function runPollingTick(
   app: Probot,
   options: StatusPollerOptions
 ): Promise<void> {
+  let failedProjectCount = 0;
+
   for (const projectNumber of options.projectNumbers) {
     let items: ProjectV2ItemSnapshot[];
     try {
@@ -84,10 +95,18 @@ async function runPollingTick(
         { ownerLogin: options.ownerLogin, projectNumber }
       );
     } catch (err) {
+      failedProjectCount += 1;
       app.log.error(
         { err, projectNumber },
         "Project v2 조회 실패 — 다른 프로젝트 계속 진행"
       );
+      // 프로젝트별 알림 — 쿨다운 키를 프로젝트 단위로 분리해 한 프로젝트의
+      // 지속 실패가 다른 프로젝트 알림을 삼키지 않게 한다.
+      await notifyFailure(app, {
+        title: "Project v2 조회 실패",
+        context: `projectNumber=${projectNumber} ${String(err)}`,
+        key: `project-fetch-fail-${projectNumber}`,
+      });
       continue;
     }
 
@@ -106,6 +125,16 @@ async function runPollingTick(
         );
       }
     }
+  }
+
+  // 전 프로젝트 조회 실패 → tick 실패로 승격 (recordTick 스킵 유도 → degraded).
+  if (
+    options.projectNumbers.length > 0 &&
+    failedProjectCount === options.projectNumbers.length
+  ) {
+    throw new Error(
+      `전 프로젝트(${failedProjectCount}/${options.projectNumbers.length}) Project v2 조회 실패 — tick 실패로 승격`
+    );
   }
 }
 

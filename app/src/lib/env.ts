@@ -1,5 +1,24 @@
 import type { StatusPollerOptions } from "../pollers/status-poller";
 
+// 폴러 tick 간격 기본값 (5분). STATUS_POLLER_INTERVAL_MS env 로 덮어쓸 수 있다.
+// alert.ts 의 DEFAULT_COOLDOWN_MS 와 같은 값·같은 의미(1주기)지만 별개 상수로 둔다.
+export const DEFAULT_STATUS_POLLER_INTERVAL_MS = 300000;
+
+// STATUS_POLLER_INTERVAL_MS env → 안전한 interval ms.
+//   - 미설정 → 기본값
+//   - "5m"·"abc" 같은 비유한(NaN) 또는 0·음수 → 기본값으로 조용히 폴백
+//     (alert.ts 의 resolveTimeoutMs 와 동일 패턴: Number.isFinite && > 0)
+//   순수 함수 유지를 위해 여기서 로깅하지 않는다 — 안전한 값만 반환.
+function resolvePollerIntervalMs(raw: string | undefined): number {
+  if (!raw) {
+    return DEFAULT_STATUS_POLLER_INTERVAL_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_STATUS_POLLER_INTERVAL_MS;
+}
+
 // 폴러 활성화/비활성화 사유 코드 — index.ts 가 이 코드에 맞춰 동일한 로그를 남긴다.
 //
 // 부수효과(로깅) 없이 "어떤 사유로 켜지거나 꺼지는지"만 순수하게 판단해서 반환한다.
@@ -39,7 +58,7 @@ export function parsePollerConfigFromEnv(
   const projectNumbersRaw = env.PROJECT_NUMBERS ?? "[]";
   const modulesRaw = env.MODULES ?? "[]";
   const authorInstallationIdRaw = env.AUTHOR_INSTALLATION_ID ?? "";
-  const intervalMs = Number(env.STATUS_POLLER_INTERVAL_MS ?? "300000");
+  const intervalMs = resolvePollerIntervalMs(env.STATUS_POLLER_INTERVAL_MS);
 
   if (!ownerLogin) {
     return { disabledReason: "owner-missing" };
