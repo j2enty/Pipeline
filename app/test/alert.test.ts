@@ -56,18 +56,25 @@ describe("shouldSend (쿨다운 순수함수)", () => {
 describe("notifyFailure", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeEach(() => {
-    resetAlertCooldownForTest();
+  const clearEnv = () => {
     delete process.env.SLACK_WEBHOOK_URL;
     delete process.env.ALERT_COOLDOWN_MS;
     delete process.env.ALERT_TIMEOUT_MS;
+    // Janus 경로 격리 — ambient JANUS_* 가 webhook 테스트를 오염시키지 않도록.
+    delete process.env.JANUS_BASE_URL;
+    delete process.env.JANUS_AUTH_TOKEN;
+    delete process.env.JANUS_ALERT_CHANNEL;
+    delete process.env.JANUS_SOURCE_ID;
+  };
+
+  beforeEach(() => {
+    resetAlertCooldownForTest();
+    clearEnv();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    delete process.env.SLACK_WEBHOOK_URL;
-    delete process.env.ALERT_COOLDOWN_MS;
-    delete process.env.ALERT_TIMEOUT_MS;
+    clearEnv();
     vi.restoreAllMocks();
   });
 
@@ -156,5 +163,74 @@ describe("notifyFailure", () => {
     await notifyFailure(app, { title: "같은 장애", context: "2" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Janus 게이트웨이 경로 (P5.4 이관) ──
+  const setJanusEnv = () => {
+    process.env.JANUS_BASE_URL = "http://host.docker.internal:8700";
+    process.env.JANUS_AUTH_TOKEN = "test-auth";
+    process.env.JANUS_ALERT_CHANNEL = "C0PIPE";
+    process.env.JANUS_SOURCE_ID = "pipeline";
+  };
+
+  it("Janus 설정 시 Janus /messages 로 Bearer·{source_id,channel,text} 전송", async () => {
+    setJanusEnv();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const app = makeFakeApp();
+
+    await notifyFailure(app, { title: "머지 차단", context: "blocker", url: "u" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://host.docker.internal:8700/messages");
+    expect(init.headers.Authorization).toBe("Bearer test-auth");
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({
+      source_id: "pipeline",
+      channel: "C0PIPE",
+      text: "🚨 *머지 차단*\nblocker\n👀 u",
+    });
+  });
+
+  it("Janus 비2xx 실패 시 webhook 으로 폴백(fetch 2회)", async () => {
+    setJanusEnv();
+    process.env.SLACK_WEBHOOK_URL = "https://hooks.slack.com/test";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 502 }) // Janus 실패
+      .mockResolvedValueOnce({ ok: true, status: 200 }); // webhook 성공
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const app = makeFakeApp();
+
+    await notifyFailure(app, { title: "t", context: "c" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toContain("/messages"); // 1차 Janus
+    expect(fetchMock.mock.calls[1][0]).toBe("https://hooks.slack.com/test"); // 2차 webhook
+  });
+
+  it("Janus 실패 + webhook 없으면 warn 만 (throw 안 함, fetch 1회)", async () => {
+    setJanusEnv();
+    const fetchMock = vi.fn().mockRejectedValue(new Error("janus down"));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const app = makeFakeApp();
+
+    await expect(
+      notifyFailure(app, { title: "t", context: "c" })
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(app.log.warn).toHaveBeenCalled();
+  });
+
+  it("Janus·webhook 둘 다 미설정이면 fetch 미호출 & warn", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const app = makeFakeApp();
+
+    await notifyFailure(app, { title: "t", context: "c" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(app.log.warn).toHaveBeenCalled();
   });
 });
