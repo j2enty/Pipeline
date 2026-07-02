@@ -36,10 +36,30 @@ import {
 } from "../src/lib/project-graphql";
 import { notifyFailure } from "../src/lib/alert";
 import { isWorkflowFileInProgress } from "../src/lib/workflow-runs";
+import { fireRepositoryDispatch } from "../src/lib/dispatch";
 
 const fetchProjectV2ItemsMock = vi.mocked(fetchProjectV2Items);
 const notifyFailureMock = vi.mocked(notifyFailure);
 const isWorkflowFileInProgressMock = vi.mocked(isWorkflowFileInProgress);
+const fireRepositoryDispatchMock = vi.mocked(fireRepositoryDispatch);
+
+// 임의의 Status 컬럼값을 가진 kickoff-형태 아이템(유효 Parent 라인 포함).
+function makeItemWithStatus(
+  status: string,
+  issueNumber: number
+): ProjectV2ItemSnapshot {
+  return {
+    itemNodeId: `item-${issueNumber}`,
+    status,
+    issue: {
+      number: issueNumber,
+      state: "OPEN",
+      body: "Parent: acme/Backend#99",
+      repositoryName: "Backend",
+      repositoryOwner: "acme",
+    },
+  };
+}
 
 // "In Progress" 상태 + 유효한 Parent 라인을 가진 kickoff 대상 아이템.
 // processProjectItem → dispatchKickoffIfNotRunning → isWorkflowFileInProgress 로 진입한다.
@@ -75,6 +95,8 @@ const baseOptions: StatusPollerOptions = {
   modules: ["Backend", "iOS"],
   authorInstallationId: 12345,
   intervalMs: 60000,
+  statusTriggersKickoff: "In Progress",
+  statusTriggersReview: "Bot Review",
 };
 
 describe("runPollingTick — 조회 실패 관측성 (M6)", () => {
@@ -179,5 +201,54 @@ describe("runPollingTick — 아이템 처리 실패 관측성 (Codex #1)", () =
     // 프로젝트 3 은 1건 성공(진전 있음) → 실패 아님. 프로젝트 5 는 0건 → 실패 아님.
     await expect(runPollingTick(app, baseOptions)).resolves.toBeUndefined();
     expect(notifyFailureMock).not.toHaveBeenCalled();
+  });
+});
+
+// #106 app-p5 — Status 트리거 컬럼명이 하드코딩이 아니라 주입값을 따르는지 검증.
+//   핵심 불변식: processProjectItem 은 options.statusTriggersKickoff/Review 와
+//   '정확히' 일치하는 아이템만 dispatch 한다. 프로젝트가 컬럼명을 바꿔 config 로
+//   주입하면 그 새 컬럼명으로 트리거되고, 옛 기본값("In Progress")은 트리거하지 않는다.
+describe("processProjectItem — Status 트리거 컬럼명 주입 (app-p5)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // dispatch 경로가 진행되도록: 실행 중 아님 → dispatch 호출.
+    isWorkflowFileInProgressMock.mockResolvedValue(false);
+  });
+
+  const customOptions: StatusPollerOptions = {
+    ...baseOptions,
+    projectNumbers: [3],
+    statusTriggersKickoff: "작업중",
+    statusTriggersReview: "리뷰대기",
+  };
+
+  it("커스텀 kickoff 컬럼명과 일치하는 아이템만 kickoff dispatch 한다", async () => {
+    // "작업중" → 트리거 대상, 옛 기본값 "In Progress" → 무시돼야 함.
+    fetchProjectV2ItemsMock.mockResolvedValue([
+      makeItemWithStatus("작업중", 1),
+      makeItemWithStatus("In Progress", 2),
+    ]);
+    const app = makeFakeApp();
+
+    await expect(runPollingTick(app, customOptions)).resolves.toBeUndefined();
+
+    // 정확히 1회(#1 만), eventType=kickoff-triggered.
+    expect(fireRepositoryDispatchMock).toHaveBeenCalledTimes(1);
+    const [, , params] = fireRepositoryDispatchMock.mock.calls[0];
+    expect((params as { eventType?: string }).eventType).toBe(
+      "kickoff-triggered"
+    );
+  });
+
+  it("옛 기본 컬럼명('In Progress')은 커스텀 주입 시 아무 것도 트리거하지 않는다(무음 정지 재현 방지)", async () => {
+    // 컬럼명을 바꿨는데 주입을 안 하면 발생하던 무음 정지 — 주입값과 안 맞으면 no-op.
+    fetchProjectV2ItemsMock.mockResolvedValue([
+      makeItemWithStatus("In Progress", 1),
+      makeItemWithStatus("Bot Review", 2),
+    ]);
+    const app = makeFakeApp();
+
+    await expect(runPollingTick(app, customOptions)).resolves.toBeUndefined();
+    expect(fireRepositoryDispatchMock).not.toHaveBeenCalled();
   });
 });

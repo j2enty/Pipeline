@@ -17,11 +17,12 @@ export interface StatusPollerOptions {
   modules: string[];
   authorInstallationId: number;
   intervalMs: number;
+  // 폴러가 kickoff/review 를 트리거할 Project v2 Status 컬럼값.
+  // 프로젝트마다 컬럼명이 다를 수 있어 하드코딩하지 않고 주입받는다(#106 app-p5).
+  // env 미설정 시 lib/env.ts 가 기본값("In Progress"/"Bot Review")을 채운다.
+  statusTriggersKickoff: string;
+  statusTriggersReview: string;
 }
-
-// Project v2 Status 필드 표준값
-const STATUS_TRIGGERS_KICKOFF = "In Progress";
-const STATUS_TRIGGERS_REVIEW = "Bot Review";
 
 const WORKFLOW_FILE_KICKOFF = "auto-kickoff.yml";
 const WORKFLOW_FILE_REVIEW = "auto-review.yml";
@@ -47,6 +48,10 @@ export function startStatusPoller(
       projectNumbers: options.projectNumbers,
       modules: options.modules,
       intervalMs: options.intervalMs,
+      // 트리거 컬럼명을 로그에 남긴다 — 컬럼명 오설정으로 폴러가 무음 정지할 때
+      // 운영자가 "무슨 컬럼값을 보고 있었나"를 즉시 확인할 수 있게(#106 app-p5).
+      statusTriggersKickoff: options.statusTriggersKickoff,
+      statusTriggersReview: options.statusTriggersReview,
     },
     "Status 폴러 시작"
   );
@@ -171,9 +176,9 @@ async function processProjectItem(
   if (item.issue.state === "CLOSED") return;
   if (!options.modules.includes(item.issue.repositoryName)) return;
 
-  if (item.status === STATUS_TRIGGERS_KICKOFF) {
+  if (item.status === options.statusTriggersKickoff) {
     await dispatchKickoffIfNotRunning(app, options, item);
-  } else if (item.status === STATUS_TRIGGERS_REVIEW) {
+  } else if (item.status === options.statusTriggersReview) {
     await dispatchReviewIfNotRunning(app, options, item);
   }
 }

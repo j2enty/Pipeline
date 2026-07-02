@@ -32,6 +32,7 @@
 #   author-login                   claude-commands.author-login
 #   local-account                  claude-commands.local-account
 #   docs-context-dir               claude-commands.docs-context-dir
+#   base-branch                    claude-commands.base-branch (기본 develop — kickoff PR/rebase 대상 base 브랜치)
 #   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
 #   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
 #                                  planner·review·kickoff·lead·default-status·cross-area-group)
@@ -77,12 +78,13 @@ if [ ! -f "$CONFIG_PATH" ]; then
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
     metrics.*-enabled) printf 'false\n' ;;  # 계측 토글 기본 OFF — opt-in (이식 안전)
+    base-branch) printf 'develop\n' ;;  # kickoff PR/rebase base 브랜치 — 기본 develop (다른 스칼라와 달리 빈값 아님)
     # --keys 는 정적 지원키 카탈로그라 config 유무와 무관하게 항상 동일 출력
     # (아래 python 블록의 --keys 분기와 동일 목록 — review 전용 4키 포함). --dump 는 부재 시 빈 게 맞음.
     --keys) printf '%s\n' \
       'owner' 'parent-repository' 'parent-repo-name' 'project-number' 'slack-channel' \
       'project-name' 'project-id' 'status-field-id' 'area-field-id' \
-      'author-login' 'local-account' 'docs-context-dir' 'area-id.<Name>' \
+      'author-login' 'local-account' 'docs-context-dir' 'base-branch' 'area-id.<Name>' \
       'reviewer-app-id' 'reviewer-bot-slug' 'reviewer-token-key' 'slack-token-key' \
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
       'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
@@ -289,6 +291,11 @@ def resolve(key):
     # project 섹션 스칼라
     if key in ('owner', 'parent-repository', 'slack-channel'):
         return get_scalar_in(PROJECT, key)
+    # base-branch — kickoff PR/rebase base 브랜치. 부재·빈값 모두 develop 폴백
+    # (cross-check-tool 과 동일 철학: get_scalar_in default 는 키 부재 시만 적용되므로
+    #  #57 빈따옴표 → 빈문자열을 한 번 더 develop 로 보정해 "항상 비지 않은 브랜치명" 불변식 보장).
+    if key == 'base-branch':
+        return get_scalar_in(CC, 'base-branch', 'develop') or 'develop'
     # claude-commands 섹션 스칼라
     # (review 전용 4키 reviewer-app-id·reviewer-bot-slug·reviewer-token-key·
     #  slack-token-key 포함 — install.sh parse_config() 와 동일하게 claude-commands
@@ -329,7 +336,7 @@ elif arg == '--keys':
     print('\n'.join([
         'owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
         'project-name', 'project-id', 'status-field-id', 'area-field-id',
-        'author-login', 'local-account', 'docs-context-dir', 'area-id.<Name>',
+        'author-login', 'local-account', 'docs-context-dir', 'base-branch', 'area-id.<Name>',
         # review 전용 4키 (--keys 카탈로그엔 노출 / --dump 값요약엔 미노출)
         'reviewer-app-id', 'reviewer-bot-slug', 'reviewer-token-key', 'slack-token-key',
         'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',

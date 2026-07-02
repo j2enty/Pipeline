@@ -155,7 +155,11 @@ MODULES=["Backend","iOS"]       # 영역 모듈 이름 (폴러 dispatch 대상 �
 MODULES_IGNORE=["Design"]       # sibling 집계 시 제외할 모듈
 REVIEWER_BOT_LOGIN=             # Reviewer 봇 로그인 prefix (review 핸들러 검증용)
 STATUS_POLLER_INTERVAL_MS=300000  # 폴링 간격 (옵션, 기본 5분)
+STATUS_TRIGGERS_KICKOFF=       # 폴러가 kickoff 를 트리거할 Status 컬럼값 (옵션, 기본 "In Progress")
+STATUS_TRIGGERS_REVIEW=        # 폴러가 review 를 트리거할 Status 컬럼값 (옵션, 기본 "Bot Review")
 ```
+
+> `STATUS_TRIGGERS_*` 는 config `project.status-triggers.{kickoff,review}` 에서 온다. 프로젝트가 Status 컬럼명을 바꾸면 반드시 함께 바꿔야 폴러가 무음 정지하지 않는다. 미설정(빈 값)이면 App(`lib/env.ts`)이 기본 컬럼명으로 폴백 — 컬럼명이 기본과 같은 프로젝트는 설정 없이도 동작한다(이식 안전).
 
 **장애 알림 경로** — App 이 장애 알림을 보낼 때 쓰는 설정(전부 옵션). Janus 게이트웨이를 우선하고, 비활성/실패 시 Slack 웹훅으로 폴백한다:
 
@@ -257,9 +261,9 @@ examples/
 
 - **레포 등록 제외**: `modules-ignore`에 있는 모듈은 `modules:`에 있어도 `install.sh`가 레포 등록(secret/variable/yml)·폴러 dispatch에서 제외한다. "config는 알지만 자동화 레포 관리는 안 하는 모듈"(예: Design)을 표현.
 
-### `/plan` 동작 키 카탈로그 (`claude-commands:` 항목)
+### `/plan`·`/kickoff` 동작 키 카탈로그 (`claude-commands:` 항목)
 
-`/plan` skill 이 실행 시 리더(`pipeline-config.sh`)로 읽는 동작 토글·도구 키. 새 동작 키가 필요하면 SKILL 에서 즉흥적으로 만들지 말고 이 카탈로그에 먼저 추가한다.
+슬래시커맨드(`/plan`·`/kickoff`)가 실행 시 리더(`pipeline-config.sh`)로 읽는 동작 토글·도구 키. 새 동작 키가 필요하면 SKILL 에서 즉흥적으로 만들지 말고 이 카탈로그에 먼저 추가한다. (`.plan` 접미 키는 `/plan` 전용, `claude-commands` 직속 스칼라는 소비 skill 이 개별로 다름 — 의미 열 참조.)
 
 | 키 | 위치 | 타입 | 기본값(미지정) | 의미 |
 |---|---|---|---|---|
@@ -268,6 +272,7 @@ examples/
 | `consistency-critic-dual-model` | `claude-commands.plan` | boolean | `true` | ⑤ 2차 모델 교차검증 on/off (on 이면 `cross-check-tool` 사용) |
 | `contract-doc-enabled` | `claude-commands.plan` | boolean | `true` | ② 영역 간 공유 계약 문서 생성 on/off |
 | `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어, 옛 oh-my-claudecode:ask 의 Pipeline 자체 대체) |
+| `base-branch` | `claude-commands` (직속) | string | `develop` | `/kickoff` 이 PR 생성(`gh pr create --base`)·재개 rebase(`git rebase origin/<base>`) 대상으로 쓰는 base 브랜치. `main` 이 기본인 새 프로젝트로 이식할 때 존재하지 않는 develop 참조 실패를 막는 주입 키. 빈값도 `develop` 로 폴백(항상 비지 않음). `install.sh` 는 파싱하지 않음 — 런타임 리더 전용(3벌 리더 공유 코어) |
 
 ### 계측 토글 카탈로그 (`claude-commands.metrics:` 항목)
 

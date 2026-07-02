@@ -64,6 +64,7 @@ bash "$CFG" project-id         # Prep Project ID
 bash "$CFG" status-field-id    # Status 필드 ID (Backlog/Planning/Ready/In Progress/Bot Review/In Review/Done)
 bash "$CFG" area-field-id      # Area 필드 ID
 bash "$CFG" docs-context-dir   # Context md 디렉토리
+bash "$CFG" base-branch        # PR·rebase base 브랜치 (기본 develop — 하드코딩 금지)
 ```
 
 | 이름 | 값 (config 키) |
@@ -74,6 +75,7 @@ bash "$CFG" docs-context-dir   # Context md 디렉토리
 | Project ID | `project-id` |
 | Status 필드 ID | `status-field-id` (Backlog/Planning/Ready/**In Progress**/**Bot Review**/**In Review**/Done) |
 | Area 필드 ID | `area-field-id` |
+| Base 브랜치 | `base-branch` (기본 develop — PR·rebase 대상) |
 | 상태 파일 | `.pipeline/state/sessions/<slug>.json` |
 | 컨텍스트 문서 | `<docs-context-dir>/<slug>-status.md` |
 
@@ -267,7 +269,7 @@ STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
 → 바로 처음부터 실행 (AskUserQuestion 없음)
 
 **G4-b. 자동 rebase**
-재개 경로에서 브랜치 체크아웃 후 `git -C <영역> fetch origin && git -C <영역> rebase origin/develop`. 충돌 발생 시 실패 유형 `즉시 에스컬 / 머지 충돌`로 분류하고 에스컬 플로우 발동.
+재개 경로에서 브랜치 체크아웃 후 `git -C <영역> fetch origin && git -C <영역> rebase origin/<base-branch>` (base 브랜치는 하드코딩하지 않고 config `base-branch` 에서 읽음 — `BASE_BRANCH="$(bash "$CFG" base-branch)"`, 기본 develop). 충돌 발생 시 실패 유형 `즉시 에스컬 / 머지 충돌`로 분류하고 에스컬 플로우 발동.
 
 ### 7. 런타임 결정 및 사용자 승인
 
@@ -435,9 +437,10 @@ fi
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
 OWNER="$(bash "$CFG" owner)"
 PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
+BASE_BRANCH="$(bash "$CFG" base-branch)"   # base 브랜치 하드코딩 금지 — config 주입(기본 develop)
 gh pr create \
   --repo "$OWNER/<영역>" \
-  --base develop \
+  --base "$BASE_BRANCH" \
   --head feature/#<sub-N>-<slug> \
   --title "<parent-title> — <영역>" \
   --body "$(cat <<EOF
