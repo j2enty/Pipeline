@@ -207,11 +207,17 @@ jobs:
               continue
             fi
 
-            # [M2] 머지 직전 상태 재확인 — 이미 MERGED/CLOSED 면 다른 경로(critic.yml native
-            # trigger 등)가 먼저 머지한 정상 케이스이므로 스킵한다(실패 아님).
+            # [M2] 머지 직전 상태 재확인. MERGED 는 다른 경로(critic.yml native trigger 등)가
+            # 먼저 머지한 정상 케이스라 조용히 스킵. CLOSED 는 사람이 머지 없이 닫은 것이라
+            # 의미가 다르므로(머지가 필요했는데 누군가 닫았을 수 있음) ::warning 으로 가시화한다
+            # — 둘 다 머지는 불가라 fail-open 구멍은 아니지만, 무음으로 흘리지 않는다.
             PR_STATE=$(gh pr view "$PR_NUM" --repo "$OWNER/$REPO" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
-            if [ "$PR_STATE" = "MERGED" ] || [ "$PR_STATE" = "CLOSED" ]; then
-              echo "  $OWNER/$REPO#$PR_NUM — 이미 $PR_STATE (다른 경로가 먼저 처리 — 스킵)"
+            if [ "$PR_STATE" = "MERGED" ]; then
+              echo "  $OWNER/$REPO#$PR_NUM — 이미 MERGED (다른 경로가 먼저 처리 — 스킵)"
+              continue
+            fi
+            if [ "$PR_STATE" = "CLOSED" ]; then
+              echo "::warning::  $OWNER/$REPO#$PR_NUM — 머지 없이 CLOSED 됨(사람이 닫음 의심). 이 영역은 머지되지 않으니 확인 필요."
               continue
             fi
 
