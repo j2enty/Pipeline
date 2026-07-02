@@ -30,7 +30,7 @@ project:
   # 미설정 시 기본값("In Progress" / "Bot Review") 사용 — 기본과 같으면 통째로 생략 가능.
   # ⚠️ 컬럼명을 바꿨는데 여기 반영하지 않으면 폴러 dispatch·SKILL 비교가 어긋나 무음 정지한다.
   # ⚠️ 재정의 가능한 건 이 두 트리거 컬럼뿐 — In Review/Ready/Backlog/Done 등 비-트리거
-  #    컬럼은 아직 기본명 고정(리네임 미지원).
+  #    컬럼은 아직 기본명 고정(리네임 미지원 — 전면 파라미터화는 후속 #115).
   # status-triggers:
   #   kickoff: "In Progress"
   #   review: "Bot Review"
