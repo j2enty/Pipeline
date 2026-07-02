@@ -1,0 +1,92 @@
+# critic-verdict-gate — critic 리뷰 verdict 를 결정적으로 파싱하는 재사용 composite action
+#
+# 무엇을: parse-critic-verdict.sh 를 호출해 "이번 critic 실행이 쓴 상태파일"의 verdict 를
+#         fail-closed 로 파싱하고, 결과(verdict + 식별된 상태파일 경로)를 step output 으로
+#         내보낸다. self-hosted 러너의 critic 워크플로(critic.yml / critic-dispatch.yml)가
+#         공유한다.
+#
+# 왜 composite 인가:
+#   verdict 파싱·fail-closed 방어(#9 sentinel 식별·#B marker stale·#A allowlist 정규화)가
+#   두 머지 경로에 각각 인라인되면 한쪽이 누락돼 fail-open 이 새는 사고(#99)가 난다.
+#   판정 로직을 단일 부품으로 추출해 "양쪽이 같은 게이트를 쓴다"를 구조로 강제한다
+#   (CLAUDE.md 원칙 4 "반복되는 step → composite action", track-findings·ensure-plugin 동일 패턴).
+#
+# 종속성 제로: 상태 디렉토리·parent URL·marker·sentinel·resolve 스크립트 경로 전부 input 주입
+#   (프로젝트 식별자 하드코딩 없음).
+# 실행 방식: 스크립트를 `bash <path>` 로 실행한다 — 체크아웃된 .sh 의 실행권한(+x)이
+#   core.fileMode·플랫폼에 따라 유실돼도 'Permission denied'(exit 126)로 죽지 않게 한다
+#   (ensure-plugin 과 동일 방어).
+
+name: critic-verdict-gate
+description: "critic 상태파일의 verdict 를 fail-closed 로 파싱해 verdict + 상태파일 경로를 output 으로 내보낸다"
+
+inputs:
+  verdict-state-dir:
+    description: "critic verdict 상태 파일 디렉토리"
+    required: true
+  parent-url:
+    description: "기대하는 parent issue URL — 상태파일 교차검증에 사용"
+    required: true
+  critic-run-marker:
+    description: "critic 실행 직전 touch 된 marker 파일 경로 (#B stale 검증용)"
+    required: true
+  review-state-sentinel:
+    description: "/review 가 자기 상태파일 절대경로를 기록한 sentinel 파일 경로 (선택 — #9)"
+    required: false
+    default: ''
+  resolve-script:
+    description: "resolve-review-statefile.sh 경로 (미지정 시 action 기준 상대경로로 자동 결정)"
+    required: false
+    default: ''
+
+outputs:
+  critic_verdict:
+    description: "pass | concerns | blocker | indeterminate 중 하나(allowlist 정규화 보장)"
+    value: ${{ steps.gate.outputs.critic_verdict }}
+  resolved_state_file:
+    description: "식별된 상태파일 절대경로 (indeterminate 면 빈값일 수 있음)"
+    value: ${{ steps.gate.outputs.resolved_state_file }}
+
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
+        PARENT_URL: ${{ inputs.parent-url }}
+        CRITIC_RUN_MARKER: ${{ inputs.critic-run-marker }}
+        REVIEW_STATE_SENTINEL: ${{ inputs.review-state-sentinel }}
+        INPUT_RESOLVE_SCRIPT: ${{ inputs.resolve-script }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        # resolve/parse 스크립트는 이 action 과 같은 Pipeline 체크아웃 안에 있다.
+        # action_path = <checkout>/actions/critic-verdict-gate → 스크립트는 ../../scripts/.
+        # resolve-script input 이 명시되면 그걸 우선 사용(테스트·경로 override 용).
+        RESOLVE_SH="${INPUT_RESOLVE_SCRIPT:-}"
+        if [ -z "$RESOLVE_SH" ]; then
+          RESOLVE_SH="$ACTION_PATH/../../scripts/resolve-review-statefile.sh"
+        fi
+        PARSE_SH="$ACTION_PATH/../../scripts/parse-critic-verdict.sh"
+
+        # parse-critic-verdict.sh 는 stdout 에 정확히 두 줄(verdict=/state_file=)을 낸다.
+        # ::error 진단은 stderr 로 나오므로 stdout 오염 없음. exit 는 항상 0(검증불능=verdict).
+        PARSE_OUT="$(RESOLVE_SH="$RESOLVE_SH" \
+          VERDICT_STATE_DIR="$VERDICT_STATE_DIR" \
+          PARENT_URL="$PARENT_URL" \
+          CRITIC_RUN_MARKER="$CRITIC_RUN_MARKER" \
+          REVIEW_STATE_SENTINEL="$REVIEW_STATE_SENTINEL" \
+          bash "$PARSE_SH")"
+
+        # 두 줄을 각각 뽑아 $GITHUB_OUTPUT 으로 매핑. 라인이 없으면(계약 위반) 빈값 →
+        # 다운스트림이 pass/concerns/blocker 어디에도 안 걸려 fail-closed(머지 차단).
+        VERDICT_LINE="$(printf '%s\n' "$PARSE_OUT" | grep '^verdict=' | head -1 || true)"
+        STATE_LINE="$(printf '%s\n' "$PARSE_OUT" | grep '^state_file=' | head -1 || true)"
+        echo "critic_verdict=${VERDICT_LINE#verdict=}" >> "$GITHUB_OUTPUT"
+        echo "resolved_state_file=${STATE_LINE#state_file=}" >> "$GITHUB_OUTPUT"
+
+        # marker 정리 — 남겨도 다음 실행이 새 run-id 로 touch 하므로 무방하나, 누적 방지로 제거.
+        # (원본 critic.yml verdict step 말미의 rm 을 이관 — 동작 보존.)
+        rm -f "${CRITIC_RUN_MARKER:-}"

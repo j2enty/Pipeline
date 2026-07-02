@@ -387,103 +387,21 @@ jobs:
             bash "${GITHUB_WORKSPACE}/.pipeline-action-checkout/scripts/claude-with-usage.sh" \
               "/pipeline:review $PARENT_URL --bot --critic-only"
 
+      # verdict 파싱·fail-closed 방어(#9 sentinel 식별·#B marker stale·#A allowlist 정규화)를
+      # critic-verdict-gate composite action 으로 추출해 critic-dispatch.yml 과 공유한다(#99).
+      # 판정 로직이 두 머지 경로에 각각 인라인되면 한쪽 누락 시 fail-open 이 새므로(감사 B1),
+      # 단일 부품으로 "양쪽이 같은 게이트를 쓴다"를 구조로 강제. 동작은 추출 전과 100% 동일.
+      # marker(CRITIC_RUN_MARKER)·sentinel(REVIEW_STATE_SENTINEL)은 위 "/review 실행" step 이
+      # GITHUB_ENV 로 공유한 값을 그대로 넘긴다. action 은 Pipeline 체크아웃 경로에서 로드한다
+      # (track-findings 와 동일하게 .pipeline-action-checkout 경유 — fail-fast 로 항상 존재).
       - name: Critic verdict 파싱
         id: verdict
-        env:
-          VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
-          PARENT_URL: ${{ needs.check-and-critic.outputs.parent_url }}
-        run: |
-          set -euo pipefail
-          # verdict 는 머지/blocker 분기를 결정하므로 "현재 parent" 상태파일을 정확히 읽어야 한다.
-          #
-          # [이슈 #9 — 결정적 식별 + 추측매칭 폴백]
-          # 1순위: Pipeline 레포가 체크아웃됐으면 resolve-review-statefile.sh 로 식별한다.
-          #   이 스크립트는 sentinel(이번 실행 /review 가 직접 기록한 절대경로)을 신뢰하고,
-          #   sentinel 이 없거나 무효이면 기존 추측매칭(.parent.url 정확매칭·단일강제)으로 폴백한다.
-          #   성공 시 STATE_FILE 절대경로를 stdout 1줄로 주고 exit 0, indeterminate 면 빈출력+exit 1.
-          # 2순위(폴백): Pipeline 미체크아웃(기존 caller — pipeline-repo 미설정)이면 스크립트가
-          #   없으므로 인라인 추측매칭으로 식별한다. → 회귀 0(스크립트 폴백과 동일 로직).
-          #
-          # 어느 경로든 결과는 "STATE_FILE(절대경로) + MATCH_COUNT(1=식별/0=indeterminate)"로 통일해
-          # 아래 marker(-nt) stale 검증 + verdict 읽기는 그대로 재사용한다.
-          # marker -nt 검증은 "어느 파일"과 별개의 방어(이번 실행이 그 파일을 새로 썼는지)라 계속 둔다.
-          RESOLVE_SH=".pipeline-action-checkout/scripts/resolve-review-statefile.sh"
-          MATCH_COUNT=0
-          STATE_FILE=""
-          if [ -f "$GITHUB_WORKSPACE/$RESOLVE_SH" ]; then
-            rc=0
-            STATE_FILE="$(VERDICT_STATE_DIR="$VERDICT_STATE_DIR" PARENT_URL="$PARENT_URL" \
-              REVIEW_STATE_SENTINEL="${REVIEW_STATE_SENTINEL:-}" \
-              bash "$GITHUB_WORKSPACE/$RESOLVE_SH" critic)" || rc=$?
-            if [ "$rc" -eq 0 ] && [ -n "$STATE_FILE" ]; then
-              MATCH_COUNT=1
-            else
-              MATCH_COUNT=0
-              STATE_FILE=""
-            fi
-          else
-            # 인라인 폴백 — .parent.url 정확매칭(jq) 단일강제. grep 부분매칭 금지
-            # (issues/3 이 issues/30·issues/35 까지 잡는 문제 회피).
-            if [ -d "$VERDICT_STATE_DIR" ]; then
-              for f in "$VERDICT_STATE_DIR"/*.json; do
-                [ -f "$f" ] || continue
-                if [ "$(jq -r '.parent.url // empty' "$f" 2>/dev/null)" = "$PARENT_URL" ]; then
-                  MATCH_COUNT=$((MATCH_COUNT + 1))
-                  STATE_FILE="$f"
-                fi
-              done
-            fi
-          fi
-
-          if [ "$MATCH_COUNT" -eq 1 ]; then
-            # 정확히 1개 매칭 — 정상 흐름 후보. 단, "이번 실행이 쓴 파일"인지 marker 로 검증한다.
-            #
-            # [버그 #B 방어 — stale 상태파일 오신뢰 차단, fail-closed]
-            # 매칭된 STATE_FILE 이 critic 실행 step 이 만든 marker 보다 "새것"(-nt)이어야
-            # "이번 실행이 새로 쓴 verdict"로 신뢰할 수 있다. marker 보다 older 면 이전 critic
-            # 실행이 남긴 stale 파일이고, 이번 실행이(버그/스키마 문제로) verdict 를 못 쓴 것이므로
-            # 낡은 pass 로 머지되지 않게 indeterminate 로 강등한다.
-            # marker 가 없으면(이론상 안 일어나지만 방어적으로) 검증 불능으로 처리한다.
-            if [ -z "${CRITIC_RUN_MARKER:-}" ] || [ ! -e "$CRITIC_RUN_MARKER" ]; then
-              echo "::error::critic verdict 검증 불능 — marker 파일 없음(critic 실행 step 미수행 의심). fail-closed 로 머지 차단."
-              CRITIC_VERDICT="indeterminate"
-            elif [ ! "$STATE_FILE" -nt "$CRITIC_RUN_MARKER" ]; then
-              echo "::error::critic verdict 검증 불능 — 매칭 상태파일($STATE_FILE)이 marker 보다 오래됨(stale). 이번 실행이 verdict 를 쓰지 않음. fail-closed 로 머지 차단."
-              CRITIC_VERDICT="indeterminate"
-            else
-              # 이번 실행이 쓴 파일 확정 — 그 파일의 verdict 를 읽는다.
-              CRITIC_VERDICT=$(jq -r '.aggregate.verdict // empty' "$STATE_FILE" 2>/dev/null || echo "")
-              # verdict 필드가 비어 있으면(스키마 손상 등) 검증 불능으로 강등 — fail-closed.
-              if [ -z "$CRITIC_VERDICT" ]; then
-                echo "::error::critic verdict 검증 불능 — 상태파일($STATE_FILE)에 .aggregate.verdict 없음/빈값"
-                CRITIC_VERDICT="indeterminate"
-              fi
-            fi
-          else
-            # 0개 또는 2개+ — 검증 불능(indeterminate). 어느 머지 step 의 if 에도 안 걸려 머지 안 됨.
-            echo "::error::critic verdict 검증 불능 — PARENT_URL($PARENT_URL) 매칭 상태파일 $MATCH_COUNT 개(0 또는 2개+). fail-closed 로 머지 차단."
-            CRITIC_VERDICT="indeterminate"
-          fi
-
-          # [버그 #A 방어 — verdict enum allowlist 정규화, GHA output 인젝션 차단]
-          # 비정상 multiline/임의 문자열이 GITHUB_OUTPUT(env-file 형식)을 깨거나 pass 로 오해석되지
-          # 않도록, GITHUB_OUTPUT 에 쓰기 "직전" allowlist 로 정규화한다. 화이트리스트 밖 값은
-          # 전부 indeterminate 로 흡수 → 출력은 항상 pass|concerns|blocker|indeterminate 중 하나.
-          # 비정상 값은 위 fail-closed 머지 차단 경로(if != pass/concerns/blocker)가 처리한다.
-          case "$CRITIC_VERDICT" in
-            pass|concerns|blocker) ;;
-            *) CRITIC_VERDICT="indeterminate" ;;
-          esac
-          echo "critic_verdict=$CRITIC_VERDICT" >> "$GITHUB_OUTPUT"
-
-          # [수정 4] verdict 파싱 step 이 식별한 STATE_FILE 경로를 output 으로 내보낸다.
-          # concerns-merge step 이 재식별 없이 이 값을 재사용한다(TOCTOU 제거 + 일관성).
-          # indeterminate 경로(빈값)도 그대로 내보낸다 — concerns-merge step 은
-          # critic_verdict==concerns 일 때만 실행되므로 빈값이면 추적 스킵으로 안전 처리됨.
-          echo "resolved-state-file=$STATE_FILE" >> "$GITHUB_OUTPUT"
-
-          # marker 정리 — 남겨도 다음 실행이 새 run-id 로 touch 하므로 무방하나, 누적 방지로 제거.
-          rm -f "${CRITIC_RUN_MARKER:-}"
+        uses: ./.pipeline-action-checkout/actions/critic-verdict-gate
+        with:
+          verdict-state-dir: ${{ inputs.verdict-state-dir }}
+          parent-url: ${{ needs.check-and-critic.outputs.parent_url }}
+          critic-run-marker: ${{ env.CRITIC_RUN_MARKER }}
+          review-state-sentinel: ${{ env.REVIEW_STATE_SENTINEL }}
 
       - name: App 토큰 발급
         id: merge-token
@@ -531,7 +449,7 @@ jobs:
           # 두 호출이 다른 결과를 낼 수 있는 TOCTOU 가 생긴다. verdict output 재사용으로
           # 스크립트 호출 1회 절약 + 두 step 일관성 보장.
           # tracking=false 면 STATE_FILE 이 빈값이어도 track-findings step 자체가 안 돌아 무방.
-          VERDICT_RESOLVED_STATE_FILE: ${{ steps.verdict.outputs.resolved-state-file }}
+          VERDICT_RESOLVED_STATE_FILE: ${{ steps.verdict.outputs.resolved_state_file }}
         run: |
           set -euo pipefail
           # 머지는 추적과 무관한 책임 — 항상 수행(기존 동작 보존, tracking 게이트 밖)
