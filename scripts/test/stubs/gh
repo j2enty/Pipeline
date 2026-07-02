@@ -91,6 +91,19 @@ if [ "${1:-}" = "api" ]; then
     # 전체 인자에서 GraphQL 쿼리 종류(organization vs user) 판별.
     # resolve_project_field_ids 의 query 문자열에 `organization(` / `user(` 가 그대로 들어있다.
     case "$*" in
+      *"closedByPullRequestsReferences"*)
+        # verify-sibling-approvals.sh 의 sibling 승인 조회.
+        #   실제 gh 는 json 을 내고 --jq '.data.repository.issue' 로 issue 객체만 뽑는다.
+        #   stub 은 그 --jq 결과(= issue 객체 JSON)를 GH_STUB_ISSUE_JSON 에서 그대로 출력한다
+        #   (post-jq 값을 직접 흉내 — GH_STUB_PROJECT_TSV 패턴과 동일). 스크립트는 이 출력에
+        #   자기 jq 를 다시 적용하므로 stub 은 issue 객체만 정확히 내주면 된다.
+        #   미설정이면 exit 1(조회 실패 모사 → verify-error 경로 게이트).
+        if [ -n "${GH_STUB_ISSUE_JSON:-}" ]; then
+          printf '%s\n' "$GH_STUB_ISSUE_JSON"
+          exit 0
+        fi
+        exit 1
+        ;;
       *"organization("*)
         # 구 GH_STUB_PROJECT_TSV 는 org 응답 호환 별칭 — 둘 중 설정된 값 사용.
         org_tsv="${GH_STUB_PROJECT_TSV_ORG:-${GH_STUB_PROJECT_TSV:-}}"
