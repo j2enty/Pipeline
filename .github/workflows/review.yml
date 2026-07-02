@@ -99,7 +99,7 @@ jobs:
       # pipeline-repo 가 비어 있으면 즉시 실패(fail-fast).
       # plugin 로드(아래 "Pipeline plugin 설치" step)는 Pipeline 레포 체크아웃을 설치
       # 소스로 쓴다. 그 체크아웃이 repository:'' 면 caller(영역) 레포를 받아 설치 스크립트가
-      # 없어 모호한 'No such file' 로 죽는다. critic.yml 과 동일하게 명시적 fail-fast 한다
+      # 없어 모호한 'No such file' 로 죽는다. critic-dispatch.yml 과 동일하게 명시적 fail-fast 한다
       # (pipeline-repo 가 required:false 라 GitHub 이 안 막아줌 — caller 누락을 여기서 잡는다).
       - name: pipeline-repo 설정 검증 (fail-fast)
         if: ${{ inputs.pipeline-repo == '' }}

@@ -643,7 +643,7 @@ install_caller_ymls() {
   local src="$REPO_ROOT/templates/caller-workflows"
   echo "  호출자 yml 설치 중..."
   for yml in auto-kickoff.yml auto-review.yml auto-merge.yml \
-             auto-critic.yml auto-critic-dispatch.yml parent-autoclose.yml; do
+             auto-critic-dispatch.yml parent-autoclose.yml; do
     [ -f "$src/$yml" ] || continue
     local content sha msg tmp_file
     tmp_file=$(mktemp)
