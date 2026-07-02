@@ -4,6 +4,24 @@ import type { StatusPollerOptions } from "../pollers/status-poller";
 // alert.ts 의 DEFAULT_COOLDOWN_MS 와 같은 값·같은 의미(1주기)지만 별개 상수로 둔다.
 export const DEFAULT_STATUS_POLLER_INTERVAL_MS = 300000;
 
+// 폴러가 kickoff/review 를 트리거할 Project v2 Status 컬럼값 기본값 (#106 app-p5).
+// 프로젝트가 컬럼명을 바꾸면 STATUS_TRIGGERS_KICKOFF / STATUS_TRIGGERS_REVIEW env 로
+// 덮어쓴다. 컬럼명이 이 기본값과 다른데 주입을 안 하면 폴러가 어떤 아이템도 트리거하지
+// 않고 "무음 정지"하므로, 값은 반드시 프로젝트 실제 컬럼명과 일치해야 한다.
+export const DEFAULT_STATUS_TRIGGERS_KICKOFF = "In Progress";
+export const DEFAULT_STATUS_TRIGGERS_REVIEW = "Bot Review";
+
+// STATUS_TRIGGERS_* env → Status 컬럼명. 미설정/빈 문자열/공백만 → 기본값 폴백.
+//   install.sh 가 config 값을 그대로 .env 에 쓰되(빈 값일 수 있음), 여기서 빈 값을
+//   기본값으로 보정해 "항상 비지 않은 컬럼명" 불변식을 보장한다(리더의 base-branch 와 동일 철학).
+function resolveStatusTrigger(
+  raw: string | undefined,
+  fallback: string
+): string {
+  const trimmed = (raw ?? "").trim();
+  return trimmed !== "" ? trimmed : fallback;
+}
+
 // STATUS_POLLER_INTERVAL_MS env → 안전한 interval ms.
 //   - 미설정 → 기본값
 //   - "5m"·"abc" 같은 비유한(NaN) 또는 0·음수 → 기본값으로 조용히 폴백
@@ -59,6 +77,14 @@ export function parsePollerConfigFromEnv(
   const modulesRaw = env.MODULES ?? "[]";
   const authorInstallationIdRaw = env.AUTHOR_INSTALLATION_ID ?? "";
   const intervalMs = resolvePollerIntervalMs(env.STATUS_POLLER_INTERVAL_MS);
+  const statusTriggersKickoff = resolveStatusTrigger(
+    env.STATUS_TRIGGERS_KICKOFF,
+    DEFAULT_STATUS_TRIGGERS_KICKOFF
+  );
+  const statusTriggersReview = resolveStatusTrigger(
+    env.STATUS_TRIGGERS_REVIEW,
+    DEFAULT_STATUS_TRIGGERS_REVIEW
+  );
 
   if (!ownerLogin) {
     return { disabledReason: "owner-missing" };
@@ -96,6 +122,8 @@ export function parsePollerConfigFromEnv(
       modules,
       authorInstallationId: Number(authorInstallationIdRaw),
       intervalMs,
+      statusTriggersKickoff,
+      statusTriggersReview,
     },
   };
 }

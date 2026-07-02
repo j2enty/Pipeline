@@ -314,6 +314,20 @@ print(f"TRACKING_ENABLED={tk_enabled}")
 print(f"TRACKING_MAJOR_LABEL='{get_scalar_in(tk_block, 'major-label', 'major-issue')}'")
 print(f"TRACKING_MINOR_LABEL='{get_scalar_in(tk_block, 'minor-label', 'minor-issue')}'")
 
+# ── status-triggers 섹션 — App 폴러가 kickoff/review 를 트리거할 Status 컬럼명 (#106 app-p5) ──
+# project.status-triggers.{kickoff,review} 하위맵을 슬라이스한 뒤 그 안에서만 읽는다.
+#   ⚠️ kickoff/review 키는 modules[].kickoff/review 플래그와 이름이 겹치므로 반드시 블록
+#   격리한다. 블록 경계는 area-ids 블록과 동일 패턴 — status-triggers 보다 '더 깊이'
+#   들여쓴 줄(\1[ \t]+\S)만 포함하고, 같은/얕은 들여쓰기(다음 형제 키·최상위 modules:)에서
+#   멈춘다. (\1\S 만 보는 앵커식은 col0 dedent 를 못 잡아 modules: 로 새어 module 의
+#   kickoff/review 플래그를 오독하므로 쓰지 않는다.)
+# 미지정 시 빈 값으로 emit → generate_env 가 그대로 .env 에 쓰고, App(lib/env.ts)이
+# 빈 값을 기본 컬럼명("In Progress"/"Bot Review")으로 폴백한다(기본값 단일 진실원 = App).
+st = re.search(r'^([ \t]+)status-triggers:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', content, re.MULTILINE)
+st_block = st.group(2) if st else ''
+print(f"STATUS_TRIGGERS_KICKOFF='{get_scalar_in(st_block, 'kickoff')}'")
+print(f"STATUS_TRIGGERS_REVIEW='{get_scalar_in(st_block, 'review')}'")
+
 PYEOF
 }
 
@@ -697,6 +711,8 @@ OWNER=$OWNER
 PROJECT_NUMBERS=$PROJECT_NUMBERS_JSON
 MODULES=$MODULES_JSON
 MODULES_IGNORE=$MODULES_IGNORE_JSON
+STATUS_TRIGGERS_KICKOFF=${STATUS_TRIGGERS_KICKOFF:-}
+STATUS_TRIGGERS_REVIEW=${STATUS_TRIGGERS_REVIEW:-}
 SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
 WEBHOOK_SECRET=$WEBHOOK_SECRET
 PORT=$PORT_VALUE

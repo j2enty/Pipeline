@@ -22,6 +22,19 @@ project:
   # 미설정 시 Slack 알림 스킵 (파이프라인은 정상 진행)
   slack-channel: ""
 
+  # kickoff/review 를 트리거하는 Project v2 Status 컬럼값.
+  # 두 소비자가 이 같은 값을 읽어 정렬한다:
+  #   (1) App 폴러 — 환경변수 STATUS_TRIGGERS_KICKOFF / STATUS_TRIGGERS_REVIEW 로 받아 dispatch
+  #   (2) /kickoff·/review SKILL — 이 config 를 읽어 sub-issue Status 비교·전환
+  # 프로젝트의 Status 컬럼명이 아래 기본값과 다르면 실제 컬럼명을 적는다.
+  # 미설정 시 기본값("In Progress" / "Bot Review") 사용 — 기본과 같으면 통째로 생략 가능.
+  # ⚠️ 컬럼명을 바꿨는데 여기 반영하지 않으면 폴러 dispatch·SKILL 비교가 어긋나 무음 정지한다.
+  # ⚠️ 재정의 가능한 건 이 두 트리거 컬럼뿐 — In Review/Ready/Backlog/Done 등 비-트리거
+  #    컬럼은 아직 기본명 고정(리네임 미지원 — 전면 파라미터화는 후속 #115).
+  # status-triggers:
+  #   kickoff: "In Progress"
+  #   review: "Bot Review"
+
 modules:
   # 자동화를 적용할 모듈 목록
   # 각 모듈은 영역 레포 하나에 대응 (예: Backend → <org>/Backend 레포)
@@ -150,6 +163,12 @@ claude-commands:
   #   용도로 best-effort 호출해 이 도구로 2차 의견을 구한다(미설치·실패 시 스킵 — 파이프라인은 막히지 않음).
   #   기본이 codex 라 보통은 생략 가능. 다른 도구로 바꿀 때만 명시(예: gemini).
   # cross-check-tool: "codex"
+
+  # /kickoff 이 PR 생성·재개 rebase 대상으로 쓰는 base 브랜치 (기본 develop).
+  #   기본 브랜치가 main 인 프로젝트로 이식하면 여기에 "main" 을 적는다(안 적으면
+  #   존재하지 않는 develop 으로 PR·rebase 시도 → 실패). 기본이 develop 라 develop
+  #   워크플로를 쓰는 프로젝트는 생략 가능.
+  # base-branch: "develop"
 
   # ── 구버전 area-ids 맵 — 이제 modules[].area-id 사용 권장 ──────────────
   # 영역(모듈)명 → Project v2 Area 옵션 ID(해시) 매핑.
