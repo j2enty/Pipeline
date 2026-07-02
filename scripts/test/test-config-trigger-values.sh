@@ -136,3 +136,47 @@ it "T-BB-4 config 파일 부재 시에도 base-branch 는 develop (fail-soft, ki
   assert_eq "develop" "$k" "kickoff config 부재 폴백 실패" || return
   assert_eq "develop" "$r" "review config 부재 폴백 실패" && pass
 )
+
+# ── (C) status-trigger-{kickoff,review} 리더 (M12 후속·app-p5 SKILL 배선) ──────
+# SKILL 이 하드코딩 대신 이 리더 키로 트리거 컬럼명을 읽는다. App env(STATUS_TRIGGERS_*)와
+# 같은 config(project.status-triggers.*)를 읽으므로 "폴러 dispatch ↔ SKILL 비교" 정렬이 핵심.
+
+it "T-STR-1 status-trigger-* 미지정 시 기본 컬럼명 (kickoff·plan·review 동일)"
+(
+  cfg="$(_make_no_base_config)"
+  for r in "$READER_KICKOFF" "$READER_PLAN" "$READER_REVIEW"; do
+    k="$(PIPELINE_CONFIG="$cfg" bash "$r" status-trigger-kickoff 2>/dev/null)"
+    v="$(PIPELINE_CONFIG="$cfg" bash "$r" status-trigger-review 2>/dev/null)"
+    assert_eq "In Progress" "$k" "kickoff 트리거 기본값 아님 ($r)" || { rm -f "$cfg"; return; }
+    assert_eq "Bot Review"  "$v" "review 트리거 기본값 아님 ($r)"  || { rm -f "$cfg"; return; }
+  done
+  rm -f "$cfg"; pass
+)
+
+it "T-STR-2 커스텀 컬럼명 + modules kickoff/review 플래그 이름충돌에도 정확 추출"
+(
+  # status-triggers.kickoff/review 와 modules[].kickoff/review(true/false) 가 공존.
+  # 블록 격리가 깨지면 리더가 모듈 플래그를 컬럼명으로 오독한다.
+  cfg="$(_make_custom_config)"
+  k="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" status-trigger-kickoff 2>/dev/null)"
+  v="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" status-trigger-review 2>/dev/null)"
+  assert_eq "작업중"   "$k" "kickoff 컬럼명 오독(모듈 플래그 누출?)" || { rm -f "$cfg"; return; }
+  assert_eq "리뷰대기" "$v" "review 컬럼명 오독(모듈 플래그 누출?)"  || { rm -f "$cfg"; return; }
+  assert_ne "true"  "$k" "모듈 kickoff=true 가 컬럼명으로 샘" || { rm -f "$cfg"; return; }
+  assert_ne "false" "$v" "모듈 review=false 가 컬럼명으로 샘" || { rm -f "$cfg"; return; }
+  rm -f "$cfg"; pass
+)
+
+it "T-STR-3 리더값 == install.sh STATUS_TRIGGERS_* (폴러 env ↔ SKILL 리더 정렬)"
+(
+  # 같은 커스텀 config 에서 App 폴러가 받을 env 값과 SKILL 리더 값이 일치해야
+  # 폴러 dispatch(작업중) ↔ SKILL G1 비교(작업중)가 end-to-end 로 맞물린다.
+  cfg="$(_make_custom_config)"
+  setup_install_env "$cfg"
+  eval "$(parse_config 2>/dev/null)"
+  rk="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" status-trigger-kickoff 2>/dev/null)"
+  rv="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" status-trigger-review 2>/dev/null)"
+  assert_eq "$STATUS_TRIGGERS_KICKOFF" "$rk" "kickoff: 폴러 env ≠ SKILL 리더(정렬 깨짐)" || { rm -f "$cfg"; return; }
+  assert_eq "$STATUS_TRIGGERS_REVIEW"  "$rv" "review: 폴러 env ≠ SKILL 리더(정렬 깨짐)"  || { rm -f "$cfg"; return; }
+  rm -f "$cfg"; pass
+)

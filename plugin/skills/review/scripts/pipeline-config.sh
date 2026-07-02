@@ -33,6 +33,8 @@
 #   local-account                  claude-commands.local-account
 #   docs-context-dir               claude-commands.docs-context-dir
 #   base-branch                    claude-commands.base-branch (기본 develop — kickoff PR/rebase 대상 base 브랜치)
+#   status-trigger-kickoff         project.status-triggers.kickoff (기본 In Progress — 폴러/SKILL kickoff 트리거 컬럼)
+#   status-trigger-review          project.status-triggers.review  (기본 Bot Review — 폴러/SKILL review 트리거 컬럼)
 #   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
 #   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
 #                                  planner·review·kickoff·lead·default-status·cross-area-group)
@@ -79,12 +81,15 @@ if [ ! -f "$CONFIG_PATH" ]; then
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
     metrics.*-enabled) printf 'false\n' ;;  # 계측 토글 기본 OFF — opt-in (이식 안전)
     base-branch) printf 'develop\n' ;;  # kickoff PR/rebase base 브랜치 — 기본 develop (다른 스칼라와 달리 빈값 아님)
+    status-trigger-kickoff) printf 'In Progress\n' ;;  # 폴러/SKILL kickoff 트리거 컬럼 — 기본 In Progress
+    status-trigger-review) printf 'Bot Review\n' ;;     # 폴러/SKILL review 트리거 컬럼 — 기본 Bot Review
     # --keys 는 정적 지원키 카탈로그라 config 유무와 무관하게 항상 동일 출력
     # (아래 python 블록의 --keys 분기와 동일 목록 — review 전용 4키 포함). --dump 는 부재 시 빈 게 맞음.
     --keys) printf '%s\n' \
       'owner' 'parent-repository' 'parent-repo-name' 'project-number' 'slack-channel' \
       'project-name' 'project-id' 'status-field-id' 'area-field-id' \
-      'author-login' 'local-account' 'docs-context-dir' 'base-branch' 'area-id.<Name>' \
+      'author-login' 'local-account' 'docs-context-dir' 'base-branch' \
+      'status-trigger-kickoff' 'status-trigger-review' 'area-id.<Name>' \
       'reviewer-app-id' 'reviewer-bot-slug' 'reviewer-token-key' 'slack-token-key' \
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
       'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
@@ -164,6 +169,14 @@ METRICS_BLOCK = metrics_m.group(2) if metrics_m else ''
 # claude-commands.area-ids 서브블록
 ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', CC, re.MULTILINE)
 AREA_BLOCK = ai.group(2) if ai else ''
+
+# project.status-triggers 서브블록 — 폴러/SKILL 공용 트리거 컬럼명(#106).
+# App(env)·install.sh·이 리더가 같은 config 값을 읽어 "폴러 dispatch ↔ SKILL 비교"가
+# 한 컬럼명으로 정렬되게 한다. 하위키 kickoff/review 는 modules[].kickoff/review 플래그와
+# 이름이 겹치므로 반드시 이 블록 내부에서만 읽는다(경계: area-ids 와 동일 패턴 — 더 깊은
+# 들여쓰기만 캡처, 형제/최상위 dedent 에서 멈춤).
+st = re.search(r'^([ \t]+)status-triggers:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', PROJECT, re.MULTILINE)
+STATUS_TRIGGERS_BLOCK = st.group(2) if st else ''
 
 def plan_bool(key, default='true'):
     """true/false 만 인정(따옴표 허용). 오타·누락 → default. install.sh get_plan_bool 동일."""
@@ -296,6 +309,13 @@ def resolve(key):
     #  #57 빈따옴표 → 빈문자열을 한 번 더 develop 로 보정해 "항상 비지 않은 브랜치명" 불변식 보장).
     if key == 'base-branch':
         return get_scalar_in(CC, 'base-branch', 'develop') or 'develop'
+    # status-trigger-{kickoff,review} — 폴러/SKILL 공용 트리거 컬럼명(#106). project.
+    # status-triggers.{kickoff,review} 에서 읽고, 부재·빈값 모두 기본 컬럼명으로 폴백해
+    # "항상 비지 않은 컬럼명" 불변식 보장(base-branch 와 동일 철학). App env 기본값과 일치.
+    if key == 'status-trigger-kickoff':
+        return get_scalar_in(STATUS_TRIGGERS_BLOCK, 'kickoff', 'In Progress') or 'In Progress'
+    if key == 'status-trigger-review':
+        return get_scalar_in(STATUS_TRIGGERS_BLOCK, 'review', 'Bot Review') or 'Bot Review'
     # claude-commands 섹션 스칼라
     # (review 전용 4키 reviewer-app-id·reviewer-bot-slug·reviewer-token-key·
     #  slack-token-key 포함 — install.sh parse_config() 와 동일하게 claude-commands
@@ -336,7 +356,9 @@ elif arg == '--keys':
     print('\n'.join([
         'owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
         'project-name', 'project-id', 'status-field-id', 'area-field-id',
-        'author-login', 'local-account', 'docs-context-dir', 'base-branch', 'area-id.<Name>',
+        'author-login', 'local-account', 'docs-context-dir', 'base-branch',
+        # 폴러/SKILL 공용 트리거 컬럼명 (project.status-triggers.*)
+        'status-trigger-kickoff', 'status-trigger-review', 'area-id.<Name>',
         # review 전용 4키 (--keys 카탈로그엔 노출 / --dump 값요약엔 미노출)
         'reviewer-app-id', 'reviewer-bot-slug', 'reviewer-token-key', 'slack-token-key',
         'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
