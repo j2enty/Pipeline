@@ -15,6 +15,9 @@
 
 READER_KICKOFF="$REPO_ROOT/plugin/skills/kickoff/scripts/pipeline-config.sh"
 READER_PLAN="$REPO_ROOT/plugin/skills/plan/scripts/pipeline-config.sh"
+# review 사본도 base-branch 회귀 매트릭스에 포함 — SP-3 가 kickoff↔review 바이트 동일을
+# 보장하지만, 3벌 중복이라 review 사본만 드리프트해도 동작 기준으로 잡히게 명시 검증한다.
+READER_REVIEW="$REPO_ROOT/plugin/skills/review/scripts/pipeline-config.sh"
 
 # ── (A) status-triggers → STATUS_TRIGGERS_* env ─────────────────────────
 
@@ -90,38 +93,46 @@ _make_no_base_config() {
   echo "$f"
 }
 
-it "T-BB-1 base-branch 미지정 시 기본 develop (plan·kickoff 동일)"
+it "T-BB-1 base-branch 미지정 시 기본 develop (plan·kickoff·review 동일)"
 (
   cfg="$(_make_no_base_config)"
   k="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" base-branch 2>/dev/null)"
   p="$(PIPELINE_CONFIG="$cfg" bash "$READER_PLAN" base-branch 2>/dev/null)"
+  r="$(PIPELINE_CONFIG="$cfg" bash "$READER_REVIEW" base-branch 2>/dev/null)"
   assert_eq "develop" "$k" "kickoff base-branch 기본값 아님" || { rm -f "$cfg"; return; }
   assert_eq "develop" "$p" "plan base-branch 기본값 아님"    || { rm -f "$cfg"; return; }
+  assert_eq "develop" "$r" "review base-branch 기본값 아님"  || { rm -f "$cfg"; return; }
   rm -f "$cfg"; pass
 )
 
-it "T-BB-2 base-branch 명시값(main)을 그대로 읽음 (plan·kickoff 동일)"
+it "T-BB-2 base-branch 명시값(main)을 그대로 읽음 (plan·kickoff·review 동일)"
 (
   cfg="$(mktemp)"
   printf 'project:\n  owner: acme\nclaude-commands:\n  base-branch: main\n' > "$cfg"
   k="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" base-branch 2>/dev/null)"
   p="$(PIPELINE_CONFIG="$cfg" bash "$READER_PLAN" base-branch 2>/dev/null)"
+  r="$(PIPELINE_CONFIG="$cfg" bash "$READER_REVIEW" base-branch 2>/dev/null)"
   assert_eq "main" "$k" "kickoff 명시값 미반영" || { rm -f "$cfg"; return; }
   assert_eq "main" "$p" "plan 명시값 미반영"    || { rm -f "$cfg"; return; }
+  assert_eq "main" "$r" "review 명시값 미반영"  || { rm -f "$cfg"; return; }
   rm -f "$cfg"; pass
 )
 
-it "T-BB-3 base-branch 빈값('')도 develop 로 폴백(항상 비지 않음)"
+it "T-BB-3 base-branch 빈값('')도 develop 로 폴백(항상 비지 않음, kickoff·review)"
 (
   cfg="$(mktemp)"
   printf 'project:\n  owner: acme\nclaude-commands:\n  base-branch: ""\n' > "$cfg"
   k="$(PIPELINE_CONFIG="$cfg" bash "$READER_KICKOFF" base-branch 2>/dev/null)"
-  assert_eq "develop" "$k" "빈값이 develop 로 폴백 안 됨" && pass
-  rm -f "$cfg"
+  r="$(PIPELINE_CONFIG="$cfg" bash "$READER_REVIEW" base-branch 2>/dev/null)"
+  assert_eq "develop" "$k" "kickoff 빈값이 develop 로 폴백 안 됨" || { rm -f "$cfg"; return; }
+  assert_eq "develop" "$r" "review 빈값이 develop 로 폴백 안 됨"  || { rm -f "$cfg"; return; }
+  rm -f "$cfg"; pass
 )
 
-it "T-BB-4 config 파일 부재 시에도 base-branch 는 develop (fail-soft)"
+it "T-BB-4 config 파일 부재 시에도 base-branch 는 develop (fail-soft, kickoff·review)"
 (
   k="$(PIPELINE_CONFIG=/nonexistent-$$.yml bash "$READER_KICKOFF" base-branch 2>/dev/null)"
-  assert_eq "develop" "$k" "config 부재 폴백 실패" && pass
+  r="$(PIPELINE_CONFIG=/nonexistent-$$.yml bash "$READER_REVIEW" base-branch 2>/dev/null)"
+  assert_eq "develop" "$k" "kickoff config 부재 폴백 실패" || return
+  assert_eq "develop" "$r" "review config 부재 폴백 실패" && pass
 )
