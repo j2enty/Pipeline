@@ -33,11 +33,20 @@ on:
         type: string
         required: false
         default: 'main'
+      verdict-state-dir:
+        description: "critic verdict 상태 파일 디렉토리 (critic.yml 과 동일 기본값 — 기존 caller 하위호환)"
+        type: string
+        required: false
+        default: '.pipeline/state/reviews'
     secrets:
       AUTHOR_APP_ID:
         required: true
       AUTHOR_PRIVATE_KEY:
         required: true
+      # verdict 가 blocker/검증불능일 때 Slack 에스컬레이션에 사용. 미설정이면 Slack 스킵
+      # (기본 caller 하위호환 — critic.yml 과 동일하게 optional).
+      SLACK_WEBHOOK_URL:
+        required: false
 
 permissions:
   contents: read
@@ -105,20 +114,55 @@ jobs:
       - name: /pipeline:review --bot (critic-only) 실행
         env:
           PARENT_URL: ${{ inputs.parent-url }}
-          # 계측 래퍼 주입 — 토글 ON 일 때만 parent 이슈에 시간·토큰·비용 코멘트 박제.
-          # 토글 OFF·리더 부재 시 기존과 100% 동일(같은 exit/로그). 래퍼 주석 참조.
-          USAGE_METRICS_TARGET: ${{ inputs.parent-url }}
-          USAGE_METRICS_LABEL: critic-dispatch
-          PIPELINE_CONFIG_READER: ${{ github.workspace }}/.pipeline-action-checkout/plugin/skills/review/scripts/pipeline-config.sh
+          VERDICT_STATE_DIR: ${{ inputs.verdict-state-dir }}
         run: |
           set -euo pipefail
+          # [버그 #B 방어 — marker 방식 fail-closed] (critic.yml 과 동일 패턴)
+          # critic 실행 "직전"에 marker 파일을 만든다. 아래 verdict 게이트는 매칭된 상태파일이
+          # 이 marker 보다 "새것"(-nt)인지 확인해 "이번 실행이 쓴 파일"임을 검증한다.
+          # 이전 실행이 남긴 stale 상태파일을 이번 결과로 오신뢰해 낡은 pass 로 머지되던 사고를 차단.
+          # marker 경로는 같은 job(self-hosted) 내 다음 step 과 GITHUB_ENV 로 공유한다.
+          mkdir -p "$VERDICT_STATE_DIR"
+          CRITIC_RUN_MARKER="$VERDICT_STATE_DIR/.critic-run-marker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          touch "$CRITIC_RUN_MARKER"
+          echo "CRITIC_RUN_MARKER=$CRITIC_RUN_MARKER" >> "$GITHUB_ENV"
+
+          # [이슈 #9 — sentinel 결정적 식별] (critic.yml 과 동일 패턴)
+          # /review 가 "이번 실행이 최종적으로 쓴 STATE_FILE 절대경로"를 직접 기록할 sentinel 을
+          # 준비한다(run-id+attempt 로 동시실행/재시도 격리). 아래 verdict 게이트가 이 sentinel 을
+          # 읽어 상태파일을 추측 없이 식별한다. /review 가 안 쓰면 추측매칭으로 폴백(하위호환).
+          REVIEW_STATE_SENTINEL="$VERDICT_STATE_DIR/.review-statefile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.path"
+          rm -f "$REVIEW_STATE_SENTINEL"
+          echo "REVIEW_STATE_SENTINEL=$REVIEW_STATE_SENTINEL" >> "$GITHUB_ENV"
+
           # /pipeline:review 는 위 "Pipeline plugin 설치" step 이 user scope 로 설치한
           # plugin 에서 로드된다(--plugin-dir 아님 — 신뢰 게이트 우회, 이슈 #31).
-          # claude 직접 호출 대신 계측 래퍼로 감싼다 — exit code·로그·플래그 보존(래퍼 주석 참조).
-          bash "${GITHUB_WORKSPACE}/.pipeline-action-checkout/scripts/claude-with-usage.sh" \
-            "/pipeline:review $PARENT_URL --bot --critic-only"
+          # 계측 래퍼로 감싼다 — REVIEW_STATE_SENTINEL 은 래퍼→claude 로 그대로 상속된다.
+          # 토글 ON 일 때만 parent 이슈에 코멘트 박제. OFF·리더 부재 시 기존과 100% 동일.
+          REVIEW_STATE_SENTINEL="$REVIEW_STATE_SENTINEL" \
+          USAGE_METRICS_TARGET="$PARENT_URL" \
+          USAGE_METRICS_LABEL="critic-dispatch" \
+          PIPELINE_CONFIG_READER="${GITHUB_WORKSPACE}/.pipeline-action-checkout/plugin/skills/review/scripts/pipeline-config.sh" \
+            bash "${GITHUB_WORKSPACE}/.pipeline-action-checkout/scripts/claude-with-usage.sh" \
+              "/pipeline:review $PARENT_URL --bot --critic-only"
 
+      # verdict 게이트 — critic.yml 과 "동일 부품"(critic-verdict-gate composite)을 쓴다.
+      # 이 step 이 없어 캐노니컬 머지 경로가 verdict 를 안 읽고 무조건 머지하던 fail-open 구멍(#99)을
+      # 닫는다. 결과(critic_verdict/resolved_state_file)로 아래 머지·차단 분기를 결정한다.
+      - name: Critic verdict 파싱
+        id: verdict
+        uses: ./.pipeline-action-checkout/actions/critic-verdict-gate
+        with:
+          verdict-state-dir: ${{ inputs.verdict-state-dir }}
+          parent-url: ${{ inputs.parent-url }}
+          critic-run-marker: ${{ env.CRITIC_RUN_MARKER }}
+          review-state-sentinel: ${{ env.REVIEW_STATE_SENTINEL }}
+
+      # verdict 게이트 — pass/concerns 일 때만 머지한다(#99 fail-closed).
+      # blocker/indeterminate 는 아래 전용 차단 step 이 받아 에스컬레이션 + exit 1.
+      # (M3 승인 재검증은 이번 PR 범위 아님 — PR2 에서 check-and-critic 공유 추출로 이식.)
       - name: 모든 영역 PR squash merge
+        if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'concerns'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PARENT_URL: ${{ inputs.parent-url }}
@@ -139,6 +183,9 @@ jobs:
           echo "머지 대상:"
           echo "$SIBLINGS"
 
+          # [M2] 실패 삼킴 제거 — 실제 머지 실패는 FAILED 플래그로 모아 루프 후 exit 1.
+          # 이미 MERGED/CLOSED 인 PR 은 "다른 경로가 먼저 처리한 정상 케이스"라 스킵(실패 아님).
+          FAILED=0
           while IFS=' ' read -r REPO SUB_NUM; do
             [ -z "$REPO" ] && continue
             # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
@@ -159,10 +206,86 @@ jobs:
               echo "  $REPO#$SUB_NUM — open PR 없음 (스킵)"
               continue
             fi
+
+            # [M2] 머지 직전 상태 재확인 — 이미 MERGED/CLOSED 면 다른 경로(critic.yml native
+            # trigger 등)가 먼저 머지한 정상 케이스이므로 스킵한다(실패 아님).
+            PR_STATE=$(gh pr view "$PR_NUM" --repo "$OWNER/$REPO" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+            if [ "$PR_STATE" = "MERGED" ] || [ "$PR_STATE" = "CLOSED" ]; then
+              echo "  $OWNER/$REPO#$PR_NUM — 이미 $PR_STATE (다른 경로가 먼저 처리 — 스킵)"
+              continue
+            fi
+
             echo "  $REPO#$PR_NUM squash merge..."
-            gh pr merge "$PR_NUM" --squash --repo "$OWNER/$REPO" || \
-              echo "  $REPO#$PR_NUM 머지 실패"
+            # [M2] '|| echo 실패' 로 삼키지 않는다 — 실제 머지 실패는 FAILED 로 표시.
+            if gh pr merge "$PR_NUM" --squash --repo "$OWNER/$REPO"; then
+              echo "  $REPO#$PR_NUM 머지 완료"
+            else
+              echo "::error::  $OWNER/$REPO#$PR_NUM 머지 실패"
+              FAILED=1
+            fi
           done <<< "$SIBLINGS"
+
+          # [M2] 하나라도 실제 실패면 non-zero 종료 → 아래 'if: failure()' 에스컬 step 이 받음.
+          if [ "$FAILED" != "0" ]; then
+            echo "::error::하나 이상의 영역 PR 머지 실패 — fail-closed 로 non-zero 종료(수동 처리 필요)."
+            exit 1
+          fi
+
+      # verdict=blocker — 머지하지 않고 parent 코멘트 + Slack 에스컬 + exit 1 (critic.yml 이식).
+      - name: Blocker — Slack 에스컬레이션 + 머지 차단
+        if: steps.verdict.outputs.critic_verdict == 'blocker'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
+          BODY=$(printf '## 🚨 critic blocker 발견 — 머지 차단\n\ncritic 리뷰에서 blocker 가 발견됐어요. 머지 전 확인이 필요합니다.\n\n**Actions 로그**: %s' "$RUN_URL")
+          COMMENT_URL=$(gh issue comment "$PARENT_URL" \
+            --body "$BODY" \
+            --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
+
+          if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+            PAYLOAD=$(jq -n \
+              --arg title "critic blocker — 머지 차단" \
+              --arg url "$COMMENT_URL" \
+              --arg context "parent: $PARENT_URL" \
+              '{text: "🚨 *\($title)*\n\($context)\n👀 <\($url)|GitHub 코멘트 열기>"}')
+            curl -sS -X POST -H 'Content-type: application/json' \
+              --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
+          fi
+          exit 1
+
+      # fail-closed 차단 경로: verdict 가 pass/concerns/blocker 중 어느 것도 아니면
+      # (indeterminate=0건/복수 매칭·stale·빈값 등) 검증 불능이므로 머지하지 않고 차단 +
+      # 에스컬레이션한다. 위 머지 step 의 if 는 pass/concerns 만이라 indeterminate 는 안 걸린다.
+      # (critic.yml 의 "검증 불능" step 이식 — 동일 부품/동일 처방.)
+      - name: 검증 불능 — Slack 에스컬레이션 + 머지 차단 (fail-closed)
+        if: steps.verdict.outputs.critic_verdict != 'pass' && steps.verdict.outputs.critic_verdict != 'concerns' && steps.verdict.outputs.critic_verdict != 'blocker'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          CRITIC_VERDICT: ${{ steps.verdict.outputs.critic_verdict }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
+          BODY=$(printf '## ⚠️ critic verdict 검증 불능 — 머지 차단\n\ncritic verdict 를 확정할 수 없어 머지를 차단했어요(상태파일 매칭 0개 또는 복수, 혹은 verdict 빈값). verdict 값: %s. 사람이 확인 후 진행이 필요합니다.\n\n**Actions 로그**: %s' "$CRITIC_VERDICT" "$RUN_URL")
+          COMMENT_URL=$(gh issue comment "$PARENT_URL" \
+            --body "$BODY" \
+            --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
+
+          if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+            PAYLOAD=$(jq -n \
+              --arg title "critic verdict 검증 불능 — 머지 차단" \
+              --arg url "$COMMENT_URL" \
+              --arg context "parent: $PARENT_URL" \
+              '{text: "⚠️ *\($title)*\n\($context)\n👀 <\($url)|GitHub 코멘트 열기>"}')
+            curl -sS -X POST -H 'Content-type: application/json' \
+              --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
+          fi
+          exit 1
 
       - name: 에스컬레이션 (실패 시)
         if: failure()

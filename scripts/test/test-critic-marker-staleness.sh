@@ -19,7 +19,10 @@
 #   install.sh 불필요 → setup_install_env 안 씀.
 
 RESOLVE_SH="$REPO_ROOT/scripts/resolve-review-statefile.sh"
-CRITIC_YML="$REPO_ROOT/.github/workflows/critic.yml"
+# #99 — verdict 파싱(marker -nt stale 검증 포함)이 critic.yml 인라인에서
+# parse-critic-verdict.sh 로 추출됐다(critic.yml·critic-dispatch.yml 공유 부품).
+# anti-drift 가드는 이제 그 추출본을 대상으로 한다.
+PARSE_SH="$REPO_ROOT/scripts/parse-critic-verdict.sh"
 
 # 더미 상태파일 작성 — write_state_json <경로> <parent_url> [verdict]
 # critic.yml 이 읽는 .parent.url(식별)·.aggregate.verdict(판정) 둘 다 채운다.
@@ -53,7 +56,7 @@ resolve_and_judge() {
   # 아래 STATE_FILE 변수명은 critic.yml 스니펫과 문자 일치를 위해 의도적으로 동일하게 쓴다.
   local STATE_FILE="$state_file"
   if [ "$match_count" -eq 1 ]; then
-    # >>> critic.yml 404-417줄과 문자 그대로 동일 (anti-drift; MS-DRIFT 가 동기화 단언) >>>
+    # >>> parse-critic-verdict.sh 와 문자 그대로 동일 (anti-drift; MS-DRIFT 가 동기화 단언) >>>
     if [ -z "${CRITIC_RUN_MARKER:-}" ] || [ ! -e "$CRITIC_RUN_MARKER" ]; then
       CRITIC_VERDICT="indeterminate"
     elif [ ! "$STATE_FILE" -nt "$CRITIC_RUN_MARKER" ]; then
@@ -163,22 +166,22 @@ it "MS-4 sentinel 없음(resolve 내부 폴백) + stale → indeterminate"
   rm -rf "$dir"; pass
 )
 
-# MS-DRIFT — anti-drift 가드: critic.yml 에 stale 검증 핵심 라인이 실제로 존재하는지 grep.
-# 위 resolve_and_judge 의 -nt 스니펫은 critic.yml 과 문자 일치를 전제로 한다.
-# critic.yml 이 이 검증을 바꾸면 이 케이스가 fail 해 동기화를 강제한다.
-it "MS-DRIFT critic.yml stale 검증 라인 존재(동기화 가드)"
+# MS-DRIFT — anti-drift 가드: parse-critic-verdict.sh 에 stale 검증 핵심 라인이 존재하는지 grep.
+# 위 resolve_and_judge 의 -nt 스니펫은 parse-critic-verdict.sh 와 문자 일치를 전제로 한다.
+# 그 검증을 바꾸면 이 케이스가 fail 해 동기화를 강제한다(#99 이후 추출본이 SSOT).
+it "MS-DRIFT parse-critic-verdict.sh stale 검증 라인 존재(동기화 가드)"
 (
-  # needle 은 critic.yml 의 raw 텍스트와 매칭할 고정문자열이라 변수 확장을 의도적으로 막는다.
+  # needle 은 스크립트 raw 텍스트와 매칭할 고정문자열이라 변수 확장을 의도적으로 막는다.
   # shellcheck disable=SC2016
   needle='[ ! "$STATE_FILE" -nt "$CRITIC_RUN_MARKER" ]'
-  if [ ! -f "$CRITIC_YML" ]; then
-    fail "critic.yml 을 찾을 수 없음: $CRITIC_YML"
+  if [ ! -f "$PARSE_SH" ]; then
+    fail "parse-critic-verdict.sh 를 찾을 수 없음: $PARSE_SH"
     return
   fi
   # -F 고정문자열 매칭(정규식 메타문자 회피). 1건 이상이어야 통과.
-  if grep -qF -- "$needle" "$CRITIC_YML"; then
+  if grep -qF -- "$needle" "$PARSE_SH"; then
     pass
   else
-    fail "critic.yml stale 검증 로직이 변경됨 — 이 테스트(resolve_and_judge 의 -nt 스니펫)를 critic.yml 과 동기화하라"
+    fail "parse-critic-verdict.sh stale 검증 로직이 변경됨 — 이 테스트(resolve_and_judge 의 -nt 스니펫)를 동기화하라"
   fi
 )

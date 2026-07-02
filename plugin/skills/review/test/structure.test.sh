@@ -174,28 +174,30 @@ SCHEMA_8CBIS="$(awk '/^## 8-c-bis/{f=1; next} f&&/^## /{exit} f{print}' "$SCHEMA
 if printf '%s' "$SCHEMA_8CBIS" | grep -q 'criticVerdict'; then
   fail "(D-6d-1) state-schema 8-c-bis criticVerdict 死문 부재"; else pass "(D-6d-1) state-schema 8-c-bis criticVerdict 死문 부재"; fi
 # D-6d-2 GHA 계약 잠금 (#47 핵심): aggregate.verdict 의 enum 예시가 critic 종합 verdict
-#   (pass|concerns|blocker)로 존재하고, 실제 소비자 critic.yml 의 verdict allowlist(case)와
-#   토큰 집합이 정확히 일치하는지 검증. 문서↔GHA 한쪽만 바뀌면 FAIL → 런타임 계약 깨짐 사전 차단.
+#   (pass|concerns|blocker)로 존재하고, 실제 소비자의 verdict allowlist(case)와 토큰 집합이
+#   정확히 일치하는지 검증. 문서↔소비자 한쪽만 바뀌면 FAIL → 런타임 계약 깨짐 사전 차단.
 #   (이번 #47 의 critical: 8-c-bis enum 을 approved/changes-requested/escalated 로 바꿔
-#    critic.yml allowlist 와 어긋났는데 기존 테스트가 못 잡았음 → 이 테스트가 그걸 잠근다.)
-CRITIC_YML="$TEST_DIR/../../../../.github/workflows/critic.yml"
+#    allowlist 와 어긋났는데 기존 테스트가 못 잡았음 → 이 테스트가 그걸 잠근다.)
+#   #99: allowlist 소비자가 critic.yml 인라인에서 parse-critic-verdict.sh 로 추출됐다
+#   (critic.yml·critic-dispatch.yml 공유 부품). 따라서 계약 잠금 대상도 추출본으로 옮긴다.
+VERDICT_ALLOWLIST_SH="$TEST_DIR/../../../../scripts/parse-critic-verdict.sh"
 # 8-c-bis 예시에서 "verdict": "a" | "b" | "c" 의 값 토큰만 추출(키 "verdict" 자체는 제외).
 #   colon 뒤의 값 부분만 잘라낸 뒤 따옴표 안 소문자 토큰을 모은다.
 schema_enum="$(printf '%s' "$SCHEMA_8CBIS" \
   | grep -E '"verdict":' | sed -E 's/^.*"verdict":[[:space:]]*//' \
   | grep -oE '"[a-z]+"' | tr -d '"' | sort -u | paste -sd'|' -)"
-if [ -f "$CRITIC_YML" ]; then
-  # critic.yml 의 allowlist case 라인(예: `pass|concerns|blocker) ;;`)에서 토큰 추출.
+if [ -f "$VERDICT_ALLOWLIST_SH" ]; then
+  # parse-critic-verdict.sh 의 allowlist case 라인(예: `pass|concerns|blocker) ;;`)에서 토큰 추출.
   #   indeterminate 는 allowlist 통과값이 아니라 fallback(*) 흡수값이므로 계약 enum 에서 제외.
-  yml_enum="$(grep -oE '^[[:space:]]*[a-z|]+\)[[:space:]]*;;' "$CRITIC_YML" \
+  yml_enum="$(grep -oE '^[[:space:]]*[a-z|]+\)[[:space:]]*;;' "$VERDICT_ALLOWLIST_SH" \
     | grep -F 'pass' | grep -oE '[a-z]+' | grep -v '^indeterminate$' | sort -u | paste -sd'|' -)"
   if [ -n "$schema_enum" ] && [ "$schema_enum" = "$yml_enum" ]; then
-    pass "(D-6d-2) 8-c-bis aggregate.verdict enum($schema_enum) ↔ critic.yml allowlist($yml_enum) 일치"
+    pass "(D-6d-2) 8-c-bis aggregate.verdict enum($schema_enum) ↔ verdict allowlist($yml_enum) 일치"
   else
-    fail "(D-6d-2) 8-c-bis aggregate.verdict enum($schema_enum) ≠ critic.yml allowlist($yml_enum) — 런타임 계약 불일치"
+    fail "(D-6d-2) 8-c-bis aggregate.verdict enum($schema_enum) ≠ verdict allowlist($yml_enum) — 런타임 계약 불일치"
   fi
 else
-  fail "(D-6d-2) critic.yml 존재: $CRITIC_YML"
+  fail "(D-6d-2) parse-critic-verdict.sh 존재: $VERDICT_ALLOWLIST_SH"
 fi
 # (P3.1) D-6e 의 tmpl 동기 검증은 제거했다 — 배포 SSOT 가 SKILL.md 로 일원화됐다.
 #   원래 D-6e 가 보던 두 불변식은 plugin 자산 대상으로 이미 보존된다:
