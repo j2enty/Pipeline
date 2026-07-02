@@ -168,17 +168,21 @@ gh api /repos/$OWNER/$PARENT_REPO_NAME/issues/<parent-N>/sub_issues
 
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
-OWNER="$(bash "$CFG" owner)"
 PROJECT_NUMBER="$(bash "$CFG" project-number)"
 # Project item + Status · Area 필드 조회
+# [#103/M14] items(first:100) 무페이지네이션은 프로젝트 아이템이 100개를 넘으면 101번째부터
+#   누락돼, 새 sub-issue 가 조회 안 돼 "kickoff 미등록"으로 오판될 수 있다. 대신 sub-issue
+#   노드에서 projectItems 로 역조회한다 — 한 이슈가 속한 프로젝트 수는 사실상 1~2개라
+#   무페이지네이션 문제가 원천 소멸(누락 없음). PROJECT_NUMBER 로 대상 프로젝트의 item 만
+#   골라 Status·Area 필드값을 읽는다.
 gh api graphql -f query='
-query($owner: String!, $number: Int!, $issueId: ID!) {
-  organization(login: $owner) {
-    projectV2(number: $number) {
-      items(first: 100) {
+query($issueId: ID!) {
+  node(id: $issueId) {
+    ... on Issue {
+      projectItems(first: 50) {
         nodes {
           id
-          content { ... on Issue { id } }
+          project { number }
           fieldValues(first: 20) {
             nodes {
               ... on ProjectV2ItemFieldSingleSelectValue {
@@ -191,7 +195,9 @@ query($owner: String!, $number: Int!, $issueId: ID!) {
       }
     }
   }
-}' -f owner="$OWNER" -F number="$PROJECT_NUMBER" -f issueId=<sub-issue-node-id>
+}' -f issueId=<sub-issue-node-id> \
+  --jq '.data.node.projectItems.nodes[]' \
+  | jq --argjson pn "$PROJECT_NUMBER" 'select(.project.number == $pn)'
 ```
 
 - 각 sub-issue별로 `{ area, repo, number, nodeId, status, assignees, branch:"feature/#<N>-<SLUG>" }` 구조체로 정리
