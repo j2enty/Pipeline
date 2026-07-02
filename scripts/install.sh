@@ -92,12 +92,12 @@ while [ $# -gt 0 ]; do
       INSTALL_LOCAL_PLUGIN=true; shift ;;
     --runner-root)
       if [ -z "${2:-}" ] || [ "${2#-}" != "$2" ]; then
-        echo "❌ --runner-root 에 값이 필요합니다 (예: --runner-root ~/actions-runner)" >&2; exit 1
+        echo "❌ --runner-root 에 값이 필요합니다 (예: --runner-root /opt/actions-runner — 절대경로 권장)" >&2; exit 1
       fi
       RUNNER_ROOT="$2"; shift 2 ;;
     --runner-config-dir)
       if [ -z "${2:-}" ] || [ "${2#-}" != "$2" ]; then
-        echo "❌ --runner-config-dir 에 값이 필요합니다 (예: --runner-config-dir ~/actions-runner/.claude-pipeline-runner)" >&2; exit 1
+        echo "❌ --runner-config-dir 에 값이 필요합니다 (예: --runner-config-dir /opt/actions-runner/.claude-pipeline-runner — 절대경로 권장)" >&2; exit 1
       fi
       RUNNER_CONFIG_DIR="$2"; shift 2 ;;
     --port)
@@ -189,12 +189,19 @@ check_requirements() {
 # ── 러너 .env 에 CLAUDE_CONFIG_DIR 멱등 기록 (이슈 #96) ─────────────────────
 # self-hosted 러너는 루트의 .env(KEY=VALUE 리터럴)를 읽어 모든 job 에 환경변수를 준다.
 # 기존 CLAUDE_CONFIG_DIR 라인만 치환하고 나머지 라인은 보존 → 여러 번 실행해도 안전.
+# tmp 를 .env 와 "같은 디렉토리"에 만들어 동일 FS rename(원자적)을 보장하고, 기존 파일이
+# 있으면 퍼미션을 승계한다(chmod --reference 는 GNU 전용 — 타깃 macOS 대응 위해 stat 폴백).
+# 주의: env_file 이 심링크면 rename 이 심링크를 일반 파일로 대체한다(러너 .env 심링크는 비표준).
 write_runner_env() {
-  local env_file="$1" cfg_dir="$2" tmp
-  tmp="$(mktemp)"
+  local env_file="$1" cfg_dir="$2" tmp dir mode
+  dir="$(dirname "$env_file")"
+  tmp="$(mktemp "$dir/.env.XXXXXX")"
   # 기존 파일에서 CLAUDE_CONFIG_DIR 라인만 빼고 복사(없으면 빈 tmp). grep 무매치(exit 1)는 정상.
   if [ -f "$env_file" ]; then
     grep -v '^CLAUDE_CONFIG_DIR=' "$env_file" > "$tmp" || true
+    # 기존 퍼미션 승계 — GNU(stat -c) / BSD(stat -f) 양쪽 시도, 실패해도 진행.
+    mode="$(stat -c '%a' "$env_file" 2>/dev/null || stat -f '%Lp' "$env_file" 2>/dev/null || echo '')"
+    if [ -n "$mode" ]; then chmod "$mode" "$tmp" 2>/dev/null || true; fi
   fi
   printf 'CLAUDE_CONFIG_DIR=%s\n' "$cfg_dir" >> "$tmp"
   mv "$tmp" "$env_file"
@@ -203,11 +210,14 @@ write_runner_env() {
 # ── 러너 격리 config dir 의 최소 .claude.json 프로비저닝 (이슈 #96) ─────────
 # 조작자 홈의 oauthAccount(계정 메타 — OAuth 토큰과 달리 회전하지 않음)만 복사하고,
 # 대상 파일에 기존 키가 있으면 보존(병합) — 러너가 쌓은 신뢰·상태를 지우지 않게.
-# stdout 으로 "ok"/"missing"(oauthAccount 발견 여부)만 반환 — 호출부가 캡처해 안내.
+# 견고성(코드리뷰 반영):
+#   - 대상이 손상/비객체 JSON 이면 "조용히 비우지 않고" .bak 로 백업 후 새로 쓴다(기존 키 소실 방지).
+#   - 쓰기는 같은 디렉토리 tmp + os.replace 로 원자화(중간 실패 시 부분쓰기 방지).
+# stdout 으로 "<oauth> <parse>" 2토큰 반환 — oauth∈{ok,missing}, parse∈{new,merged,recovered}.
 provision_runner_claude_json() {
   local src="$1" dst="$2"
   python3 - "$src" "$dst" <<'PYEOF'
-import json, os, sys
+import json, os, sys, tempfile
 src, dst = sys.argv[1], sys.argv[2]
 oauth = None
 if os.path.exists(src):
@@ -217,22 +227,43 @@ if os.path.exists(src):
     except (ValueError, OSError):
         oauth = None
 data = {}
+parse_status = "new"
 if os.path.exists(dst):
+    corrupt = False
     try:
         with open(dst) as f:
             loaded = json.load(f)
+    except (ValueError, OSError):
+        corrupt = True
+    else:
         if isinstance(loaded, dict):
             data = loaded
-    except (ValueError, OSError):
-        data = {}
+            parse_status = "merged"
+        else:
+            corrupt = True  # 유효 JSON 이나 객체 아님 — 병합 불가
+    if corrupt:
+        # 손상 파일: 조용히 버리지 않고 .bak 로 백업(복구 가능) 후 새로 쓴다.
+        os.replace(dst, dst + ".bak")
+        parse_status = "recovered"
 if oauth is not None:
     data["oauthAccount"] = oauth
-    status = "ok"
+    oauth_status = "ok"
 else:
-    status = "missing"
-with open(dst, "w") as f:
-    json.dump(data, f, indent=2)
-print(status)
+    oauth_status = "missing"
+# 원자적 쓰기 — 같은 디렉토리 tmp + replace(부분쓰기·중간실패 방지)
+dst_dir = os.path.dirname(dst) or "."
+fd, tmp = tempfile.mkstemp(dir=dst_dir, prefix=".claude.json.")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, dst)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+print(oauth_status + " " + parse_status)
 PYEOF
 }
 
@@ -247,15 +278,36 @@ PYEOF
 setup_runner_isolation() {
   local runner_root="$RUNNER_ROOT" cfg_dir="$RUNNER_CONFIG_DIR"
   local home_claude="${HOME}/.claude"
+  # python3 필수 — 이 모드는 check_requirements(python3 확인)보다 앞서 종료하므로 여기서 검증.
+  #   (install_local_plugin 이 claude CLI 를 확인하는 것과 대칭. 미검증 시 provision 이
+  #    모호한 에러로 죽는다.) 외부 명령 호출 전에 가장 먼저 검사한다.
+  if ! command -v python3 &>/dev/null; then
+    error "python3 없음 — 러너 격리 세팅(.claude.json 프로비저닝)에 필요합니다."
+    exit 1
+  fi
   # 러너 루트 존재 확인 — .env 를 쓸 대상이라 반드시 있어야 함.
   if [ ! -d "$runner_root" ]; then
     error "러너 디렉토리 없음: $runner_root (--runner-root 경로를 확인하세요)"
     exit 1
   fi
   # 절대경로 정규화 — .env·심링크에 상대경로가 새면 러너 서비스가 못 찾는다.
-  runner_root="$(cd "$runner_root" && pwd)"
+  #   cd 실패(권한 등)를 잡지 않으면 빈 값으로 엉뚱한 경로에 기록될 수 있어 fail-fast.
+  runner_root="$(cd "$runner_root" && pwd)" || { error "러너 디렉토리 접근 실패(권한 확인): $RUNNER_ROOT"; exit 1; }
   mkdir -p "$cfg_dir"
-  cfg_dir="$(cd "$cfg_dir" && pwd)"
+  cfg_dir="$(cd "$cfg_dir" && pwd)" || { error "config dir 접근 실패(권한 확인): $RUNNER_CONFIG_DIR"; exit 1; }
+
+  # [major 가드] 격리 config dir 가 기본 ~/.claude 로 해석되면, 아래 credentials 심링크가
+  #   자기 자신을 가리켜(ln -sfn 이 원본을 지우고 자기참조 링크 생성) 조작자 OAuth
+  #   credentials 를 복구불가로 파괴한다. 물리경로(pwd -P) 비교로 심링크 생성 전 원천 차단.
+  local home_claude_real cfg_dir_real
+  home_claude_real="$(cd "$home_claude" 2>/dev/null && pwd -P || echo "$home_claude")"
+  cfg_dir_real="$(cd "$cfg_dir" && pwd -P)" || { error "config dir 접근 실패(권한 확인): $cfg_dir"; exit 1; }
+  if [ "$cfg_dir_real" = "$home_claude_real" ]; then
+    error "격리 config dir 는 기본 ~/.claude 와 달라야 합니다: '$cfg_dir' 가 '$home_claude' 로 해석됩니다."
+    echo "  ~/.claude 와 다른 경로를 지정하세요(예: --runner-config-dir <runner-root>/.claude-pipeline-runner)." >&2
+    echo "  (그대로 두면 credentials 심링크가 조작자 인증정보를 파괴합니다.)" >&2
+    exit 1
+  fi
   # 러너 .env 는 KEY=VALUE 리터럴이라 공백 경로를 파싱 못한다 — 경고만(중단 안 함).
   case "$cfg_dir" in
     *[[:space:]]*) warn "config dir 경로에 공백 있음: '$cfg_dir' — 러너 .env 가 못 읽을 수 있습니다(공백 없는 경로 권장)." ;;
@@ -274,8 +326,11 @@ setup_runner_isolation() {
   # 2) 최소 .claude.json — oauthAccount 만 조작자 홈에서 복사(기존 키 보존 병합).
   #    주의: oauthAccount 는 홈 루트의 ~/.claude.json 에 있다(~/.claude/ 안이 아님).
   local home_claude_json="${HOME}/.claude.json"
-  local oauth_status
-  oauth_status="$(provision_runner_claude_json "$home_claude_json" "$cfg_dir/.claude.json")"
+  local oauth_status parse_status
+  read -r oauth_status parse_status <<<"$(provision_runner_claude_json "$home_claude_json" "$cfg_dir/.claude.json")"
+  if [ "$parse_status" = "recovered" ]; then
+    warn "기존 $cfg_dir/.claude.json 이 손상돼 .bak 로 백업하고 새로 썼습니다(기존 키는 .bak 에 보존)."
+  fi
   if [ "$oauth_status" = "ok" ]; then
     info "oauthAccount 프로비저닝 → $cfg_dir/.claude.json"
   else
@@ -1242,6 +1297,15 @@ main() {
   if [ "$REAPPLY" = "true" ] && [ "$UPDATE_COMMANDS_ONLY" = "true" ]; then
     error "--reapply 와 --update-commands-only 는 함께 사용할 수 없습니다."
     echo "  둘 다 부분 모드입니다. 원하는 동작 한 가지만 지정하세요." >&2
+    exit 1
+  fi
+
+  # --runner-config-dir 는 --runner-root 없이는 무의미 — 조용히 무시하지 말고 거부.
+  # (머신-세팅 모드는 --install-local-plugin·--runner-root 로만 진입하므로, config-dir 만
+  #  주면 풀 install 로 흘러가 무시된다. 오설정을 표면화한다 — major 가드 A 의 오설정도 줄임.)
+  if [ -n "$RUNNER_CONFIG_DIR" ] && [ -z "$RUNNER_ROOT" ]; then
+    error "--runner-config-dir 는 --runner-root 와 함께 지정해야 합니다."
+    echo "  러너 격리는 --runner-root <러너 디렉토리> 로 트리거됩니다." >&2
     exit 1
   fi
 

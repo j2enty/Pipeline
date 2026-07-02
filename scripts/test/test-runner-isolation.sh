@@ -40,43 +40,71 @@ it "RI-2 write_runner_env: 멱등(라인 1개) + 값 갱신"
 
 # ── provision_runner_claude_json ────────────────────────────────────────────
 
-# RI-3 — 새 파일에 oauthAccount 복사(status ok)
-it "RI-3 provision .claude.json: oauthAccount 복사(status ok)"
+# RI-3 — 새 파일에 oauthAccount 복사(oauth=ok, parse=new)
+it "RI-3 provision .claude.json: oauthAccount 복사(ok/new)"
 (
   setup_install_env
   src="$(mktemp)"; printf '{"oauthAccount":{"emailAddress":"probe@ex.com"},"extra":"z"}' > "$src"
   dst="$(mktemp -d)/.claude.json"
-  st="$(provision_runner_claude_json "$src" "$dst")"
-  assert_eq "ok" "$st" "status 가 ok 아님" || return
+  read -r st parse <<<"$(provision_runner_claude_json "$src" "$dst")"
+  assert_eq "ok" "$st" "oauth status 가 ok 아님" || return
+  assert_eq "new" "$parse" "새 파일인데 parse 가 new 아님" || return
   assert_contains "$(cat "$dst")" "probe@ex.com" "oauthAccount 미복사" || return
   # extra 는 src 의 다른 키 — 복사 대상 아님(oauthAccount 만)
   assert_not_contains "$(cat "$dst")" "\"extra\"" "oauthAccount 외 키까지 복사됨" && pass
 )
 
-# RI-4 — 병합: 대상의 기존 키 보존하며 oauthAccount 추가
-it "RI-4 provision .claude.json: 대상 기존 키 보존(병합)"
+# RI-4 — 병합: 대상의 기존 키 보존하며 oauthAccount 추가(parse=merged)
+it "RI-4 provision .claude.json: 대상 기존 키 보존(ok/merged)"
 (
   setup_install_env
   src="$(mktemp)"; printf '{"oauthAccount":{"emailAddress":"probe@ex.com"}}' > "$src"
   dst="$(mktemp -d)/.claude.json"; printf '{"projects":{"/x":{"hasTrustDialogAccepted":true}}}' > "$dst"
-  st="$(provision_runner_claude_json "$src" "$dst")"
-  assert_eq "ok" "$st" "status ok 아님" || return
+  read -r st parse <<<"$(provision_runner_claude_json "$src" "$dst")"
+  assert_eq "ok" "$st" "oauth status ok 아님" || return
+  assert_eq "merged" "$parse" "기존 유효 파일인데 parse 가 merged 아님" || return
   assert_contains "$(cat "$dst")" "hasTrustDialogAccepted" "기존 projects 키 유실" || return
   assert_contains "$(cat "$dst")" "probe@ex.com" "oauthAccount 미추가" && pass
 )
 
-# RI-5 — oauthAccount 없으면 status missing, 대상은 여전히 유효 json(기존 보존)
+# RI-5 — oauthAccount 없으면 oauth=missing, 대상은 여전히 유효 json(기존 보존)
 it "RI-5 provision .claude.json: oauthAccount 부재 → missing + 기존 보존"
 (
   setup_install_env
   src="$(mktemp)"; printf '{"somethingElse":1}' > "$src"
   dst="$(mktemp -d)/.claude.json"; printf '{"projects":{"/y":{}}}' > "$dst"
-  st="$(provision_runner_claude_json "$src" "$dst")"
+  read -r st parse <<<"$(provision_runner_claude_json "$src" "$dst")"
   assert_eq "missing" "$st" "oauthAccount 없는데 missing 아님" || return
+  assert_eq "merged" "$parse" "기존 유효 파일인데 merged 아님" || return
   assert_contains "$(cat "$dst")" "projects" "기존 키 유실" || return
   # 유효 json 인지 확인
   python3 -c "import json,sys;json.load(open('$dst'))" 2>/dev/null || { fail "대상이 유효 json 아님"; return; }
   pass
+)
+
+# RI-B1 — 손상된 대상 .claude.json → .bak 백업 후 새로 씀(기존 소실 방지, parse=recovered)
+it "RI-B1 provision .claude.json: 손상 파일 → .bak 백업 후 새로(소실 없음)"
+(
+  setup_install_env
+  src="$(mktemp)"; printf '{"oauthAccount":{"emailAddress":"probe@ex.com"}}' > "$src"
+  dstdir="$(mktemp -d)"; dst="$dstdir/.claude.json"; printf 'NOT JSON {{{' > "$dst"
+  read -r st parse <<<"$(provision_runner_claude_json "$src" "$dst")"
+  assert_eq "recovered" "$parse" "손상인데 parse 가 recovered 아님" || return
+  assert_file_present "$dst.bak" "백업(.bak) 미생성" || return
+  assert_contains "$(cat "$dst.bak")" "NOT JSON" "백업이 원본 내용 아님" || return
+  python3 -c "import json,sys;json.load(open('$dst'))" 2>/dev/null || { fail "새 dst 가 유효 json 아님"; return; }
+  assert_contains "$(cat "$dst")" "probe@ex.com" "새 dst 에 oauthAccount 없음" && pass
+)
+
+# RI-B2 — 유효 JSON 이지만 객체 아님(배열) → 병합 불가라 백업 후 새로
+it "RI-B2 provision .claude.json: 비객체 JSON → .bak 백업 후 새로"
+(
+  setup_install_env
+  src="$(mktemp)"; printf '{"oauthAccount":{"emailAddress":"p@e"}}' > "$src"
+  dstdir="$(mktemp -d)"; dst="$dstdir/.claude.json"; printf '[1,2,3]' > "$dst"
+  read -r st parse <<<"$(provision_runner_claude_json "$src" "$dst")"
+  assert_eq "recovered" "$parse" "비객체인데 recovered 아님" || return
+  assert_contains "$(cat "$dst.bak")" "1,2,3" "백업 내용 불일치" && pass
 )
 
 # ── setup_runner_isolation (end-to-end, 가짜 HOME) ───────────────────────────
@@ -175,4 +203,56 @@ it "RI-11 install_local_plugin: claude 부재 → 에러"
   rc=0
   ( PATH="$emptybin"; install_local_plugin ) >/dev/null 2>&1 || rc=$?
   assert_ne "0" "$rc" "claude 없는데 0 종료" && pass
+)
+
+# ── 코드리뷰 반영 가드 케이스 (A·C·D·E) ─────────────────────────────────────
+
+# RI-A1 [major] cfg_dir 가 ~/.claude 로 해석되면 거부 + 실제 credentials 안 건드림
+it "RI-A1 setup_runner_isolation: cfg_dir==~/.claude 거부(credentials 파괴 차단)"
+(
+  setup_install_env
+  read -r HOME RUNNER_ROOT _cfg <<<"$(_mk_runner_fixture)"
+  export HOME
+  RUNNER_CONFIG_DIR="$HOME/.claude"           # 자기참조 파괴 위험 경로
+  before="$(cat "$HOME/.claude/.credentials.json")"
+  rc=0
+  ( setup_runner_isolation ) >/dev/null 2>&1 || rc=$?
+  assert_ne "0" "$rc" "cfg_dir==~/.claude 인데 0 종료(가드 미동작)" || return
+  [ -f "$HOME/.claude/.credentials.json" ] || { fail "credentials 파일이 소실됨(파괴 발생)"; return; }
+  [ -L "$HOME/.claude/.credentials.json" ] && { fail "credentials 가 심링크로 뒤바뀜(자기참조 발생)"; return; }
+  assert_eq "$before" "$(cat "$HOME/.claude/.credentials.json")" "credentials 내용 변형됨" && pass
+)
+
+# RI-C1 [medium] 러너 루트 cd 실패(권한) → 에러
+it "RI-C1 setup_runner_isolation: 러너 루트 cd 실패 → 에러"
+(
+  setup_install_env
+  read -r HOME _rr RUNNER_CONFIG_DIR <<<"$(_mk_runner_fixture)"
+  export HOME
+  RUNNER_ROOT="$(mktemp -d)"; chmod 000 "$RUNNER_ROOT"
+  rc=0
+  ( setup_runner_isolation ) >/dev/null 2>&1 || rc=$?
+  chmod 755 "$RUNNER_ROOT" 2>/dev/null || true   # 정리 위해 권한 복구
+  assert_ne "0" "$rc" "cd 실패인데 0 종료" && pass
+)
+
+# RI-D1 [minor] --runner-config-dir 단독 지정 → 명시적 거부(조용한 무시 방지)
+it "RI-D1 main: --runner-config-dir 단독 → 거부"
+(
+  setup_install_env
+  rc=0
+  bash "$INSTALL_SH" --runner-config-dir /tmp/nope </dev/null >/dev/null 2>&1 || rc=$?
+  assert_ne "0" "$rc" "config-dir 단독인데 0 종료(풀 install 로 흘러감)" && pass
+)
+
+# RI-E1 [minor] 머신-세팅(러너 격리)에서 python3 부재 → 에러
+it "RI-E1 setup_runner_isolation: python3 부재 → 에러"
+(
+  setup_install_env
+  rr="$(mktemp -d)"; rcfg="$(mktemp -d)"
+  rc=0
+  # PATH 비워 command -v python3 실패 유도(임시 디렉토리는 미리 생성). error/echo 는 빌트인.
+  # shellcheck disable=SC2123  # PATH 비우기는 python3 부재 재현을 위한 의도적 조작
+  ( PATH=""; RUNNER_ROOT="$rr"; RUNNER_CONFIG_DIR="$rcfg"; setup_runner_isolation ) >/dev/null 2>&1 || rc=$?
+  assert_ne "0" "$rc" "python3 부재인데 0 종료" && pass
 )
