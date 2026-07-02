@@ -150,14 +150,14 @@ gh pr view <N> --repo "$OWNER/<영역>" --json number,url,state,isDraft,baseRefN
      query($owner: String!, $repo: String!, $num: Int!) {
        repository(owner: $owner, name: $repo) {
          issue(number: $num) {
-           closedByPullRequestsReferences(first: 10, includeClosedPrs: false) {
+           closedByPullRequestsReferences(first: 20, includeClosedPrs: false) {
              nodes { number url headRefOid isDraft baseRefName state }
            }
          }
        }
      }
    ' -f owner="$OWNER" -f repo="<영역>" -F num=<sub-N> \
-     --jq '.data.repository.issue.closedByPullRequestsReferences.nodes[]
+     --jq '(.data.repository.issue.closedByPullRequestsReferences.nodes // [])[]
            | select(.state=="OPEN" and .isDraft==false)'
    ```
 
@@ -560,33 +560,45 @@ STATUS_FIELD_ID="$(bash "$CFG" status-field-id)"
 #   흡수돼 무성). 대신 sub-issue 노드에서 projectItems 로 역조회한다 — 한 이슈가 속한 프로젝트
 #   수는 사실상 1~2개라 무페이지네이션 문제가 원천 소멸(누락 없음). PROJECT_NUMBER 로 대상
 #   프로젝트의 item 만 고른다.
+# [#103 리뷰반영] 파이프(`gh api graphql ... | jq`) 대신 단일 --jq 로 끝낸다. 파이프를 두면
+#   앞단 gh 가 죽어도(네트워크·권한·쿼리 오류) 뒷단 jq 성공코드에 마스킹돼 fail-loud 가 다시
+#   무성 실패로 새기 때문. PROJECT_NUMBER 는 config 에서 정수 검증돼 온 값이라 --jq 에 직접
+#   주입(gh api --jq 는 --arg 미지원). nodes 가 null 이어도 `// []` 로 안전(빈 결과).
 ITEM_ID=$(gh api graphql -f query='
 query($issueId: ID!) {
   node(id: $issueId) {
     ... on Issue {
-      projectItems(first: 50) {
+      projectItems(first: 100) {
         nodes { id project { number } }
       }
     }
   }
 }' -f issueId="<SUB_ISSUE_NODE_ID>" \
-  --jq '.data.node.projectItems.nodes[]' \
-  | jq -r --argjson pn "$PROJECT_NUMBER" 'select(.project.number == $pn) | .id')
+  --jq "(.data.node.projectItems.nodes // [])[] | select(.project.number == $PROJECT_NUMBER) | .id")
 
-# In Review option ID 동적 조회
-IN_REVIEW_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
-  | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="In Review") | .id')
+# [#103 리뷰반영] ITEM_ID 빈 값 검사 — 조회 실패(gh 오류) 또는 sub-issue 가 Prep Project
+#   미소속이면 빈 값이다. 빈 itemId 로 아래 mutation 을 쏘면 조용히 실패하므로, loud 하게
+#   기록하고 전환을 스킵한다. 단 R9 규칙상 Status 전환 실패는 에스컬 아님 —
+#   statusTransition.succeeded=false + error 를 상태파일에 기록하고 리포트에 경고만, 리뷰 판정은
+#   APPROVE 유지(REQUEST_CHANGES 로 격상하지 않음).
+if [ -z "$ITEM_ID" ]; then
+  echo "::error::Prep Project item id 조회 실패/빈 값 — Status 전환 스킵(R9: 에스컬 아님, APPROVE 유지). statusTransition.succeeded=false·error 기록 + 리포트 경고 필요." >&2
+else
+  # In Review option ID 동적 조회
+  IN_REVIEW_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
+    | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="In Review") | .id')
 
-gh api graphql -f query='
+  gh api graphql -f query='
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   updateProjectV2ItemFieldValue(input: {
     projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
     value: { singleSelectOptionId: $optionId }
   }) { projectV2Item { id } }
 }' -f projectId="$PROJECT_ID" \
-  -f itemId="$ITEM_ID" \
-  -f fieldId="$STATUS_FIELD_ID" \
-  -f optionId="$IN_REVIEW_ID"
+    -f itemId="$ITEM_ID" \
+    -f fieldId="$STATUS_FIELD_ID" \
+    -f optionId="$IN_REVIEW_ID"
+fi
 ```
 
 **R9 보강 규칙**:

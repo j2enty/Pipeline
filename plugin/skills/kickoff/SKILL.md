@@ -175,11 +175,16 @@ PROJECT_NUMBER="$(bash "$CFG" project-number)"
 #   노드에서 projectItems 로 역조회한다 — 한 이슈가 속한 프로젝트 수는 사실상 1~2개라
 #   무페이지네이션 문제가 원천 소멸(누락 없음). PROJECT_NUMBER 로 대상 프로젝트의 item 만
 #   골라 Status·Area 필드값을 읽는다.
+# [#103 리뷰반영] 파이프(`gh api graphql ... | jq`) 대신 단일 --jq 로 끝낸다. 파이프를 두면
+#   앞단 gh 가 죽어도(네트워크·권한·쿼리 오류) 뒷단 jq 성공코드에 마스킹돼, status·area 가
+#   조용히 빈 값으로 새기 때문(이 펜스의 종료코드 = gh 종료코드여야 실패가 loud 하게 드러남).
+#   PROJECT_NUMBER 는 config 에서 정수 검증돼 온 값이라 --jq 에 직접 주입(gh api --jq 는
+#   --arg 미지원). nodes 가 null 이어도 `// []` 로 안전(빈 결과).
 gh api graphql -f query='
 query($issueId: ID!) {
   node(id: $issueId) {
     ... on Issue {
-      projectItems(first: 50) {
+      projectItems(first: 100) {
         nodes {
           id
           project { number }
@@ -196,8 +201,7 @@ query($issueId: ID!) {
     }
   }
 }' -f issueId=<sub-issue-node-id> \
-  --jq '.data.node.projectItems.nodes[]' \
-  | jq --argjson pn "$PROJECT_NUMBER" 'select(.project.number == $pn)'
+  --jq "(.data.node.projectItems.nodes // [])[] | select(.project.number == $PROJECT_NUMBER)"
 ```
 
 - 각 sub-issue별로 `{ area, repo, number, nodeId, status, assignees, branch:"feature/#<N>-<SLUG>" }` 구조체로 정리
