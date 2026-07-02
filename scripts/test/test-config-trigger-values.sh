@@ -180,3 +180,20 @@ it "T-STR-3 리더값 == install.sh STATUS_TRIGGERS_* (폴러 env ↔ SKILL 리�
   assert_eq "$STATUS_TRIGGERS_REVIEW"  "$rv" "review: 폴러 env ≠ SKILL 리더(정렬 깨짐)"  || { rm -f "$cfg"; return; }
   rm -f "$cfg"; pass
 )
+
+it "T-STR-4 부재 config 기본값 정렬: App(env.ts DEFAULT_*) == 리더 폴백 (상수 드리프트 방어)"
+(
+  # status-triggers 부재 시 App 은 env.ts 의 DEFAULT_STATUS_TRIGGERS_* 로, 리더는 자체
+  # 폴백으로 각자 기본값을 낸다 — 두 상수가 갈라지면 부재 경로에서 폴러↔SKILL 이 어긋난다.
+  # 실제 소스(env.ts)의 기본 리터럴을 뽑아 리더 폴백과 교차 단언(단일 게이트로 드리프트 포착).
+  ENV_TS="$REPO_ROOT/app/src/lib/env.ts"
+  app_k="$(sed -n 's/.*DEFAULT_STATUS_TRIGGERS_KICKOFF = "\([^"]*\)".*/\1/p' "$ENV_TS")"
+  app_v="$(sed -n 's/.*DEFAULT_STATUS_TRIGGERS_REVIEW = "\([^"]*\)".*/\1/p' "$ENV_TS")"
+  rk="$(PIPELINE_CONFIG=/nonexistent-$$.yml bash "$READER_KICKOFF" status-trigger-kickoff 2>/dev/null)"
+  rv="$(PIPELINE_CONFIG=/nonexistent-$$.yml bash "$READER_KICKOFF" status-trigger-review 2>/dev/null)"
+  # 소스에서 값이 실제로 뽑혔는지(추출 실패로 빈값이면 테스트가 무의미) 먼저 확인
+  assert_eq "In Progress" "$app_k" "env.ts kickoff 기본값 추출/드리프트" || return
+  assert_eq "Bot Review"  "$app_v" "env.ts review 기본값 추출/드리프트"  || return
+  assert_eq "$app_k" "$rk" "부재 기본값 불일치: App≠리더(kickoff)" || return
+  assert_eq "$app_v" "$rv" "부재 기본값 불일치: App≠리더(review)"  && pass
+)

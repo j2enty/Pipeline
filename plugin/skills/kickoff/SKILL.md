@@ -69,7 +69,7 @@ bash "$CFG" status-trigger-kickoff  # kickoff 트리거 Status 컬럼 (기본 In
 bash "$CFG" status-trigger-review   # review 트리거 Status 컬럼 (기본 Bot Review — 하드코딩 금지)
 ```
 
-> **트리거 Status 컬럼명은 config 로 구동한다(#106).** 아래 본문·표에 나오는 `In Progress`/`Bot Review` 는 **기본값 표기**일 뿐이다. 실제 sub-issue Status 비교(G1 대상 판정·lead 게이트·skip 분류)와 PR 생성 후 Status 전환(GraphQL mutation)은 **리터럴이 아니라 위 `status-trigger-kickoff`/`status-trigger-review` 값**을 써야 한다. 폴러(App)가 이 값으로 dispatch 하므로, SKILL 도 같은 값으로 비교해야 end-to-end 로 맞물린다(컬럼명을 config 에서 바꾸면 폴러·SKILL 양쪽이 함께 따라간다). 이 두 컬럼만 config 로 재정의 가능하고, `In Review`·`Ready`·`Backlog`·`Done` 등 비-트리거 컬럼은 아직 기본명 고정이다.
+> **트리거 Status 컬럼명은 config 로 구동한다(#106).** 아래 본문·표에 나오는 `In Progress`/`Bot Review` 는 **기본값 표기**일 뿐이다. 실제 sub-issue Status 비교(G1 대상 판정·lead 게이트·skip 분류)와 PR 생성 후 Status 전환(GraphQL mutation)은 **리터럴이 아니라 위 `status-trigger-kickoff`/`status-trigger-review` 값**을 써야 한다. 폴러(App)가 이 값으로 dispatch 하므로, SKILL 도 같은 값으로 비교해야 end-to-end 로 맞물린다(컬럼명을 config 에서 바꾸면 폴러·SKILL 양쪽이 함께 따라간다). 이 두 컬럼만 config 로 재정의 가능하고, `In Review`·`Ready`·`Backlog`·`Done` 등 비-트리거 컬럼은 아직 기본명 고정이다(후속 #115).
 
 | 이름 | 값 (config 키) |
 |---|---|
@@ -380,7 +380,7 @@ for area in in_progress_areas:
        → 8-f 원격 동기화 가드 (PR 생성 직전 필수)
        → PR 생성 (8-g 템플릿)
        → Sub-issue AC 체크박스 체크 (G17)
-       → Status=Bot Review 전환 (GraphQL mutation — `/review` 대기)
+       → Status=review 트리거 컬럼(config `status-trigger-review`, 기본 Bot Review) 전환 (GraphQL mutation — `/review` 대기)
        → blocked 라벨 제거 (있었다면)
        → 상태 파일: areas[area].status="pr_created", pr={...}
    → verdict == "fail":
@@ -532,7 +532,7 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   -f optionId="$BOT_REVIEW_ID"
 ```
 
-> `In Review` 전환은 `/review` 가 APPROVE 판정한 뒤에만 발생 (review SKILL 7-h 참고). `/kickoff` 는 `Bot Review`까지만 책임.
+> `In Review` 전환은 `/review` 가 APPROVE 판정한 뒤에만 발생 (review SKILL 7-h 참고). `/kickoff` 는 review 트리거 컬럼(config `status-trigger-review`, 기본 `Bot Review`)까지만 책임.
 
 ### 9. 에스컬 플로우 (G2 + G3-b)
 
@@ -687,7 +687,7 @@ Context 문서:
 - Status option ID는 레포·프로젝트마다 다를 수 있음 → **동적 조회** (`gh project field-list`). 하드코딩 금지
 - sub-issue 조회 시 `gh api ... /sub_issues` 응답의 `id`는 **database id** (integer). `node_id`와 구분
 - 모든 git 명령은 `git -C <영역>` 형태로 호출 (compound `cd <영역> && git ...` 금지). 권한 샌드박스가 `Bash(git -C <영역> *)` 와일드카드만 허용
-- PR 생성 후 Status 전환이 실패하면 PR은 남고 Status만 In Progress — **재실행 시 G4 매트릭스**에 따라 "PR 있음 + Status≠Bot Review·In Review"는 스킵 안 될 수도 있으므로, Status 전환 실패는 에스컬(`immediate`)로 처리 권장
+- PR 생성 후 Status 전환이 실패하면 PR은 남고 Status만 kickoff 트리거 컬럼(기본 In Progress) — **재실행 시 G4 매트릭스**에 따라 "PR 있음 + Status ≠ review 트리거 컬럼(config `status-trigger-review`, 기본 Bot Review)·In Review"는 스킵 안 될 수도 있으므로, Status 전환 실패는 에스컬(`immediate`)로 처리 권장
 - `Bot Review` 와 `In Review` 소유권 혼동 금지 — `Bot Review` 전환은 `/kickoff` (PR 생성 직후), `In Review` 전환은 `/review` (APPROVE 후). `/kickoff` 가 `In Review` 로 직접 전환하지 않음
 - `/review` 자동 체이닝 시 Skill 호출은 `Skill(skill="pipeline:review", args="<parent-url>")` 형태 (같은 플러그인 sibling skill — 네임스페이스 명시). OMC 플러그인이 따로 제공하는 review skill 과 혼동 금지 (그쪽은 `oh-my-claudecode:` 네임스페이스 — 우리가 부를 대상 아님)
 - `--team`/`--ultra` 는 OMC 없으면 `--agent` 로 자동 폴백 — OMC 없다고 조용히 직렬 실행하거나 실패하지 말 것. degrade 종착지는 항상 `--agent`(pipeline:executor 병렬)

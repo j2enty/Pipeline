@@ -65,7 +65,7 @@ bash "$CFG" status-trigger-review   # review 트리거 컬럼 (기본 Bot Review
 bash "$CFG" status-trigger-kickoff  # kickoff 트리거 컬럼 (기본 In Progress — 7-h 누락 흡수 판정)
 ```
 
-> **트리거 Status 컬럼명은 config 로 구동한다(#106).** 7-h 의 Status 전환에서 "출발 상태"(기본 `Bot Review`)는 리터럴이 아니라 `status-trigger-review` 값으로 비교한다 — 폴러(App)가 이 값으로 `/review` 를 dispatch 하므로 SKILL 도 같은 값이어야 end-to-end 로 맞물린다. "In Progress" 누락 흡수 판정도 `status-trigger-kickoff` 값을 쓴다. 반면 **전환 도착 상태 `In Review` 는 비-트리거 컬럼이라 아직 기본명 고정**(config 재정의 미지원 — kickoff SKILL 와 동일 한계).
+> **트리거 Status 컬럼명은 config 로 구동한다(#106).** 7-h 의 Status 전환에서 "출발 상태"(기본 `Bot Review`)는 리터럴이 아니라 `status-trigger-review` 값으로 비교한다 — 폴러(App)가 이 값으로 `/review` 를 dispatch 하므로 SKILL 도 같은 값이어야 end-to-end 로 맞물린다. "In Progress" 누락 흡수 판정도 `status-trigger-kickoff` 값을 쓴다. 반면 **전환 도착 상태 `In Review` 는 비-트리거 컬럼이라 아직 기본명 고정**(config 재정의 미지원 — kickoff SKILL 와 동일 한계, 후속 #115).
 
 | 이름 | 값 |
 |---|---|
