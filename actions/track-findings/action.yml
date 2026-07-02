@@ -8,7 +8,9 @@
 #   scripts/track-findings.sh + scripts/render-finding.py 로 옮겨 단위테스트(회귀 그물)
 #   대상으로 만들었다. 이 action.yml 은 그 스크립트를 호출만 한다(ensure-plugin 과 동일 패턴).
 #   실행 방식: `bash <path>` — 체크아웃된 .sh 의 실행권한(+x)이 유실돼도 exit 126 로 죽지 않게.
-#   스크립트 위치는 이 action 의 형제 경로($GITHUB_ACTION_PATH/../../scripts)로 해석한다.
+#   스크립트 위치는 이 action 의 형제 경로(${{ github.action_path }}/../../scripts)로 해석한다.
+#   graceful 불변식(추적 실패가 본 파이프라인을 막지 않음): 스크립트 부재/경로오류로 bash 가
+#   exit 127 로 하드페일하지 않도록, 실행 전 파일 존재를 확인하고 없으면 loud 로그 후 exit 0.
 #
 # 핵심 원칙:
 #   - 추적 실패가 상위 리뷰/머지를 막지 않는다 — 모든 실패는 흡수(graceful, exit 0).
@@ -71,4 +73,13 @@ runs:
         MAJOR_LABEL: ${{ inputs.major-label }}
         MINOR_LABEL: ${{ inputs.minor-label }}
         GH_TOKEN: ${{ inputs.gh-token }}
-      run: bash "${{ github.action_path }}/../../scripts/track-findings.sh"
+      run: |
+        set -uo pipefail
+        SCRIPT="${{ github.action_path }}/../../scripts/track-findings.sh"
+        # graceful: 스크립트 부재/경로오류는 bash exit 127 하드페일이 되므로 사전 차단.
+        # 추적은 부가 기능이라 실패해도 본 리뷰/머지를 막지 않는다 — loud 로그 후 exit 0.
+        if [ ! -f "$SCRIPT" ]; then
+          echo "::error::track-findings: 스크립트 부재($SCRIPT) — 추적 스킵(graceful, 본 스텝은 실패로 죽지 않음)"
+          exit 0
+        fi
+        bash "$SCRIPT"

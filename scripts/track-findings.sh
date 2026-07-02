@@ -35,6 +35,15 @@ set -euo pipefail
 # render-finding.py 는 이 스크립트와 같은 scripts/ 에 있다. 호출 방식(bash <path> / uses)과
 # 무관하게 항상 sibling 을 찾도록 BASH_SOURCE 기준으로 해석한다.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RENDER_PY="$SCRIPT_DIR/render-finding.py"
+
+# graceful 불변식: 렌더 스크립트 부재(잘못된 배포·경로)면 finding 을 만들 수 없다.
+# 매 finding 마다 warning 을 N번 내기보다, 한 번 loud 하게 알리고 graceful 종료(exit 0)한다.
+# (추적 실패가 본 리뷰/머지를 막지 않는다는 설계 의도 보존.)
+if [ ! -f "$RENDER_PY" ]; then
+  echo "::error::track-findings: 렌더 스크립트 부재($RENDER_PY) — 추적 스킵(graceful)"
+  exit 0
+fi
 
 # ── 1. 파일 부재 → graceful 종료 (추적 실패가 상위를 막지 않음) ──
 if [ -z "${STATE_FILE_PATH:-}" ] || [ ! -f "$STATE_FILE_PATH" ]; then
@@ -91,7 +100,7 @@ fi
 render_finding() {
   FINDING_SOURCE="$FINDING_SOURCE" AREA="${AREA:-}" \
   MAJOR_LABEL="$MAJOR_LABEL" MINOR_LABEL="$MINOR_LABEL" \
-  python3 "$SCRIPT_DIR/render-finding.py" "$1"
+  python3 "$RENDER_PY" "$1"
 }
 
 # ── 4.5. 라벨 멱등 생성 (버그 #5: 라벨 미존재 시 gh issue create 가 실패 →

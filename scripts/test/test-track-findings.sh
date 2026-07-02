@@ -12,7 +12,7 @@
 TF_SH="$REPO_ROOT/scripts/track-findings.sh"
 
 # gh stub 을 임시 PATH 에 깔고 track-findings.sh 를 실행한다.
-#   - gh label create → 성공(로그)
+#   - gh label create → 성공(로그). 단 GH_STUB_LABEL_EXISTS=1 이면 비0(라벨 이미 존재 모사)
 #   - gh issue list ... --jq length → GH_STUB_LIST_COUNT(기본 0) 출력 → cross-run dedup 제어
 #   - gh issue create → 성공. 단 GH_STUB_LABEL_FAIL=1 이면 '--label' 붙은 생성은 실패(#5 폴백 유발)
 # 모든 gh 호출은 GH_LOG 에 'gh <args>' 로 기록.
@@ -21,7 +21,11 @@ run_tf() {
   cat > "$bindir/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "gh $*" >> "$GH_LOG"
-if [ "$1" = "label" ] && [ "$2" = "create" ]; then exit 0; fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then
+  # 라벨 이미 존재 → gh 는 비0 종료. 스크립트의 멱등 분기(|| 무시)를 태운다.
+  [ "${GH_STUB_LABEL_EXISTS:-0}" = "1" ] && exit 1
+  exit 0
+fi
 if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
   printf '%s\n' "${GH_STUB_LIST_COUNT:-0}"
   exit 0
@@ -36,6 +40,14 @@ exit 0
 STUB
   chmod +x "$bindir/gh"
   GH_LOG="${GH_LOG}" PATH="$bindir:$PATH" bash "$TF_SH"
+}
+
+# 주어진 finding JSON 의 fingerprint(fp) 를 render-finding.py 로 결정적으로 계산한다.
+# dedup 검색 쿼리에 fp 가 제대로 실리는지 검증(TF-5)에 쓴다.
+compute_fp() {
+  # $1: source, $2: area, $3: finding JSON
+  FINDING_SOURCE="$1" AREA="$2" MAJOR_LABEL=maj MINOR_LABEL=min \
+    python3 "$REPO_ROOT/scripts/render-finding.py" "$3" | cut -f1
 }
 
 # 상태파일 생성 헬퍼 — JSON 문자열을 임시파일에 쓰고 경로 반환.
@@ -108,17 +120,25 @@ it "TF-4 intra-run 중복 → 1건만 생성"
   pass
 )
 
-# TF-5 — cross-run dedup: 이미 오픈 이슈 존재(list count>0) → 생성 안 함
-it "TF-5 cross-run 기존 이슈 존재 → 생성 안 함"
+# TF-5 — cross-run dedup: 이미 오픈 이슈 존재(list count>0) → 생성 안 함.
+#   추가로 dedup 검색 쿼리(gh issue list --search "<fp> in:title")에 fp 토큰이
+#   실제로 실리는지 GH_LOG 로 검증한다. 이게 없으면 fp 가 빠지거나 잘못 실려도
+#   카운트만 맞으면 통과 → dedup 키가 사각지대가 된다.
+it "TF-5 cross-run 기존 이슈 존재 → 생성 안 함 + fp 검색키 검증"
 (
   export GH_LOG; GH_LOG="$(mktemp)"
-  sf="$(cr_state Backend '[{"severity":"major","file":"a.ts","title":"버그","description":"원인"}]')"
+  finding='{"severity":"major","file":"a.ts","title":"버그","description":"원인"}'
+  sf="$(cr_state Backend "[$finding]")"
+  fp="$(compute_fp code-review Backend "$finding")"
   out="$(STATE_FILE_PATH="$sf" FINDING_SOURCE=code-review \
     OWNER=acme AREA=Backend AREA_REPO=acme/Backend PARENT_REPO='' \
     MAJOR_LABEL=maj MINOR_LABEL=min GH_TOKEN=x GH_STUB_LIST_COUNT=1 run_tf 2>&1)" || { fail "exit 비0"; exit 0; }
   assert_contains "$out" "이미 오픈 이슈 존재" "cross-run dedup 미동작" || exit 0
   assert_contains "$out" "완료 — 생성 0, 스킵 1" "cross-run dedup 카운트 불일치" || exit 0
   assert_eq 0 "$(count_gh_log 'issue create --repo')" "기존 존재인데 생성됨" || exit 0
+  # dedup 검색 쿼리에 이 finding 의 fp 가 in:title 로 실려야 한다(검색키 회귀 그물).
+  listline="$(grep 'issue list' "$GH_LOG" || true)"
+  assert_contains "$listline" "$fp in:title" "dedup 검색 쿼리에 fp 토큰 미포함" || exit 0
   pass
 )
 
@@ -174,5 +194,40 @@ it "TF-9 라벨 실패 시 라벨 없이 재시도 생성(#5)"
     MAJOR_LABEL=maj MINOR_LABEL=min GH_TOKEN=x GH_STUB_LIST_COUNT=0 GH_STUB_LABEL_FAIL=1 run_tf 2>&1)" || { fail "exit 비0"; exit 0; }
   assert_contains "$out" "라벨(maj) 없이 이슈 생성" "라벨 폴백 미동작(#5)" || exit 0
   assert_contains "$out" "완료 — 생성 1" "폴백 경로에서 생성 카운트 누락" || exit 0
+  pass
+)
+
+# TF-10 — 라벨 멱등: 라벨이 이미 존재해 gh label create 가 비0 이어도
+#         "라벨 생성 —" 메시지는 안 나오고 이슈 생성은 정상 진행(멱등 분기).
+it "TF-10 라벨 이미 존재(비0)여도 이슈는 정상 생성(멱등)"
+(
+  export GH_LOG; GH_LOG="$(mktemp)"
+  sf="$(cr_state Backend '[{"severity":"major","file":"a.ts","title":"버그","description":"원인"}]')"
+  out="$(STATE_FILE_PATH="$sf" FINDING_SOURCE=code-review \
+    OWNER=acme AREA=Backend AREA_REPO=acme/Backend PARENT_REPO='' \
+    MAJOR_LABEL=maj MINOR_LABEL=min GH_TOKEN=x GH_STUB_LIST_COUNT=0 GH_STUB_LABEL_EXISTS=1 run_tf 2>&1)" || { fail "exit 비0"; exit 0; }
+  # 라벨 생성이 비0 → "라벨 생성 —" 성공 메시지는 나오면 안 됨.
+  assert_not_contains "$out" "라벨 생성 —" "라벨 존재(비0)인데 생성 성공 메시지 출력됨" || exit 0
+  # 그래도 이슈는 --label 붙은 정상 경로로 1건 생성돼야 한다.
+  assert_contains "$out" "완료 — 생성 1, 스킵 0" "라벨 존재 시 이슈 생성 실패" || exit 0
+  pass
+)
+
+# TF-11 — graceful(item 1): 렌더 스크립트(render-finding.py) 부재면 loud 로그 후
+#         exit 0 로 graceful 종료(추적 실패가 본 파이프라인을 막지 않음).
+#   track-findings.sh 만 렌더 스크립트 없는 디렉토리에 복사해 실행 → 부재 상황 모사.
+it "TF-11 render-finding.py 부재 → loud 로그 + graceful(exit 0)"
+(
+  export GH_LOG; GH_LOG="$(mktemp)"
+  isolated="$(mktemp -d)"
+  cp "$TF_SH" "$isolated/track-findings.sh"   # render-finding.py 는 복사 안 함
+  sf="$(cr_state Backend '[{"severity":"major","file":"a.ts","title":"버그","description":"원인"}]')"
+  rc=0
+  out="$(STATE_FILE_PATH="$sf" FINDING_SOURCE=code-review \
+    OWNER=acme AREA=Backend AREA_REPO=acme/Backend PARENT_REPO='' \
+    MAJOR_LABEL=maj MINOR_LABEL=min GH_TOKEN=x GH_LOG="$GH_LOG" \
+    bash "$isolated/track-findings.sh" 2>&1)" || rc=$?
+  assert_eq 0 "$rc" "렌더 스크립트 부재인데 하드페일(exit $rc)" || exit 0
+  assert_contains "$out" "렌더 스크립트 부재" "부재 loud 로그 누락" || exit 0
   pass
 )
