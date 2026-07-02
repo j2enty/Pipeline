@@ -58,12 +58,15 @@ function makeFakeApp(): Probot {
 }
 
 // 단일 프로젝트·단일 모듈(Backend) 로 단순화 — 결정 로직만 격리.
+// 트리거 컬럼명은 기본값(In Progress/Bot Review) — 이 파일의 아이템 status 와 맞춘다(#106).
 const options: StatusPollerOptions = {
   ownerLogin: "acme",
   projectNumbers: [3],
   modules: ["Backend"],
   authorInstallationId: 12345,
   intervalMs: 60000,
+  statusTriggersKickoff: "In Progress",
+  statusTriggersReview: "Bot Review",
 };
 
 // 아이템 팩토리 — 필요한 필드만 덮어쓴다.
