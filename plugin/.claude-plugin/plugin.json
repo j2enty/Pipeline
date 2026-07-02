@@ -1,6 +1,6 @@
 {
   "name": "pipeline",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "이식 가능한 AI 자동화 파이프라인 프레임워크 — 기획·실행·리뷰·머지 자동화 일꾼 에이전트",
   "author": {
     "name": "MKFactory"
