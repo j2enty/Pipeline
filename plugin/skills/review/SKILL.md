@@ -597,16 +597,26 @@ else
   IN_REVIEW_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
     | jq -r --arg col "$IN_REVIEW" '.fields[] | select(.name=="Status") | .options[] | select(.name==$col) | .id')
 
-  gh api graphql -f query='
+  # [#115 리뷰반영] IN_REVIEW_ID 빈 값 검사 — 도착 컬럼(config `status-column-in-review`,
+  #   기본 In Review)이 프로젝트 Status 옵션에 실제로 없으면(설정 오류, 또는 기본 컬럼을
+  #   리네임했는데 config 미설정) 조회 결과가 빈 값이다. 빈 optionId 로 아래 mutation 을 쏘면
+  #   실패하므로, ITEM_ID 가드와 대칭으로 loud 하게 기록하고 전환을 스킵한다. 단 R9 규칙상
+  #   Status 전환 실패는 에스컬 아님 — statusTransition.succeeded=false + error 를 상태파일에
+  #   기록하고 리포트에 경고만, 리뷰 판정은 APPROVE 유지(REQUEST_CHANGES 로 격상하지 않음).
+  if [ -z "$IN_REVIEW_ID" ]; then
+    echo "::error::도착 컬럼(config status-column-in-review, 기본 In Review) option id 조회 실패/빈 값 — 프로젝트 Status 에 해당 컬럼이 없음(리네임 후 config 미설정 등). Status 전환 스킵(R9: 에스컬 아님, APPROVE 유지). statusTransition.succeeded=false·error 기록 + 리포트 경고 필요." >&2
+  else
+    gh api graphql -f query='
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   updateProjectV2ItemFieldValue(input: {
     projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
     value: { singleSelectOptionId: $optionId }
   }) { projectV2Item { id } }
 }' -f projectId="$PROJECT_ID" \
-    -f itemId="$ITEM_ID" \
-    -f fieldId="$STATUS_FIELD_ID" \
-    -f optionId="$IN_REVIEW_ID"
+      -f itemId="$ITEM_ID" \
+      -f fieldId="$STATUS_FIELD_ID" \
+      -f optionId="$IN_REVIEW_ID"
+  fi
 fi
 ```
 

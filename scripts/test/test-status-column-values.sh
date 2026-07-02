@@ -206,3 +206,49 @@ it "SC-10 기본 컬럼명(In Review) 프로젝트: config 폴백값으로도 id
   assert_eq "opt-ir" "$got" "기본 컬럼명 프로젝트에서 도착 컬럼 id 조회 실패(하위호환 깨짐)" || { rm -f "$cfg"; return; }
   rm -f "$cfg"; pass
 )
+
+it "SC-11 도착 컬럼이 프로젝트에 없으면 IN_REVIEW_ID='' → mutation 스킵 + R9 경고(#103 대칭 가드)"
+(
+  # 실제 버그 재현: 도착 컬럼(config status-column-in-review, 기본 In Review)이 프로젝트
+  # Status 옵션 목록에 없다(리네임 후 config 미설정 등). 7-h 의 jq 조회가 빈 값을 내고,
+  # 가드가 없으면 optionId="" 로 mutation 을 쏴 실패한다(#115 가 없애려는 바로 그 증상).
+  # ITEM_ID 가드(#103)와 대칭인 IN_REVIEW_ID 빈값 가드가 mutation 을 스킵하는지 검증한다.
+
+  # 도착 컬럼이 빠진 field-list — In Review/검증대기 어느 이름도 없음.
+  fieldjson='{"fields":[{"name":"Status","options":[
+    {"id":"opt-ip","name":"In Progress"},
+    {"id":"opt-br","name":"Bot Review"},
+    {"id":"opt-done","name":"Done"}
+  ]}]}'
+  cfg="$(mktemp)"; printf 'project:\n  owner: acme\n' > "$cfg"
+  IN_REVIEW="$(PIPELINE_CONFIG="$cfg" bash "$READER_REVIEW" status-column-in-review 2>/dev/null)"
+  rm -f "$cfg"
+  # 실제 7-h jq — 도착 컬럼 부재라 빈 값이 나와야(가드가 걸릴 조건 재현)
+  IN_REVIEW_ID=$(printf '%s' "$fieldjson" \
+    | jq -r --arg col "$IN_REVIEW" '.fields[] | select(.name=="Status") | .options[] | select(.name==$col) | .id')
+  assert_eq "" "$IN_REVIEW_ID" "도착 컬럼 부재인데 IN_REVIEW_ID 가 비지 않음(가드 조건 미재현)" || return
+
+  # 7-h 가드 분기 재현 — 빈 값이면 mutation 스킵 + loud R9 로그. gh 스텁으로 mutation 호출 감시.
+  mutation_called=0
+  fake_gh() { mutation_called=1; }   # mutation 이 실행되면 여기가 불림
+  r9log=""
+  if [ -z "$IN_REVIEW_ID" ]; then
+    r9log="::error::도착 컬럼 option id 조회 실패/빈 값 — Status 전환 스킵(R9: 에스컬 아님, APPROVE 유지). statusTransition.succeeded=false·error 기록 필요."
+  else
+    fake_gh   # updateProjectV2ItemFieldValue mutation
+  fi
+  assert_eq 0 "$mutation_called" "IN_REVIEW_ID 빈 값인데 mutation 이 실행됨(가드 미작동)" || return
+  assert_contains "$r9log" "R9: 에스컬 아님" "빈 값 경로가 R9 경고로 안 떨어짐" || return
+
+  # 소스 회귀 가드 — SKILL 7-h 에 IN_REVIEW_ID 빈값 검사 분기가 실제 존재하고,
+  # mutation 의 optionId 주입이 그 가드 뒤(else)에 오는지(라인 순서) 못박는다.
+  body="$(cat "$REVIEW_SKILL")"
+  assert_contains "$body" 'if [ -z "$IN_REVIEW_ID" ]; then' "SKILL 에 IN_REVIEW_ID 빈값 가드 분기 없음(회귀)" || return
+  guard_ln=$(grep -n 'if \[ -z "\$IN_REVIEW_ID" \]; then' "$REVIEW_SKILL" | head -1 | cut -d: -f1)
+  mut_ln=$(grep -n 'optionId="\$IN_REVIEW_ID"' "$REVIEW_SKILL" | head -1 | cut -d: -f1)
+  if [ -n "$guard_ln" ] && [ -n "$mut_ln" ] && [ "$guard_ln" -lt "$mut_ln" ]; then
+    pass
+  else
+    fail "가드 분기가 mutation(optionId 주입)보다 뒤/부재 — 가드가 mutation 을 감싸지 않음 (guard=$guard_ln mut=$mut_ln)"
+  fi
+)
