@@ -83,6 +83,17 @@ jobs:
           PR_REPO_NAME=$(echo "$PR_REPO" | cut -d/ -f2)
           BOT_PREFIX="${REVIEWER_BOT_LOGIN%%\[*}"
 
+          # M4 fail-closed — Reviewer 봇 로그인이 비면 승인 게이트 강제 불가.
+          # BOT_PREFIX 가 빈 문자열이면 아래 startswith("") 가 "모든" 로그인에 참이 돼
+          # 아무 사용자나 APPROVE 만 하면 머지되는 fail-open 이 된다(org var
+          # PIPELINE_REVIEWER_BOT_LOGIN 을 설치 시 빠뜨리는 흔한 실수가 게이트를
+          # 조용히 붕괴시킴). 조용히 스킵(should_merge=false)하지 않고 job 을 빨갛게
+          # 실패시켜 설정 누락을 즉시 드러낸다.
+          if [ -z "$BOT_PREFIX" ]; then
+            echo "::error::Reviewer 봇 로그인 미설정(reviewer-bot-login·vars.PIPELINE_REVIEWER_BOT_LOGIN 둘 다 빈값) — 승인 게이트를 강제할 수 없어 머지를 차단합니다(fail-closed). org var PIPELINE_REVIEWER_BOT_LOGIN 을 설정하거나 caller 에 reviewer-bot-login 을 전달하세요."
+            exit 1
+          fi
+
           # $owner/$repo/$num 는 GraphQL 변수 — single quote 안 미확장 의도적
           # shellcheck disable=SC2016
           PR_INFO=$(gh api graphql -f query='
@@ -236,7 +247,13 @@ jobs:
           fi
 
           # 2) Prep Project 메타 (id, Status field id, Done option id) 동적 조회
-          #    organization / user 둘 다 지원 (한쪽이 null 이면 다른쪽으로 폴백).
+          #    organization / user 둘 다 지원.
+          #    M5 — organization() 과 user() 를 "한 쿼리"에 함께 넣으면 owner 가 user 일 때
+          #    organization(login:<user>) 가 top-level errors(NOT_FOUND)를 반환하고,
+          #    gh api graphql 은 errors 가 있으면 non-zero 로 종료한다. set -euo pipefail 하에서
+          #    step 이 죽고 continue-on-error:true 가 그걸 삼켜 user 소유 Project 는 Status=Done
+          #    전환이 "항상 조용히 실패"했다. 그래서 두 쿼리를 분리 호출한다 — org 를 먼저
+          #    시도하고(예상된 실패이므로 stderr 억제 + || true), 비면 user 로 폴백한다.
           # shellcheck disable=SC2016
           PROJECT_META=$(gh api graphql -f query='
             query($owner: String!, $number: Int!) {
@@ -251,19 +268,28 @@ jobs:
                   }
                 }
               }
-              user(login: $owner) {
-                projectV2(number: $number) {
-                  id
-                  field(name: "Status") {
-                    ... on ProjectV2SingleSelectField {
-                      id
-                      options { id name }
+            }' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
+            --jq '.data.organization.projectV2' 2>/dev/null || true)
+
+          if [ -z "$PROJECT_META" ] || [ "$PROJECT_META" = "null" ]; then
+            # org 조회가 비었음 → user 소유로 재시도 (org 소유였다면 위에서 채워졌다).
+            # shellcheck disable=SC2016
+            PROJECT_META=$(gh api graphql -f query='
+              query($owner: String!, $number: Int!) {
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    field(name: "Status") {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        options { id name }
+                      }
                     }
                   }
                 }
-              }
-            }' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
-            --jq '.data.organization.projectV2 // .data.user.projectV2')
+              }' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
+              --jq '.data.user.projectV2' 2>/dev/null || true)
+          fi
 
           if [ -z "$PROJECT_META" ] || [ "$PROJECT_META" = "null" ]; then
             echo "Project 메타 조회 실패 (owner=$PROJECT_OWNER, number=$PROJECT_NUMBER) — Status 전환 스킵" >&2
