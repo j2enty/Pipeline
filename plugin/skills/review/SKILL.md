@@ -255,7 +255,7 @@ STATE_FILE=".pipeline/state/reviews/pr-<repo>-<number>.json"
 
 > **#94: 이 write 가 빠지면 `.parent` 가 null 로 남아 소비자 critic 이 fail-closed 로 머지를 영구 차단한다 — 8-c-bis(`aggregate.verdict` write)와 동형 버그다.**
 
-parent 모드에서 상태 파일을 **처음 만든 직후**, Step 2-b 에서 이미 조회한 parent 이슈의 URL·number 를 `.parent` 에 **결정적으로** 기록한다. LLM 의 비결정적 채움에 의존하지 않는다. 소비자(`critic.yml` / `scripts/resolve-review-statefile.sh`)는 `.parent.url == PARENT_URL` 정확매칭으로 "이번 실행의 상태파일"을 식별하므로, 이 값이 비면 indeterminate → fail-closed.
+parent 모드에서 상태 파일을 **처음 만든 직후**, Step 2-b 에서 이미 조회한 parent 이슈의 URL·number 를 `.parent` 에 **결정적으로** 기록한다. LLM 의 비결정적 채움에 의존하지 않는다. 소비자(`critic-dispatch.yml` 이 부르는 `scripts/parse-critic-verdict.sh` / `scripts/resolve-review-statefile.sh`)는 `.parent.url == PARENT_URL` 정확매칭으로 "이번 실행의 상태파일"을 식별하므로, 이 값이 비면 indeterminate → fail-closed.
 
 - **단일 PR 모드(`pr-<repo>-<number>.json`, `mode:single`)는 건드리지 않는다** — `parent:null` 이 정상이다. 이 단계는 **parent 모드에서만** 실행한다.
 - STATE_FILE 은 라이브 변수 `${SLUG}`(리터럴 `<slug>` 금지 — 별개 셸에서 치환 누락 시 존재하지 않는 경로가 되어 #94 회귀). 8-c-bis 와 동일 컨벤션.
@@ -613,7 +613,7 @@ gh pr comment <N> --repo "$OWNER/<영역>" \
 
 위 8-c 의 parent 코멘트 렌더와 **별개로**, 8-b critic Agent 가 반환한 **verdict 와 findings 를 상태 파일 `aggregate` 에 한 트랜잭션으로 기록**한다(코멘트는 휘발성, 상태 파일은 영구 보존·후속 추적용).
 
-- `aggregate.verdict` ← 8-b critic 반환 verdict(`pass`/`concerns`/`blocker`). **`critic.yml` 이 이 값을 읽어 머지 분기**하며 allowlist(`pass`/`concerns`/`blocker`) 밖이면 indeterminate → fail-closed 로 머지 차단. **이 단계가 verdict 를 쓰는 유일한 실행 지점**이라 빠지면 verdict 가 초기값 null 로 남아 critic 자동머지가 영구 차단된다(#54).
+- `aggregate.verdict` ← 8-b critic 반환 verdict(`pass`/`concerns`/`blocker`). **`critic-dispatch.yml` 이 `critic-verdict-gate` composite action(→ `parse-critic-verdict.sh`)을 통해 이 값을 읽어 머지 분기**하며 allowlist(`pass`/`concerns`/`blocker`) 밖이면 indeterminate → fail-closed 로 머지 차단. **이 단계가 verdict 를 쓰는 유일한 실행 지점**이라 빠지면 verdict 가 초기값 null 로 남아 critic 자동머지가 영구 차단된다(#54).
 - `aggregate.criticFindings` ← 8-b critic 반환 `findings[]`(0건이면 `[]`).
 - 개별 PR verdict(`prs.<area>.verdict`: `approved`/`request_changes`)와는 **별개**다 — `aggregate.verdict` 는 critic 종합 verdict 다.
 
@@ -629,7 +629,7 @@ CRITIC_VERDICT="<8-b critic 반환 verdict: pass|concerns|blocker>"
 CRITIC_FINDINGS='<8-b critic 반환 findings[] JSON, 0건이면 []>'
 
 # fail-fast: verdict 가 allowlist(pass|concerns|blocker) 밖이면(빈값/이상치) 즉시 중단.
-#   critic.yml 도 allowlist 밖이면 fail-closed 하지만, 여기서 먼저 막아 잘못된 값이
+#   parse-critic-verdict.sh(critic-dispatch.yml 이 부름)도 allowlist 밖이면 fail-closed 하지만, 여기서 먼저 막아 잘못된 값이
 #   상태파일에 기록되는 것 자체를 방지한다.
 case "$CRITIC_VERDICT" in
   pass|concerns|blocker) ;;
@@ -754,7 +754,7 @@ fi
 # 설정 여부는 아래 가드가 판단한다 — 이 블록은 추론으로 건너뛰지 말고 항상 실행하라. env 미설정이면 가드가 자동 스킵(하위호환).
 if [ -n "${REVIEW_STATE_SENTINEL:-}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "$STATE_FILE" ]; then
   # STATE_FILE 은 working-directory 기준 상대경로일 수 있으므로 절대경로로 정규화.
-  # (소비자 critic.yml / track-findings action 은 다른 working-dir 에서 실행됨)
+  # (소비자 critic-dispatch.yml / track-findings action 은 다른 working-dir 에서 실행됨)
   STATE_FILE_ABS=$(cd "$(dirname "$STATE_FILE")" && pwd)/$(basename "$STATE_FILE")
   printf '%s\n' "$STATE_FILE_ABS" > "$REVIEW_STATE_SENTINEL"
 fi

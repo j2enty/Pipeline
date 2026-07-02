@@ -2,7 +2,7 @@
 
 > Step 5(상태 파일 초기화/갱신)·7-i(개별 리뷰 기록)·8-c-bis(critic finding 기록)에서 참조.
 > 이 스키마는 code-reviewer·verifier·critic 가 반환한 JSON 을 1:1 로 보존하는 **단일 진실원**이다.
-> 후속 GHA(critic.yml·track-findings action)가 이 파일을 읽으므로 키·구조를 임의로 바꾸지 않는다.
+> 후속 GHA(critic-dispatch.yml·track-findings action)가 이 파일을 읽으므로 키·구조를 임의로 바꾸지 않는다.
 
 ## 전체 스키마
 
@@ -115,7 +115,7 @@
 }
 ```
 
-- `aggregate.verdict`: 8-b 의 critic 반환 verdict(`pass`/`concerns`/`blocker`)를 **이 단계에서 기록**한다. enum 은 `pass`/`concerns`/`blocker` 고정(전체 리뷰 enum 으로 바꾸지 않는다). `.github/workflows/critic.yml` 이 이 값을 읽어 머지 분기하며 allowlist 밖이면 fail-closed 로 머지 차단. **8-c-bis 가 verdict 를 쓰는 유일한 실행 지점**이므로 이 기록이 빠지면 verdict 가 초기값 null 로 남아 critic 자동머지가 영구 차단된다(#54).
+- `aggregate.verdict`: 8-b 의 critic 반환 verdict(`pass`/`concerns`/`blocker`)를 **이 단계에서 기록**한다. enum 은 `pass`/`concerns`/`blocker` 고정(전체 리뷰 enum 으로 바꾸지 않는다). `.github/workflows/critic-dispatch.yml` 이 `critic-verdict-gate` composite action(→ `scripts/parse-critic-verdict.sh`)을 통해 이 값을 읽어 머지 분기하며 allowlist 밖이면 fail-closed 로 머지 차단. **8-c-bis 가 verdict 를 쓰는 유일한 실행 지점**이므로 이 기록이 빠지면 verdict 가 초기값 null 로 남아 critic 자동머지가 영구 차단된다(#54).
 - `aggregate.criticFindings[]`: 8-b 의 critic 반환 `findings[]` 각 항목을 그대로 기록. 각 항목은 `severity, area, title, description, affected_prs` 5개 필드(critic 스키마엔 `file`/`line` 이 없다 — area/affected_prs 만으로 식별). critic findings 가 0건이면 빈 배열(`[]`).
 - 개별 PR verdict(`prs.<area>.verdict`: `approved`/`request_changes`)와는 **별개**다 — `aggregate.verdict` 는 critic 종합 verdict 다(혼동 금지).
 - verdict·criticFindings 는 한 jq 트랜잭션으로 원자적(temp + `mv`) 기록한다.

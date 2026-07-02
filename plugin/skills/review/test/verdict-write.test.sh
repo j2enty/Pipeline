@@ -2,8 +2,9 @@
 # verdict-write.test.sh — 8-c-bis aggregate.verdict write 단계의 실제 동작 검증 (#54).
 #
 # 배경(#54 critical): aggregate.verdict(critic 종합 verdict pass|concerns|blocker)를
-#   상태파일에 쓰는 실행 단계가 처음부터 없어 항상 초기값 null 로 남았다. critic.yml:423 이
-#   null 을 읽어 allowlist 미스 → indeterminate → critic 자동머지 fail-closed(영구 차단).
+#   상태파일에 쓰는 실행 단계가 처음부터 없어 항상 초기값 null 로 남았다. verdict 소비자
+#   (parse-critic-verdict.sh — critic-dispatch.yml 이 부름)가 null 을 읽어 allowlist 미스
+#   → indeterminate → critic 자동머지 fail-closed(영구 차단).
 #
 # 이 테스트는 SKILL.md 8-c-bis 에 "문서로 박힌" jq write 명령을 그대로 추출해 실제 적용한다:
 #   ① 더미 상태파일(aggregate.verdict=null) 생성
@@ -126,7 +127,7 @@ jq --arg cv "pass" --argjson cf '[]' "$BROKEN_BODY" "$WORK/state.json" > "$WORK/
   && mv "$WORK/out.json" "$WORK/state.json"
 broken_v="$(jq -r '.aggregate.verdict' "$WORK/state.json" 2>/dev/null)"
 if [ "$broken_v" = "null" ]; then
-  pass "(VW-3) 레드 입증: write 제거 시 verdict 가 null 로 남음(critic.yml fail-closed 재현)"
+  pass "(VW-3) 레드 입증: write 제거 시 verdict 가 null 로 남음(parse-critic-verdict.sh fail-closed 재현)"
 else
   fail "(VW-3) 레드 입증 실패: write 제거했는데 verdict='$broken_v'(null 기대)"
 fi
