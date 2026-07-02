@@ -41,4 +41,29 @@ describe("evaluateHealth", () => {
     const last = 0;
     expect(evaluateHealth(last, INTERVAL, INTERVAL * 2 + 1)).toBe("degraded");
   });
+
+  // 이중 차단(M7): 오염된 intervalMs 가 흘러와도 안전 기본값으로 대체돼야 한다.
+  // 만약 방어가 없으면 `now - lastTickAt > NaN*2` 등이 항상 false 라 degraded 가
+  // 영영 은폐된다. lastTickAt 이 아주 오래전(기본값 5분의 2주기 훨씬 초과)이면
+  // intervalMs 가 비정상이어도 반드시 degraded 여야 한다.
+  describe("오염된 intervalMs 는 안전 기본값으로 대체 — degraded 은폐 방지", () => {
+    const last = 1_000_000;
+    const now = last + 10_000_000; // 기본값 300000ms*2=600000ms 를 훨씬 초과
+
+    it("intervalMs = NaN 이어도 degraded (ok 로 은폐되지 않음)", () => {
+      expect(evaluateHealth(last, NaN, now)).toBe("degraded");
+    });
+
+    it("intervalMs = 0 이어도 degraded", () => {
+      expect(evaluateHealth(last, 0, now)).toBe("degraded");
+    });
+
+    it("intervalMs = 음수(-100) 여도 degraded", () => {
+      expect(evaluateHealth(last, -100, now)).toBe("degraded");
+    });
+
+    it("intervalMs = Infinity 여도 degraded (비유한 방어)", () => {
+      expect(evaluateHealth(last, Infinity, now)).toBe("degraded");
+    });
+  });
 });
