@@ -38,6 +38,16 @@ on:
         type: string
         required: false
         default: '.pipeline/state/reviews'
+      reviewer-bot-login:
+        description: "Reviewer 봇 로그인 이름 (critic.yml 과 동일 의미). 빈값이면 org var(PIPELINE_REVIEWER_BOT_LOGIN)로 폴백한다(critic.yml 과 동일). input·org var 둘 다 빈값이면 M3 승인 재검증을 스킵한다(degrade)."
+        type: string
+        required: false
+        default: ''
+      strict-review-bot-check:
+        description: "M3 재검증 시 — true: 누구의 CHANGES_REQUESTED든 차단 / false: Reviewer 봇 것만 (critic.yml 과 동일 의미·기본값)"
+        type: boolean
+        required: false
+        default: true
     secrets:
       AUTHOR_APP_ID:
         required: true
@@ -158,9 +168,108 @@ jobs:
           critic-run-marker: ${{ env.CRITIC_RUN_MARKER }}
           review-state-sentinel: ${{ env.REVIEW_STATE_SENTINEL }}
 
+      # ── M3 승인 재검증 (TOCTOU 차단, #99 PR2a) ──
+      # 문제: critic-dispatch 는 App 이 critic-triggered dispatch 를 발사한 "그 시점"의
+      #   "전부 승인" 스냅샷만 믿고 나중에 머지한다. 그 사이 새 커밋·CHANGES_REQUESTED·
+      #   blocked 라벨이 붙어도 낡은 승인 기준으로 머지하는 TOCTOU 가 있다(감사 M3).
+      # 처방: verdict 게이트(pass/concerns) 통과 후 "머지 직전"에 각 sibling 의 승인 상태를
+      #   critic.yml 과 "동일 판정"(verify-sibling-approvals.sh — 공유 추출)으로 재검증한다.
+      #   즉 재검증은 verdict 게이트와 AND — "승인이 여전히 유효할 때만" 머지한다.
+      # all-or-nothing: 멀티영역은 원자적으로 함께 머지돼야 하므로, 하나라도 재검증 실패면
+      #   머지 루프를 아예 돌리지 않고 차단 + 에스컬레이션 + exit 1 한다(fail-closed).
+      # degrade: reviewer-bot-login(input) 이 빈값이면 org var(PIPELINE_REVIEWER_BOT_LOGIN)로
+      #   폴백한다(critic.yml 과 동일). 둘 다 빈값일 때만(봇 판정 불가) 재검증을 스킵하고 현행
+      #   동작을 유지한다(하위호환). 즉 org var 만 있으면 caller 변경 없이 자동 활성화된다.
+      # if 는 pass/concerns 만 — 이 step 이 exit 1 로 실패하면 아래 머지 step 의 (상태함수 없는)
+      #   if 에 암묵 success() 가 적용돼 머지 step 이 스킵된다 → 낡은 승인 머지 원천 차단.
+      - name: M3 — 머지 직전 sibling 승인 재검증 (fail-closed)
+        if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'concerns'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PARENT_URL: ${{ inputs.parent-url }}
+          OWNER: ${{ inputs.owner }}
+          PARENT_REPO: ${{ inputs.parent-repository }}
+          MODULES_IGNORE: ${{ inputs.modules-ignore }}
+          # critic.yml 라인 110 과 동일한 폴백 — input 이 빈값이면 org var 를 자동 사용한다.
+          # 이 폴백이 없으면 caller 가 reviewer-bot-login 을 안 넘길 때 항상 빈값이 돼
+          # M3 재검증이 프로덕션에서 늘 스킵(degrade)됐다(#99 PR2a 리뷰 지적). 이미 존재하는
+          # org var(PIPELINE_REVIEWER_BOT_LOGIN)를 쓰면 cross-repo caller 변경 없이 활성화된다.
+          REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login != '' && inputs.reviewer-bot-login || vars.PIPELINE_REVIEWER_BOT_LOGIN }}
+          STRICT_REVIEW_BOT_CHECK: ${{ inputs.strict-review-bot-check }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERIFY_SH: ${{ github.workspace }}/.pipeline-action-checkout/scripts/verify-sibling-approvals.sh
+        run: |
+          set -euo pipefail
+
+          # degrade — reviewer-bot-login(input) 도 org var(PIPELINE_REVIEWER_BOT_LOGIN) 도 없으면
+          # 봇 판정 불가 → 스킵(현행 동작 유지). org var 만 설정해도 자동 활성화된다.
+          if [ -z "${REVIEWER_BOT_LOGIN:-}" ]; then
+            echo "M3 재검증 스킵(reviewer-bot-login·org var 둘 다 미설정) — 현행 동작 유지(degrade). 활성화하려면 org var PIPELINE_REVIEWER_BOT_LOGIN 을 설정하거나 caller 에 reviewer-bot-login 을 전달하세요."
+            exit 0
+          fi
+
+          PARENT_NUM=$(echo "$PARENT_URL" | grep -oE '[0-9]+$')
+
+          # sub-issue 목록 + modules-ignore 필터 (아래 머지 step 과 동일 열거).
+          # $n/$mi 는 jq 변수 — single quote 안 미확장 의도적
+          # shellcheck disable=SC2016
+          SIBLINGS=$(gh api "/repos/$PARENT_REPO/issues/$PARENT_NUM/sub_issues" \
+            | jq -r --argjson mi "$MODULES_IGNORE" \
+            '.[] | select(.repository.name as $n | ($mi | index($n)) | not) | "\(.repository.name) \(.number)"')
+
+          echo "재검증 대상 sibling:"
+          echo "$SIBLINGS"
+
+          # 각 sibling 을 critic.yml 과 동일 판정으로 재검증. 하나라도 실패면 BLOCKED 로 모아
+          # 루프 후 차단(all-or-nothing). '봇 로그인'은 verify 스크립트가 prefix 로 잘라 매칭.
+          BLOCKED=0
+          BLOCK_DETAIL=""
+          while IFS=' ' read -r REPO SUB_NUM; do
+            [ -z "$REPO" ] && continue
+            RC=0
+            RESULT=$(OWNER="$OWNER" \
+              REVIEWER_BOT_LOGIN="$REVIEWER_BOT_LOGIN" \
+              STRICT_REVIEW_BOT_CHECK="$STRICT_REVIEW_BOT_CHECK" \
+              bash "$VERIFY_SH" "$REPO" "$SUB_NUM") || RC=$?
+            if [ "$RC" = "0" ] && [ "$RESULT" = "ok" ]; then
+              echo "  $OWNER/$REPO#$SUB_NUM — 승인 유효(ok)"
+            else
+              echo "::error::  $OWNER/$REPO#$SUB_NUM — 재검증 실패: ${RESULT:-exit-$RC}"
+              BLOCKED=1
+              BLOCK_DETAIL="$BLOCK_DETAIL\n- $OWNER/$REPO#$SUB_NUM: ${RESULT:-exit-$RC}"
+            fi
+          done <<< "$SIBLINGS"
+
+          if [ "$BLOCKED" = "0" ]; then
+            echo "모든 sibling 승인 재검증 통과 — 머지 진행."
+            exit 0
+          fi
+
+          # 하나라도 실패 — 머지 루프를 돌리지 않고 차단 + parent 코멘트/Slack 에스컬 + exit 1.
+          # (blocker step 과 동일 에스컬 스타일. all-or-nothing — 멀티영역 원자성 보존.)
+          echo "::error::M3 재검증 실패 — 낡은 승인으로 머지하지 않고 차단(TOCTOU fail-closed)."
+          # printf 로 body 구성 — YAML 멀티라인 0칸 들여쓰기 방지
+          BODY=$(printf '## 🚨 M3 승인 재검증 실패 — 머지 차단\n\ndispatch 발사 이후 sibling 승인 상태가 바뀌어(새 커밋·CHANGES_REQUESTED·blocked 라벨 등) 재검증에 실패했어요. 낡은 승인으로 머지하지 않고 차단했습니다. 확인이 필요합니다.\n\n**재검증 실패 영역**:%b\n\n**Actions 로그**: %s' "$BLOCK_DETAIL" "$RUN_URL")
+          COMMENT_URL=$(gh issue comment "$PARENT_URL" \
+            --body "$BODY" \
+            --json url --jq .url 2>/dev/null || echo "$PARENT_URL")
+
+          if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+            PAYLOAD=$(jq -n \
+              --arg title "M3 승인 재검증 실패 — 머지 차단" \
+              --arg url "$COMMENT_URL" \
+              --arg context "parent: $PARENT_URL" \
+              '{text: "🚨 *\($title)*\n\($context)\n👀 <\($url)|GitHub 코멘트 열기>"}')
+            curl -sS -X POST -H 'Content-type: application/json' \
+              --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
+          fi
+          exit 1
+
       # verdict 게이트 — pass/concerns 일 때만 머지한다(#99 fail-closed).
       # blocker/indeterminate 는 아래 전용 차단 step 이 받아 에스컬레이션 + exit 1.
-      # (M3 승인 재검증은 이번 PR 범위 아님 — PR2 에서 check-and-critic 공유 추출로 이식.)
+      # 추가로 위 M3 재검증 step 이 exit 1 로 실패하면, 이 step 의 if(상태함수 없음)에
+      # 암묵 success() 가 적용돼 이 머지 step 은 스킵된다 → 낡은 승인 머지 원천 차단.
       - name: 모든 영역 PR squash merge
         if: steps.verdict.outputs.critic_verdict == 'pass' || steps.verdict.outputs.critic_verdict == 'concerns'
         env:
