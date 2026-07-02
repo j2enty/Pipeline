@@ -98,20 +98,36 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 
 `PIPELINE_*` prefix 사용. 이름 확정 후 일괄 치환 가능 (grep + find & replace).
 
+> **SSOT 주의**: 아래 표는 `install.sh` 의 `register_variables()`(영역 레포에 `gh variable set`)가
+> **실제로 자동 등록하는 값**과 1:1 로 맞춰져 있다. 이 표를 바꾸면 `install.sh` 도 함께 확인한다.
+> (변수는 org 가 아니라 **영역 레포 단위**로 등록된다 — 이름은 관례상 "Org Variables" 로 부른다.)
+
+**install.sh 가 자동 등록하는 변수** (호출자 yml 이 `vars.PIPELINE_*` 로 참조):
+
 | 변수명 | input 매핑 | 의미 |
 |---|---|---|
 | `PIPELINE_OWNER` | `owner` | GitHub 조직명 |
 | `PIPELINE_PARENT_REPOSITORY` | `parent-repository` | `<owner>/<repo>` |
 | `PIPELINE_MODULES_IGNORE` | `modules-ignore` | 제외 모듈 JSON 배열 |
 | `PIPELINE_WORKING_DIRECTORY` | `working-directory` | runner 작업 경로 |
-| `PIPELINE_SLACK_CHANNEL` | `slack-channel` | 슬랙 채널 |
 | `PIPELINE_REVIEWER_BOT_LOGIN` | `reviewer-bot-login` | Reviewer 봇 로그인 이름 (예: `review-bot[bot]`) |
 | `PIPELINE_VERDICT_DIR` | `verdict-state-dir` | critic verdict 상태 파일 디렉토리 |
-| `PIPELINE_PROJECT_OWNER` | `project-owner` | Project v2 소유자 (머지 후 Status=Done 전환용) |
-| `PIPELINE_PROJECT_NUMBER` | `project-number` | Project v2 번호 (머지 후 Status=Done 전환용) |
+| `PIPELINE_STRICT_REVIEW_BOT_CHECK` | `strict-review-bot-check` | Reviewer 봇 CHANGES_REQUESTED만 차단 기준으로 볼지 |
+| `PIPELINE_CI_WORKFLOW_NAME` | `ci-workflow-name` | auto-merge 가 CI pass 확인 시 참조할 워크플로 이름 (config `ci-workflow-name` 비면 미등록) |
 | `PIPELINE_TRACKING_ENABLED` | `tracking-enabled` | finding 추적 on/off |
 | `PIPELINE_TRACKING_MAJOR_LABEL` | `major-label` | major 추적 라벨명 |
 | `PIPELINE_TRACKING_MINOR_LABEL` | `minor-label` | minor 추적 라벨명 |
+
+**호출자 yml 이 참조하지만 install.sh 가 자동 등록하지 않는 변수** (선택 기능 — 필요 시 **수동 등록**):
+
+| 변수명 | input 매핑 | 의미 |
+|---|---|---|
+| `PIPELINE_PROJECT_OWNER` | `project-owner` | Project v2 소유자 (머지 후 Status=Done 전환용). 미설정 시 호출자 yml 이 빈 값을 넘겨 **머지 후 Status 전환을 스킵**(merge.yml). |
+| `PIPELINE_PROJECT_NUMBER` | `project-number` | Project v2 번호 (머지 후 Status=Done 전환용). 위와 동일 — 둘 다 있어야 전환 동작. |
+
+> `slack-channel`(config) 은 **영역 레포 변수(`PIPELINE_SLACK_CHANNEL`)로 등록되지 않는다**.
+> 슬랙 채널은 App 쪽 알림 경로 설정(App 환경변수 `SLACK_CHANNEL` — 위 "App 환경변수" 참조)으로
+> 흐르며, 리더(`pipeline-config.sh`)의 `slack-channel` 키로도 읽는다.
 
 ### App 환경변수
 

@@ -69,8 +69,25 @@ TOKEN=$(printf '%s' "$RESPONSE" \
   || true)
 
 if [ -z "$TOKEN" ]; then
+  # 실패 진단 — 응답 원문(RESPONSE)을 절대 로그로 내보내지 않는다 (#101 / 감사 scripts-g1).
+  #   토큰 발급 자체는 성공했으나 파싱만 실패한 경우(예: python3 부재·응답 절단) RESPONSE 에
+  #   실제 installation token 이 들어있을 수 있다. 이 토큰은 1시간 유효한 실자격증명이며
+  #   GitHub Actions 로그는 이 값을 마스킹하지 않으므로, 원문을 찍으면 그대로 유출된다.
+  #   → 응답에서 안전한 진단 필드(message)만 추출해 출력하고, 그 외 원문은 폐기한다.
+  ERR_MSG=$(printf '%s' "$RESPONSE" \
+    | python3 -c "import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(d.get('message', '') if isinstance(d, dict) else '')
+except Exception:
+    print('')" 2>/dev/null \
+    || true)
   echo "ERROR: Installation token 발급 실패" >&2
-  echo "Response: $RESPONSE" >&2
+  if [ -n "$ERR_MSG" ]; then
+    echo "GitHub API message: $ERR_MSG" >&2
+  else
+    echo "(응답을 파싱할 수 없습니다 — 토큰 유출 방지를 위해 응답 원문은 로그에 출력하지 않습니다)" >&2
+  fi
   exit 1
 fi
 

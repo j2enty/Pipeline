@@ -1,0 +1,41 @@
+# 테스트용 더미 config — pipeline-config.sh 리더의 "토글 default 폴백 경로" parity 자극용.
+# 실제 프로젝트 식별자 없음.
+#
+# 핵심: plan:/metrics: 서브블록을 **일부러 생략**했다. 그래야 리더가 명시값이 아닌
+#   공유 default 상수(plan_bool default='true', metrics_bool default='false')로 폴백한다.
+#   config-reader-core-parity.yml 은 토글을 전부 명시해 이 default 경로를 자극하지 못하므로,
+#   plan 리더의 default 상수가 조용히 드리프트해도 못 잡는 허위그린이 생긴다(#112 리뷰 F1).
+#   이 fixture 로 default 폴백의 plan↔kickoff parity 도 강제한다.
+
+project:
+  owner: parity-defaults-org
+  parent-repository: parity-defaults-org/parent-repo
+  project-numbers: [3]
+  working-directory: /tmp/parity-defaults-workspace
+
+modules:
+  - name: Backend
+    ci-workflow-name: Backend CI
+
+modules-ignore: []
+
+reviewer:
+  enabled: false
+
+pipeline:
+  repo: parity-defaults-org/Pipeline
+  ref: main
+
+claude-commands:
+  enabled: false
+  project-name: ParityDefaults
+  project-id: PVT_defaults123
+  status-field-id: PVTSSF_status456
+  area-field-id: PVTSSF_area789
+  author-login: parity-author
+  local-account: parity-local
+  docs-context-dir: ""
+  # plan: / metrics: 서브블록 의도적 생략 → 리더가 default 상수로 폴백.
+
+tracking:
+  enabled: false
