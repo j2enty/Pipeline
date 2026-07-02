@@ -314,3 +314,41 @@ examples/
 | + `reviewer-app-id` · `reviewer-bot-slug` · `reviewer-token-key` | `reviewer.enabled: true` 일 때만 조건부 추가 |
 
 > 위 GraphQL 3키는 self-check 전에 자동조회로 채워질 수 있으므로, config 에 비워둬도 자동조회만 성공하면 통과한다.
+
+---
+
+## 러너 격리 (로컬 인터랙티브 디커플) — install.sh 머신 세팅 플래그 (이슈 #96)
+
+self-hosted 러너와 인터랙티브 Claude Code 세션이 **같은 `~/.claude`(user scope)** 를 공유하면,
+러너가 매 GHA 실행마다 `pipeline` 마켓플레이스를 자기 체크아웃 폴더(냉동 SHA)로 되돌리고 재설치해
+인터랙티브 `/pipeline:*` 가 옛 버전에 묶인다(같은 마켓플레이스명·플러그인명·버전이라 캐시까지 공유).
+해법 = **러너에 전용 `CLAUDE_CONFIG_DIR` 부여** — 러너의 플러그인 레지스트리·캐시·enable 상태를
+인터랙티브 기본 `~/.claude` 와 완전히 분리한다.
+
+이 플래그들은 프로젝트 config(secrets/variables) 와 무관한 **머신 세팅**이라, 하나라도 주면
+install.sh 는 다른 단계를 스킵하고 세팅만 수행 후 종료한다(값은 kebab-case, install.sh 헤더에도 명시).
+
+| 플래그 | 값 | 의미 |
+|---|---|---|
+| `--install-local-plugin` | (불리언) | 기본 `~/.claude` 의 `pipeline` 마켓플레이스를 **개발 레포(=이 install.sh 가 놓인 레포 루트)** 로 재배선해 인터랙티브가 main 을 추적하게 함. 설치 시퀀스는 `ensure-plugin-installed.sh` 재사용. claude CLI 필요. |
+| `--runner-root <path>` | 경로 | self-hosted 러너 디렉토리(`.env` 위치). 러너 격리 세팅을 트리거 — config dir 프로비저닝 + `.env` 기록. |
+| `--runner-config-dir <path>` | 경로(옵션) | 러너 전용 격리 `CLAUDE_CONFIG_DIR` 경로. 미지정 시 `<runner-root>/.claude-pipeline-runner`. |
+
+**러너 격리 세팅이 자동으로 하는 일**(`--runner-root` 지정 시):
+
+1. 격리 config dir 생성.
+2. `<config-dir>/.credentials.json` → 조작자 `~/.claude/.credentials.json` **심링크**(복사 아님 — OAuth 토큰 회전에도 최신 유지, 원본 불변).
+3. `<config-dir>/.claude.json` 에 조작자 홈 루트 `~/.claude.json` 의 `oauthAccount` 만 복사(기존 키 병합 보존).
+4. `<runner-root>/.env` 에 아래 값 멱등 기록(기존 라인 보존).
+
+> 러너 `.env` 는 self-hosted 러너가 읽어 **모든 job 에 주입하는 환경변수 파일**(KEY=VALUE 리터럴).
+
+| 러너 `.env` 키 | 값 | 의미 |
+|---|---|---|
+| `CLAUDE_CONFIG_DIR` | `<runner-config-dir>` 절대경로 | 러너의 모든 `claude` 호출이 쓸 격리 config dir. 인터랙티브 기본 `~/.claude` 와 분리 |
+
+**적용 조건(수동 1단계)**: `.env` 변경은 러너 서비스 **재시작** 후 적용된다(GHA self-hosted 러너 특성).
+재시작 전까지는 러너가 기본 `~/.claude` 를 계속 사용한다.
+
+**종속성 제로**: 러너 경로·config dir 는 인자 주입, 계정값(credentials·oauthAccount)은 실행 시
+조작자 `~/.claude` 에서 읽는다 — 본체에 프로젝트/사용자 식별자 하드코딩 없음.

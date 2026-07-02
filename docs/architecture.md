@@ -101,9 +101,21 @@ Phase 2가 사실상 최종 형태일 가능성이 높음. Phase 3는 운영자�
 
 - **macOS**: 기본 `timeout`이 없으므로 `brew install coreutils`(→ `gtimeout`) 필요. **미설치 시 review 워크플로가 claude 호출 전 `TIMEOUT_CMD` 결정에서 실패**한다 — `install.sh` 실행 시점이 아니라 **러너에서 워크플로가 도는 시점**에 워크플로 에러로 드러난다.
 - **Linux**: 대부분의 배포판은 `timeout`(coreutils)이 기본 포함 — 단 BusyBox 등 최소/커스텀 이미지는 별도 설치가 필요할 수 있다.
-- `claude` CLI와 Pipeline 플러그인은 워크플로의 `ensure-plugin`(`scripts/ensure-plugin-installed.sh`)이 매 실행 user scope로 설치 — 러너엔 `claude` CLI만 사전 설치돼 있으면 된다.
+- `claude` CLI와 Pipeline 플러그인은 워크플로의 `ensure-plugin`(`scripts/ensure-plugin-installed.sh`)이 매 실행 설치 — 러너엔 `claude` CLI만 사전 설치돼 있으면 된다.
 
 `install.sh`의 `check_requirements`가 `timeout`/`gtimeout` 부재를 경고로 안내한다(중단 안 함). 단 이 체크는 **install 머신 기준**이라(install≠러너일 수 있음), 실제 요구는 review가 도는 러너 OS임에 유의.
+
+#### 러너 config 격리 — 인터랙티브 세션과 디커플 (이슈 #96)
+
+러너가 개발자 머신과 **같은 사용자로 같은 `~/.claude`(user scope)** 를 공유하면, 러너의 매-실행 플러그인 재설치가 `pipeline` 마켓플레이스를 자기 체크아웃 폴더(detached SHA, 냉동)로 되돌려 **인터랙티브 `/pipeline:*` 가 옛 버전에 묶인다**(같은 마켓플레이스명·플러그인명·버전이라 캐시까지 공유 — 로컬 전용 우회 불가). 프론트로 치면, 자동화(CI)와 사람이 같은 전역 `node_modules` 를 공유해 CI 가 매 실행 특정 커밋 버전으로 되돌려버리는 상황.
+
+**해법(방향 A)**: 러너에 **전용 `CLAUDE_CONFIG_DIR`** 를 부여해 레지스트리·캐시·enable 상태를 인터랙티브 기본 `~/.claude` 와 완전히 분리한다. `install.sh` 가 자동 세팅한다:
+
+- `install.sh --runner-root <러너 디렉토리>` → 격리 config dir 프로비저닝(인증은 `~/.claude/.credentials.json` **심링크** — 토큰 회전에도 최신 유지, 원본 불변 + `oauthAccount` 만 최소 `.claude.json` 으로 복사) + `<러너>/.env` 에 `CLAUDE_CONFIG_DIR` 기록. 러너는 `.env` 를 읽어 모든 job 에 이 값을 주입하므로 러너의 모든 `claude` 호출이 격리 dir 을 쓴다.
+- `install.sh --install-local-plugin` → 인터랙티브 기본 `~/.claude` 의 `pipeline` 마켓플레이스를 **개발 레포**(main 추적)로 재배선. 러너가 더는 기본 `~/.claude` 를 안 건드리므로 유지된다.
+- **적용 조건**: `.env` 변경은 러너 서비스 **재시작** 후 적용(GHA self-hosted 러너 특성). 재시작 전까진 러너가 기본 `~/.claude` 를 계속 사용한다.
+
+세부 플래그·`.env` 키 카탈로그는 `docs/conventions.md` "러너 격리" 섹션 참조. 인증 동작 자체(격리 dir 로 `claude -p` 통과)는 실 러너에서만 최종 검증 가능하다.
 
 ### 환경 분리 — 운영 App / 개발 App
 
