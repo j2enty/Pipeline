@@ -159,7 +159,9 @@ STATUS_TRIGGERS_KICKOFF=       # 폴러가 kickoff 를 트리거할 Status 컬�
 STATUS_TRIGGERS_REVIEW=        # 폴러가 review 를 트리거할 Status 컬럼값 (옵션, 기본 "Bot Review")
 ```
 
-> `STATUS_TRIGGERS_*` 는 config `project.status-triggers.{kickoff,review}` 에서 온다. 프로젝트가 Status 컬럼명을 바꾸면 반드시 함께 바꿔야 폴러가 무음 정지하지 않는다. 미설정(빈 값)이면 App(`lib/env.ts`)이 기본 컬럼명으로 폴백 — 컬럼명이 기본과 같은 프로젝트는 설정 없이도 동작한다(이식 안전).
+> `STATUS_TRIGGERS_*` 는 config `project.status-triggers.{kickoff,review}` 에서 온다. **같은 config 키를 두 소비자가 읽어 정렬한다**: (1) App 폴러가 env 로 읽어 dispatch 판정, (2) `/kickoff`·`/review` SKILL 이 리더 친화키 `status-trigger-kickoff`/`status-trigger-review` 로 읽어 sub-issue Status 비교·전환. 둘이 같은 값을 봐야 "폴러 dispatch ↔ SKILL 비교"가 end-to-end 로 맞물린다(컬럼명을 config 에서 바꾸면 양쪽이 함께 따라감). 미설정(빈 값)이면 App·리더 모두 기본 컬럼명으로 폴백 — 컬럼명이 기본과 같은 프로젝트는 설정 없이도 동작한다(이식 안전).
+>
+> **범위 한계**: config 로 재정의 가능한 건 이 **두 트리거 컬럼**(kickoff=`In Progress`, review=`Bot Review`)뿐이다. `In Review`(리뷰 승인 후 도착 상태)·`Ready`·`Backlog`·`Done` 등 비-트리거 컬럼은 SKILL 에 기본명 고정 — 이 컬럼들을 리네임하는 건 아직 미지원이다.
 
 **장애 알림 경로** — App 이 장애 알림을 보낼 때 쓰는 설정(전부 옵션). Janus 게이트웨이를 우선하고, 비활성/실패 시 Slack 웹훅으로 폴백한다:
 
@@ -273,6 +275,8 @@ examples/
 | `contract-doc-enabled` | `claude-commands.plan` | boolean | `true` | ② 영역 간 공유 계약 문서 생성 on/off |
 | `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어, 옛 oh-my-claudecode:ask 의 Pipeline 자체 대체) |
 | `base-branch` | `claude-commands` (직속) | string | `develop` | `/kickoff` 이 PR 생성(`gh pr create --base`)·재개 rebase(`git rebase origin/<base>`) 대상으로 쓰는 base 브랜치. `main` 이 기본인 새 프로젝트로 이식할 때 존재하지 않는 develop 참조 실패를 막는 주입 키. 빈값도 `develop` 로 폴백(항상 비지 않음). `install.sh` 는 파싱하지 않음 — 런타임 리더 전용(3벌 리더 공유 코어) |
+| `status-trigger-kickoff` | `project.status-triggers.kickoff` | string | `In Progress` | `/kickoff` 이 처리 대상 sub-issue 를 고르는 Status 컬럼명(G1 대상 판정·lead 게이트·skip 분류). App 폴러 env `STATUS_TRIGGERS_KICKOFF` 와 **같은 config 키**를 읽어 dispatch↔비교를 정렬. 빈값도 기본으로 폴백. 리더 전용(App 은 env 로 별도 수신) |
+| `status-trigger-review` | `project.status-triggers.review` | string | `Bot Review` | `/kickoff` 이 PR 생성 후 전환하고 `/review` 가 전환 출발점으로 비교하는 Status 컬럼명. App 폴러 env `STATUS_TRIGGERS_REVIEW` 와 같은 config 키. 빈값도 기본으로 폴백. 리더 전용 |
 
 ### 계측 토글 카탈로그 (`claude-commands.metrics:` 항목)
 

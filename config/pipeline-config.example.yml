@@ -22,11 +22,15 @@ project:
   # 미설정 시 Slack 알림 스킵 (파이프라인은 정상 진행)
   slack-channel: ""
 
-  # 폴러가 kickoff/review 를 트리거할 Project v2 Status 컬럼값
-  # (App 환경변수 STATUS_TRIGGERS_KICKOFF / STATUS_TRIGGERS_REVIEW)
+  # kickoff/review 를 트리거하는 Project v2 Status 컬럼값.
+  # 두 소비자가 이 같은 값을 읽어 정렬한다:
+  #   (1) App 폴러 — 환경변수 STATUS_TRIGGERS_KICKOFF / STATUS_TRIGGERS_REVIEW 로 받아 dispatch
+  #   (2) /kickoff·/review SKILL — 이 config 를 읽어 sub-issue Status 비교·전환
   # 프로젝트의 Status 컬럼명이 아래 기본값과 다르면 실제 컬럼명을 적는다.
   # 미설정 시 기본값("In Progress" / "Bot Review") 사용 — 기본과 같으면 통째로 생략 가능.
-  # ⚠️ 컬럼명을 바꿨는데 여기 반영하지 않으면 폴러가 어떤 아이템도 트리거하지 않는다(무음 정지).
+  # ⚠️ 컬럼명을 바꿨는데 여기 반영하지 않으면 폴러 dispatch·SKILL 비교가 어긋나 무음 정지한다.
+  # ⚠️ 재정의 가능한 건 이 두 트리거 컬럼뿐 — In Review/Ready/Backlog/Done 등 비-트리거
+  #    컬럼은 아직 기본명 고정(리네임 미지원).
   # status-triggers:
   #   kickoff: "In Progress"
   #   review: "Bot Review"
