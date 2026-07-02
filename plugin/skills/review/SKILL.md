@@ -134,16 +134,31 @@ gh pr view <N> --repo "$OWNER/<영역>" --json number,url,state,isDraft,baseRefN
 
    **우선 A**: `.pipeline/state/sessions/<SLUG>.json` 존재하면 `areas.<area>.pr.url` 수집
 
-   **Fallback B**: 세션 파일 없거나 누락 영역이 있으면, parent의 sub-issue → linked PR 조회:
+   **Fallback B**: 세션 파일 없거나 누락 영역이 있으면, parent의 sub-issue → 그 sub-issue 를 닫는(연결된) PR 을 **GraphQL 로 결정적 조회**:
+
+   > **`gh pr list --search "linked:..."` 금지 (#103/M13)**: GitHub 검색의 `linked:` 한정자는 `linked:pr`/`linked:issue` 같은 **불리언 존재 여부**만 받고 `owner/repo#N` 형태의 특정 이슈 참조는 받지 않는다. 그런 쿼리는 문법상 무효라 **항상 빈 결과**를 반환해, 세션 파일 부재 시 유일 폴백인데도 "PR 0건 → 중단"으로 오작동한다. 대신 이슈의 `closedByPullRequestsReferences`(그 이슈를 닫도록 `Closes #N` 로 연결된 PR)를 직접 읽는다 — `scripts/verify-sibling-approvals.sh` 가 쓰는 것과 동일한 결정적 경로.
+
    ```bash
    CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
    OWNER="$(bash "$CFG" owner)"
    PARENT_REPO_NAME="$(bash "$CFG" parent-repo-name)"
    gh api /repos/$OWNER/$PARENT_REPO_NAME/issues/<parent-N>/sub_issues
-   # 각 sub-issue에 대해:
-   gh pr list --repo "$OWNER/<영역>" \
-     --search "linked:$OWNER/<영역>#<sub-N>" \
-     --state open --json number,url,headRefOid,isDraft,baseRefName
+   # 각 sub-issue(레포 <영역>, 번호 <sub-N>)에 대해 — 연결된 open PR 을 GraphQL 로 조회.
+   #   closedByPullRequestsReferences = 그 이슈를 닫도록 연결된 PR 들.
+   #   includeClosedPrs:false 로 open PR 만 받고, isDraft 는 아래 4번에서 함께 제외한다.
+   gh api graphql -f query='
+     query($owner: String!, $repo: String!, $num: Int!) {
+       repository(owner: $owner, name: $repo) {
+         issue(number: $num) {
+           closedByPullRequestsReferences(first: 20, includeClosedPrs: false) {
+             nodes { number url headRefOid isDraft baseRefName state }
+           }
+         }
+       }
+     }
+   ' -f owner="$OWNER" -f repo="<영역>" -F num=<sub-N> \
+     --jq '(.data.repository.issue.closedByPullRequestsReferences.nodes // [])[]
+           | select(.state=="OPEN" and .isDraft==false)'
    ```
 
 4. 수집된 PR 중 `isDraft=true`, `state!=OPEN` 제외. `review=false` 모듈(`--modules-where review=false`)의 PR 도 제외.
@@ -440,7 +455,13 @@ REVIEWER_TOKEN_KEY="$(bash "$CFG" reviewer-token-key)"
 #    (실제 시크릿 App ID/PEM/Installation 은 env 에서 헬퍼가 읽는다 — config 아님.
 #     env 변수 이름표 PREFIX 만 config reviewer-token-key 로 주입.)
 source ~/.zshrc
-TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/gh-app-token.sh" "$REVIEWER_TOKEN_KEY")
+# [#103/M11] 토큰 발급 실패(종료코드≠0)·빈 값 게이트. gh-app-token.sh 는 실패 시 non-zero
+#   종료 + 빈 stdout 이다. 이 게이트가 없으면 빈 TOKEN 으로 아래 curl 이 401 나는데도
+#   REVIEW_URL 검사 없이 APPROVE·Status 전환이 진행돼 self-approve 방어선(R10)이 무성 실패한다.
+if ! TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/gh-app-token.sh" "$REVIEWER_TOKEN_KEY") || [ -z "$TOKEN" ]; then
+  echo "::error::Reviewer 봇 App 토큰 발급 실패/빈 값 — Review 부착 불가. 이 PR 은 APPROVE·Status 전환 금지, 9단계 에스컬(category=immediate). 다른 영역은 G2 로 계속." >&2
+  exit 1
+fi
 
 # 2. Payload 구성 (python heredoc — escape 안전)
 PAYLOAD=$(python3 <<'PY'
@@ -457,16 +478,36 @@ print(json.dumps({"event": event, "body": summary, "comments": findings}))
 PY
 )
 
-# 3. 단일 호출로 review + line comments 함께 제출
+# 3. 단일 호출로 review + line comments 함께 제출. HTTP 상태코드를 본문 뒤 한 줄로 붙여 받는다.
 RESPONSE=$(curl -sS -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
+  -w $'\n%{http_code}' \
   "https://api.github.com/repos/$OWNER/<영역>/pulls/<N>/reviews" \
   -d "$PAYLOAD")
+HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
+BODY=$(printf '%s' "$RESPONSE" | sed '$d')
 
-REVIEW_URL=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('html_url',''))")
+# [#103/M11] HTTP 상태코드 게이트. create-review REST 는 성공 시 200(일부 케이스 201).
+#   401/403(토큰·권한)·422(payload·line 위치 오류) 등이면 Review 가 실제로 안 붙은 것이므로,
+#   approved 로 Status 전환·APPROVE 를 진행하지 말고 에스컬한다(R10 무성 실패 방지).
+case "$HTTP_CODE" in
+  200|201) ;;
+  *) echo "::error::GitHub Review 제출 실패 (HTTP $HTTP_CODE) — Review 미부착. 이 PR 은 APPROVE·Status 전환 금지, 9단계 에스컬(category=immediate). 응답 본문: $BODY" >&2
+     exit 1 ;;
+esac
+
+REVIEW_URL=$(printf '%s' "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('html_url',''))")
+# [#103/M11] 빈 REVIEW_URL 게이트 — HTTP 2xx 라도 응답에 html_url 이 없으면 Review 부착 확인
+#   불가. 무성 통과 대신 에스컬한다.
+if [ -z "$REVIEW_URL" ]; then
+  echo "::error::Review 응답에 html_url 없음(HTTP $HTTP_CODE) — Review 부착 확인 불가. 이 PR 은 APPROVE·Status 전환 금지, 9단계 에스컬(category=immediate)." >&2
+  exit 1
+fi
 ```
+
+> **토큰·REST 게이트 실패 = 개별 PR 에스컬(category=immediate)** — 위 세 게이트(토큰 빈 값·HTTP 비2xx·빈 REVIEW_URL) 중 하나라도 걸리면 이 PR 은 **Review 가 실제로 안 붙은 것**이다. 7-e 판정이 approved 였어도 7-h(Status `Bot Review → In Review` 전환)·리포트 APPROVE 로 넘어가지 말고, 9단계 에스컬 플로우(`review-blocked` 라벨 + 에스컬 코멘트 + Slack, category=immediate)로 처리한다. 영역별 독립 원칙(G2)에 따라 다른 영역 리뷰는 계속한다.
 
 **REST 한 번 호출 = atomic** — review + line comments 가 한 트랜잭션으로 처리됨. 부분 실패 (review 만 만들고 comments 실패) 가 일어나지 않음.
 
@@ -514,32 +555,50 @@ STATUS_FIELD_ID="$(bash "$CFG" status-field-id)"
 # Fallback B: PR 본문의 "Closes <owner>/<area>#<sub-N>" 에서 파싱 → gh api로 node_id 조회
 
 # Prep Project item id 조회 (G18-a)
+# [#103/M14] items(first:100) 무페이지네이션은 프로젝트 아이템이 100개를 넘으면 101번째부터
+#   누락돼 ITEM_ID 가 빈 값이 되고 Status 전환이 조용히 실패한다("전환 실패는 에스컬 아님"에
+#   흡수돼 무성). 대신 sub-issue 노드에서 projectItems 로 역조회한다 — 한 이슈가 속한 프로젝트
+#   수는 사실상 1~2개라 무페이지네이션 문제가 원천 소멸(누락 없음). PROJECT_NUMBER 로 대상
+#   프로젝트의 item 만 고른다.
+# [#103 리뷰반영] 파이프(`gh api graphql ... | jq`) 대신 단일 --jq 로 끝낸다. 파이프를 두면
+#   앞단 gh 가 죽어도(네트워크·권한·쿼리 오류) 뒷단 jq 성공코드에 마스킹돼 fail-loud 가 다시
+#   무성 실패로 새기 때문. PROJECT_NUMBER 는 config 에서 정수 검증돼 온 값이라 --jq 에 직접
+#   주입(gh api --jq 는 --arg 미지원). nodes 가 null 이어도 `// []` 로 안전(빈 결과).
 ITEM_ID=$(gh api graphql -f query='
-query($owner: String!, $number: Int!, $issueId: ID!) {
-  organization(login: $owner) {
-    projectV2(number: $number) {
-      items(first: 100) {
-        nodes { id content { ... on Issue { id } } }
+query($issueId: ID!) {
+  node(id: $issueId) {
+    ... on Issue {
+      projectItems(first: 100) {
+        nodes { id project { number } }
       }
     }
   }
-}' -f owner="$OWNER" -F number="$PROJECT_NUMBER" -f issueId="<SUB_ISSUE_NODE_ID>" \
-  --jq '.data.organization.projectV2.items.nodes[] | select(.content.id=="<SUB_ISSUE_NODE_ID>") | .id')
+}' -f issueId="<SUB_ISSUE_NODE_ID>" \
+  --jq "(.data.node.projectItems.nodes // [])[] | select(.project.number == $PROJECT_NUMBER) | .id")
 
-# In Review option ID 동적 조회
-IN_REVIEW_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
-  | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="In Review") | .id')
+# [#103 리뷰반영] ITEM_ID 빈 값 검사 — 조회 실패(gh 오류) 또는 sub-issue 가 Prep Project
+#   미소속이면 빈 값이다. 빈 itemId 로 아래 mutation 을 쏘면 조용히 실패하므로, loud 하게
+#   기록하고 전환을 스킵한다. 단 R9 규칙상 Status 전환 실패는 에스컬 아님 —
+#   statusTransition.succeeded=false + error 를 상태파일에 기록하고 리포트에 경고만, 리뷰 판정은
+#   APPROVE 유지(REQUEST_CHANGES 로 격상하지 않음).
+if [ -z "$ITEM_ID" ]; then
+  echo "::error::Prep Project item id 조회 실패/빈 값 — Status 전환 스킵(R9: 에스컬 아님, APPROVE 유지). statusTransition.succeeded=false·error 기록 + 리포트 경고 필요." >&2
+else
+  # In Review option ID 동적 조회
+  IN_REVIEW_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
+    | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="In Review") | .id')
 
-gh api graphql -f query='
+  gh api graphql -f query='
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   updateProjectV2ItemFieldValue(input: {
     projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
     value: { singleSelectOptionId: $optionId }
   }) { projectV2Item { id } }
 }' -f projectId="$PROJECT_ID" \
-  -f itemId="$ITEM_ID" \
-  -f fieldId="$STATUS_FIELD_ID" \
-  -f optionId="$IN_REVIEW_ID"
+    -f itemId="$ITEM_ID" \
+    -f fieldId="$STATUS_FIELD_ID" \
+    -f optionId="$IN_REVIEW_ID"
+fi
 ```
 
 **R9 보강 규칙**:
@@ -636,11 +695,33 @@ case "$CRITIC_VERDICT" in
   *) echo "::error::critic verdict 이상치('$CRITIC_VERDICT') — 8-c-bis write 중단. 8-b 반환 JSON 의 .verdict 확인 필요." >&2; exit 1 ;;
 esac
 
+# [#103/M10] STATE_FILE 존재 fail-fast. critic-only 모드는 Step 4 분기 A-1 에서 상태파일을
+#   "있으면 읽기만" 하고 새로 만들지 않으므로, 개별 /review 선행 없이 --critic-only 를 돌리면
+#   여기서 상태파일이 없을 수 있다. 없으면 아래 jq 가 어차피 실패하지만, 원인을 명확히 알리려
+#   먼저 막는다(critic-only 인지에 따라 안내 메시지를 분기).
+if [ ! -f "$STATE_FILE" ]; then
+  if [ "${CRITIC_ONLY:-false}" = "true" ]; then
+    echo "::error::critic-only 모드인데 상태파일($STATE_FILE) 부재 — 개별 /review 를 먼저 실행해 상태파일을 만든 뒤 --critic-only 로 재실행 필요." >&2
+  else
+    echo "::error::8-c-bis: 상태파일($STATE_FILE) 부재 — Step 5 초기화 누락 의심. verdict 미기록 시 critic 자동머지가 verdict=null 로 영구 차단됨(#54)." >&2
+  fi
+  exit 1
+fi
+
 # verdict·criticFindings 를 한 jq 트랜잭션으로 기록. 원자적 temp + mv (L250 규칙 준수).
+# [#103/M10] jq 실패(STATE_FILE 오염 등)는 5-a 와 동일하게 loud 하게 exit 1 한다. `&& mv` 로만
+#   끝내면 jq 실패가 조용히 삼켜져(verdict 미기록인데 무성 통과) critic 자동머지가 verdict=null 로
+#   영구 차단(#54)된다. 실패 시 orphan temp 만 정리하고 fail-closed 로 죽는다.
 TEMP="$STATE_FILE.tmp.$$"
-jq --arg cv "$CRITIC_VERDICT" --argjson cf "$CRITIC_FINDINGS" \
-  '.aggregate.verdict = $cv | .aggregate.criticFindings = $cf | .aggregate.completedAt = (now | todate)' \
-  "$STATE_FILE" > "$TEMP" && mv "$TEMP" "$STATE_FILE"
+if jq --arg cv "$CRITIC_VERDICT" --argjson cf "$CRITIC_FINDINGS" \
+     '.aggregate.verdict = $cv | .aggregate.criticFindings = $cf | .aggregate.completedAt = (now | todate)' \
+     "$STATE_FILE" > "$TEMP"; then
+  mv "$TEMP" "$STATE_FILE"
+else
+  rm -f "$TEMP"
+  echo "::error::8-c-bis critic verdict write 실패(STATE_FILE 오염 의심) — verdict 미기록 시 critic 자동머지가 영구 차단(#54)되므로 fail-closed 로 중단." >&2
+  exit 1
+fi
 ```
 
 `aggregate.criticFindings[]` 구조·기록 규칙은 [상태 파일 스키마 §8-c-bis](reference/state-schema.md) 참조.
