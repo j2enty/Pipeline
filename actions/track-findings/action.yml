@@ -4,6 +4,14 @@
 #         읽어, major/minor 만 골라 GitHub 이슈로 만든다. self-hosted 러너의 리뷰
 #         워크플로(review.yml / critic-dispatch.yml)가 호출한다.
 #
+# 왜 얇은가(#104 M9): 추출 로직(fingerprint 렌더·intra/cross-run dedup·이슈 생성)은
+#   scripts/track-findings.sh + scripts/render-finding.py 로 옮겨 단위테스트(회귀 그물)
+#   대상으로 만들었다. 이 action.yml 은 그 스크립트를 호출만 한다(ensure-plugin 과 동일 패턴).
+#   실행 방식: `bash <path>` — 체크아웃된 .sh 의 실행권한(+x)이 유실돼도 exit 126 로 죽지 않게.
+#   스크립트 위치는 이 action 의 형제 경로(${{ github.action_path }}/../../scripts)로 해석한다.
+#   graceful 불변식(추적 실패가 본 파이프라인을 막지 않음): 스크립트 부재/경로오류로 bash 가
+#   exit 127 로 하드페일하지 않도록, 실행 전 파일 존재를 확인하고 없으면 loud 로그 후 exit 0.
+#
 # 핵심 원칙:
 #   - 추적 실패가 상위 리뷰/머지를 막지 않는다 — 모든 실패는 흡수(graceful, exit 0).
 #   - 프로젝트 식별자 하드코딩 제로 — owner/area/repo/라벨 전부 input 주입.
@@ -66,254 +74,12 @@ runs:
         MINOR_LABEL: ${{ inputs.minor-label }}
         GH_TOKEN: ${{ inputs.gh-token }}
       run: |
-        set -euo pipefail
-
-        # ── 1. 파일 부재 → graceful 종료 (추적 실패가 상위를 막지 않음) ──
-        if [ -z "${STATE_FILE_PATH:-}" ] || [ ! -f "$STATE_FILE_PATH" ]; then
-          echo "::warning::track-findings: 상태파일 없음 ($STATE_FILE_PATH) — 추적 스킵"
+        set -uo pipefail
+        SCRIPT="${{ github.action_path }}/../../scripts/track-findings.sh"
+        # graceful: 스크립트 부재/경로오류는 bash exit 127 하드페일이 되므로 사전 차단.
+        # 추적은 부가 기능이라 실패해도 본 리뷰/머지를 막지 않는다 — loud 로그 후 exit 0.
+        if [ ! -f "$SCRIPT" ]; then
+          echo "::error::track-findings: 스크립트 부재($SCRIPT) — 추적 스킵(graceful, 본 스텝은 실패로 죽지 않음)"
           exit 0
         fi
-
-        # ── 2. 대상 레포 결정 ──
-        case "$FINDING_SOURCE" in
-          code-review)
-            TARGET_REPO="$AREA_REPO"
-            if [ -z "${AREA:-}" ] || [ -z "${TARGET_REPO:-}" ]; then
-              echo "::warning::track-findings: code-review 모드엔 area + area-repo 필요 — 스킵"
-              exit 0
-            fi
-            ;;
-          critic)
-            TARGET_REPO="$PARENT_REPO"
-            if [ -z "${TARGET_REPO:-}" ]; then
-              echo "::warning::track-findings: critic 모드엔 parent-repo 필요 — 스킵"
-              exit 0
-            fi
-            ;;
-          *)
-            echo "::warning::track-findings: 알 수 없는 finding-source ($FINDING_SOURCE) — 스킵"
-            exit 0
-            ;;
-        esac
-
-        # ── 3. jq 로 finding 추출 (major/minor 만). 키 부재(구버전 파일)는 ?/// empty 로 graceful ──
-        #    각 finding 을 한 줄 JSON(NDJSON)으로 출력 → 셸 루프에서 한 줄씩 처리.
-        if [ "$FINDING_SOURCE" = "code-review" ]; then
-          # $a 는 jq 변수 — single quote 안 미확장 의도적
-          # shellcheck disable=SC2016
-          FINDINGS_NDJSON=$(jq -c --arg a "$AREA" \
-            '(.prs[$a].findings.codeReview // [])[]?
-             | select(.severity == "major" or .severity == "minor")' \
-            "$STATE_FILE_PATH" 2>/dev/null || true)
-        else
-          FINDINGS_NDJSON=$(jq -c \
-            '(.aggregate.criticFindings // [])[]?
-             | select(.severity == "major" or .severity == "minor")' \
-            "$STATE_FILE_PATH" 2>/dev/null || true)
-        fi
-
-        if [ -z "${FINDINGS_NDJSON:-}" ]; then
-          echo "track-findings: 추적할 finding 없음 (source=$FINDING_SOURCE, target=$TARGET_REPO)"
-          exit 0
-        fi
-
-        # ── 4. python3 헬퍼 본문 (heredoc) ──
-        #    finding JSON + 메타를 받아 'fp\t제목\t라벨\t본문(base64)' 출력.
-        #    본문은 개행 포함이라 base64 로 안전 전달.
-        #    들여쓰기 주의: 이 run 블록은 YAML block scalar(8칸 base)라 GHA 가 8칸을 제거한다.
-        #    heredoc body 의 python 줄은 이 8칸 base 위에 python 들여쓰기를 얹은 것 →
-        #    GHA strip 후 python 최상위=0칸, 중첩=4칸으로 떨어져 그대로 유효하다.
-        PY_HELPER=$(cat <<'PYEOF'
-        import sys, os, json, hashlib, base64, re
-
-        finding = json.loads(sys.argv[1])
-        source = os.environ["FINDING_SOURCE"]
-        area = os.environ.get("AREA", "")
-        major_label = os.environ["MAJOR_LABEL"]
-        minor_label = os.environ["MINOR_LABEL"]
-
-        def normalize(title):
-            # lowercase → 유니코드 문자/숫자/공백 보존(한글 포함), 구두점만 공백화
-            #            → 공백 1칸 정규화 → 앞 60자
-            # 주의: [^a-z0-9\s] 로 하면 한글 등 비-ASCII 가 전부 제거되어
-            #       한국어 title 이 빈 문자열로 뭉개지고 fingerprint 가 충돌한다.
-            #       \w + re.UNICODE 로 한글/숫자/문자를 보존한다.
-            t = (title or "").lower()
-            t = re.sub(r"[^\w\s]", " ", t, flags=re.UNICODE)
-            t = re.sub(r"\s+", " ", t).strip()
-            return t[:60]
-
-        severity = (finding.get("severity") or "").strip()
-        title = (finding.get("title") or "").strip()
-        description = (finding.get("description") or "").strip()
-        suggestion = (finding.get("suggestion") or "").strip()
-        norm_title = normalize(title)
-        # 안전장치: 정규화 결과가 비면(순수 구두점/이모지 title 등) 서로 다른 title 이
-        #          같은 빈 문자열로 뭉개져 fingerprint 가 충돌한다.
-        #          원본 title 의 sha256 일부를 basis 에 섞어 충돌을 회피한다.
-        if not norm_title and title:
-            norm_title = "h:" + hashlib.sha256(title.encode("utf-8")).hexdigest()[:12]
-
-        # ── fingerprint basis 구성 ──
-        # description 시그니처: 같은 파일·제목(혹은 같은 영역·제목)이라도 내용이 다른
-        #   별개 finding 이 intra-run dedup 으로 소실되는 것을 막는다(버그 #4).
-        #   line 은 머지 후 이동하므로 키에 쓰지 않고, 안정적인 description 해시 일부를 쓴다.
-        # 트레이드오프: 재리뷰마다 description 이 미세하게 바뀌면 같은 버그가 다른 fp 가 되어
-        #   중복 이슈가 생길 수 있다(과소 dedup). 하지만 finding 소실(과대 dedup)이 더 위험하므로
-        #   소실을 막는 이 방향을 택한다.
-        desc_sig = hashlib.sha256((description or "").encode("utf-8")).hexdigest()[:8]
-        if source == "code-review":
-            file_path = (finding.get("file") or "").strip()
-            line = finding.get("line")
-            fp_basis = f"{file_path}|{severity}|{norm_title}|{desc_sig}"
-        else:  # critic — file 없음, area 기반
-            file_path = ""
-            line = None
-            # 버그 #1: finding 자체의 area 를 우선 사용한다.
-            #   critic-dispatch.yml 호출부는 area input 을 안 넘겨 env AREA 가 빈 문자열이라,
-            #   env AREA 만 쓰면 서로 다른 영역의 같은 제목 finding 이 같은 fingerprint 가 되어
-            #   intra-run dedup 으로 두 번째가 소실된다. finding.area 를 우선해 영역별로 구분한다.
-            finding_area = (finding.get("area") or area).strip()
-            fp_basis = f"{finding_area}|{severity}|{norm_title}|{desc_sig}"
-
-        fp = hashlib.sha256(fp_basis.encode("utf-8")).hexdigest()[:12]
-
-        label = major_label if severity == "major" else minor_label
-
-        # ── 이슈 본문 렌더 ──
-        lines = []
-        lines.append(f"**severity**: {severity}")
-        if source == "code-review":
-            loc = file_path if file_path else "(파일 정보 없음)"
-            if line is not None and line != "":
-                loc = f"{loc}:{line}"
-            lines.append(f"**위치**: {loc}")
-        else:
-            affected = finding.get("affected_prs") or []
-            # 버그 #1: 본문도 finding.area(없으면 env area) 를 써서 영역이 누락되지 않게 한다.
-            if finding_area:
-                lines.append(f"**영역**: {finding_area}")
-            if affected:
-                lines.append("**영향 PR**: " + ", ".join(str(p) for p in affected))
-        if description:
-            lines.append("")
-            lines.append("## 설명")
-            lines.append(description)
-        if suggestion:
-            lines.append("")
-            lines.append("## 제안")
-            lines.append(suggestion)
-        if source == "code-review" and line is not None and line != "":
-            lines.append("")
-            lines.append("> ⚠️ line 은 리뷰 당시 기준 — 머지 후 무효일 수 있음")
-        lines.append("")
-        lines.append(f"<!-- finding-fp: {fp} -->")
-        body = "\n".join(lines)
-
-        # 제목 끝에 fingerprint 토큰을 결정적으로 박는다.
-        # 이유(버그 #7): gh search 는 인덱싱 지연이 있어 본문 마커만으론
-        #   cross-run 중복 검색이 부정확할 수 있다. 제목에 ` [fp:<fp>]` 를 고정 포함하면
-        #   `gh issue list --search "<fp> in:title"` 로 더 정확하게 기존 이슈를 찾을 수 있다.
-        base_title = f"[{severity}] {title}" if title else f"[{severity}] finding {fp}"
-        # base_title 이 매우 길면(300자+) GitHub 가 제목을 자르면서 끝의 [fp:...] 가
-        # 먼저 잘려 cross-run dedup 이 깨진다. fp suffix 가 항상 보존되도록 base 를 200자로 제한.
-        # (fp suffix 포함해도 GitHub 제목 한계 1024 대비 충분히 여유)
-        base_title = base_title[:200]
-        issue_title = f"{base_title} [fp:{fp}]"
-        body_b64 = base64.b64encode(body.encode("utf-8")).decode("ascii")
-
-        # fp \t 제목 \t 라벨 \t 본문(base64) — 제목에 탭/개행 정규화
-        issue_title = issue_title.replace("\t", " ").replace("\n", " ")
-        sys.stdout.write(f"{fp}\t{issue_title}\t{label}\t{body_b64}\n")
-        PYEOF
-        )
-
-        render_finding() {
-          # $1: finding JSON 한 줄 → stdout: 'fp\t제목\t라벨\t본문(base64)'
-          # AREA 는 critic 모드에서 비어있을 수 있어 ${AREA:-} 로 방어(set -u 안전)
-          FINDING_SOURCE="$FINDING_SOURCE" AREA="${AREA:-}" \
-          MAJOR_LABEL="$MAJOR_LABEL" MINOR_LABEL="$MINOR_LABEL" \
-          python3 -c "$PY_HELPER" "$1"
-        }
-
-        # ── 4.5. 라벨 멱등 생성 (버그 #5: 라벨 미존재 시 gh issue create 가 실패 →
-        #         이슈 0건 침묵 실패) ──
-        #    대상 레포에 major/minor 라벨이 없으면 --label 붙은 생성이 통째로 실패한다.
-        #    루프 진입 전에 라벨을 멱등 생성 시도해서 "조용한 죽음"을 예방한다.
-        #    이미 있으면 에러나지만 무시(|| true) — 멱등.
-        for L in "$MAJOR_LABEL" "$MINOR_LABEL"; do
-          [ -z "$L" ] && continue
-          if gh label create "$L" --repo "$TARGET_REPO" >/dev/null 2>&1; then
-            echo "track-findings: 라벨 생성 — $L"
-          fi
-        done
-
-        # ── 5. 각 finding 처리: intra-run + cross-run dedup → 이슈 생성 ──
-        SEEN_FPS=""   # intra-run 누적 set (공백 구분 ' <fp> ' 패턴으로 검사)
-        CREATED=0
-        SKIPPED=0
-
-        while IFS= read -r FINDING_LINE; do
-          [ -z "$FINDING_LINE" ] && continue
-
-          # render: 'fp\t제목\t라벨\t본문(base64)'
-          RENDERED=$(render_finding "$FINDING_LINE" || true)
-          [ -z "$RENDERED" ] && { echo "::warning::track-findings: finding 렌더 실패 — 스킵"; continue; }
-
-          FP=$(printf '%s' "$RENDERED" | cut -f1)
-          ISSUE_TITLE=$(printf '%s' "$RENDERED" | cut -f2)
-          ISSUE_LABEL=$(printf '%s' "$RENDERED" | cut -f3)
-          BODY_B64=$(printf '%s' "$RENDERED" | cut -f4)
-          [ -z "$FP" ] && continue
-
-          # intra-run 중복 차단 (같은 run 내 재생성 스킵)
-          case " $SEEN_FPS " in
-            *" $FP "*)
-              echo "track-findings: [$FP] intra-run 중복 — 스킵"
-              SKIPPED=$((SKIPPED + 1))
-              continue
-              ;;
-          esac
-          SEEN_FPS="$SEEN_FPS $FP"
-
-          # cross-run 중복 차단 — 제목에 박힌 [fp:<fp>] 토큰으로 정확 검색.
-          # `gh issue list --search "<fp> in:title"` 는 같은 레포 한정이라
-          # `gh search issues` 보다 인덱싱이 빠르고 정확하다.
-          # 주의(버그 #7): 그래도 검색 인덱싱 지연·동시 실행 시 드물게 중복 이슈가
-          #   생길 수 있다. 코드로 완전 해결 불가 — 드물게 발생하면 수동 정리한다.
-          EXISTING=$(gh issue list --repo "$TARGET_REPO" --state open \
-            --search "$FP in:title" --json number --jq 'length' 2>/dev/null || echo "0")
-          if [ "${EXISTING:-0}" != "0" ]; then
-            echo "track-findings: [$FP] 이미 오픈 이슈 존재 — 스킵"
-            SKIPPED=$((SKIPPED + 1))
-            continue
-          fi
-
-          # 이슈 생성 (개별 실패는 흡수 — 나머지를 막지 않음, graceful)
-          # base64 decode 실패도 흡수: set -euo pipefail 아래서 그냥 두면 step 이 죽어
-          # "모든 실패 흡수" 원칙과 어긋난다 → continue 로 이 finding 만 스킵.
-          BODY=$(printf '%s' "$BODY_B64" | base64 --decode) \
-            || { echo "::warning::track-findings: [$FP] 본문 디코드 실패 — 이 finding 스킵"; continue; }
-          if gh issue create --repo "$TARGET_REPO" \
-              --title "$ISSUE_TITLE" \
-              --body "$BODY" \
-              --label "$ISSUE_LABEL" >/dev/null 2>&1; then
-            echo "track-findings: [$FP] 이슈 생성 ($ISSUE_LABEL): $ISSUE_TITLE"
-            CREATED=$((CREATED + 1))
-          else
-            # 버그 #5 폴백: 라벨 미존재 등으로 --label 생성이 실패하면
-            #   라벨 없이 1회 재시도해서 이슈는 만들고 라벨만 포기한다.
-            #   "조용한 죽음"(이슈 0건)을 막고, 진단 가능한 명확한 경고를 1회 남긴다.
-            if gh issue create --repo "$TARGET_REPO" \
-                --title "$ISSUE_TITLE" \
-                --body "$BODY" >/dev/null 2>&1; then
-              echo "::warning::track-findings: [$FP] 라벨($ISSUE_LABEL) 없이 이슈 생성 — 라벨 미존재 추정, install.sh register_labels 확인"
-              CREATED=$((CREATED + 1))
-            else
-              echo "::warning::track-findings: [$FP] 이슈 생성 실패(라벨 무관) — 흡수하고 계속"
-            fi
-          fi
-        done <<< "$FINDINGS_NDJSON"
-
-        echo "track-findings: 완료 — 생성 $CREATED, 스킵 $SKIPPED (target=$TARGET_REPO)"
-        exit 0
+        bash "$SCRIPT"
