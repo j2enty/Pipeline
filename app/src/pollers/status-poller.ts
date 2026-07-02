@@ -71,10 +71,24 @@ export function startStatusPoller(
   return setInterval(() => void tick(), options.intervalMs);
 }
 
-async function runPollingTick(
+// 매 tick 의 실제 작업 본체.
+//
+// 실패 처리 원칙 — "조용한 실패 → 시끄러운 실패":
+//   - 프로젝트 '실패' 판정: (a) 조회 자체가 throw, 또는 (b) 조회는 성공했으나
+//     아이템이 1건 이상인데 '전부' 처리 실패(진전 전무). 둘 다 프로젝트 실패로 집계.
+//     부분 실패(일부 아이템만 throw)는 진전으로 보고 실패로 세지 않는다(오탐 금지).
+//   - 프로젝트 '일부'만 실패 → 알림(쿨다운) + 로그 후 계속 (부분 실패는 tick 성공).
+//   - 프로젝트 '전부' 실패 → throw 로 승격 → tick() 의 catch 가 잡아
+//     recordTick() 을 건너뛰게 만든다. lastTickAt 이 정체되면 evaluateHealth 가
+//     두 주기 뒤 'degraded' 로 승격 → 헬스체크가 무음 정지를 드러낸다.
+//
+// 이 함수는 테스트에서 직접 호출·검증하기 위해 export 한다.
+export async function runPollingTick(
   app: Probot,
   options: StatusPollerOptions
 ): Promise<void> {
+  let failedProjectCount = 0;
+
   for (const projectNumber of options.projectNumbers) {
     let items: ProjectV2ItemSnapshot[];
     try {
@@ -84,10 +98,18 @@ async function runPollingTick(
         { ownerLogin: options.ownerLogin, projectNumber }
       );
     } catch (err) {
+      failedProjectCount += 1;
       app.log.error(
         { err, projectNumber },
         "Project v2 조회 실패 — 다른 프로젝트 계속 진행"
       );
+      // 프로젝트별 알림 — 쿨다운 키를 프로젝트 단위로 분리해 한 프로젝트의
+      // 지속 실패가 다른 프로젝트 알림을 삼키지 않게 한다.
+      await notifyFailure(app, {
+        title: "Project v2 조회 실패",
+        context: `projectNumber=${projectNumber} ${String(err)}`,
+        key: `project-fetch-fail-${projectNumber}`,
+      });
       continue;
     }
 
@@ -96,16 +118,47 @@ async function runPollingTick(
       "Project 아이템 조회"
     );
 
+    // 아이템별 처리 실패 집계 — "조회는 성공했지만 그 프로젝트의 모든 아이템이
+    // 처리 실패"하는 무음 정지를 잡기 위함. 부분 실패(일부만 throw)는 진전으로
+    // 보고 프로젝트 실패로 세지 않는다(오탐 금지).
+    let processFailureCount = 0;
     for (const item of items) {
       try {
         await processProjectItem(app, options, item);
       } catch (err) {
+        processFailureCount += 1;
         app.log.error(
           { err, itemNodeId: item.itemNodeId },
           "아이템 처리 실패 — 다음 아이템 계속"
         );
       }
     }
+
+    // 아이템이 1건 이상인데 전부 처리 실패 → 이 프로젝트는 진전이 전무 → 실패로 승격.
+    // (아이템 0개 = 할 일 없음 = 정상 진전, 1건이라도 성공 = 진전 있음 → 실패 아님)
+    if (items.length > 0 && processFailureCount === items.length) {
+      failedProjectCount += 1;
+      app.log.error(
+        { projectNumber, itemCount: items.length },
+        "Project 항목 전부 처리 실패 — 프로젝트 실패로 승격"
+      );
+      await notifyFailure(app, {
+        title: "Project 항목 전부 처리 실패",
+        context: `projectNumber=${projectNumber} items=${items.length} 전부 처리 실패`,
+        key: `project-process-fail-${projectNumber}`,
+      });
+    }
+  }
+
+  // 전 프로젝트 실패(조회 실패 또는 항목 전부 처리 실패) → tick 실패로 승격
+  // (recordTick 스킵 유도 → degraded).
+  if (
+    options.projectNumbers.length > 0 &&
+    failedProjectCount === options.projectNumbers.length
+  ) {
+    throw new Error(
+      `전 프로젝트(${failedProjectCount}/${options.projectNumbers.length}) 실패 — tick 실패로 승격`
+    );
   }
 }
 

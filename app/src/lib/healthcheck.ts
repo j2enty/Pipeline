@@ -1,4 +1,5 @@
 import type { ApplicationFunctionOptions } from "probot";
+import { DEFAULT_STATUS_POLLER_INTERVAL_MS } from "./env";
 
 // 헬스체크 — App 이 살아있는지 + 폴러가 실제로 돌고 있는지 외부에서 확인
 //
@@ -11,6 +12,10 @@ import type { ApplicationFunctionOptions } from "probot";
 //     (폴러가 꺼진 건 정상 운영 형태일 수 있다 — env 조건 미충족 등)
 //   - now - lastTickAt > intervalMs * 2 → tick 이 두 주기 넘게 끊김 → "degraded".
 //   - 그 외 → "ok".
+//
+// 이중 차단(M7): intervalMs 가 비정상(비유한·≤0)이면 `now - lastTickAt > NaN*2`
+// 가 항상 false 라 degraded 를 영영 못 잡는 은폐가 생긴다. env.ts 파싱이 이미
+// 방어하지만, 만일 오염된 값이 흘러와도 안전 기본값으로 대체해 은폐를 이중 차단한다.
 export function evaluateHealth(
   lastTickAt: number | null,
   intervalMs: number,
@@ -19,7 +24,11 @@ export function evaluateHealth(
   if (lastTickAt === null) {
     return "ok";
   }
-  if (now - lastTickAt > intervalMs * 2) {
+  const safeIntervalMs =
+    Number.isFinite(intervalMs) && intervalMs > 0
+      ? intervalMs
+      : DEFAULT_STATUS_POLLER_INTERVAL_MS;
+  if (now - lastTickAt > safeIntervalMs * 2) {
     return "degraded";
   }
   return "ok";

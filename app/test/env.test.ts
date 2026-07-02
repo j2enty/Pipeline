@@ -113,6 +113,38 @@ describe("parsePollerConfigFromEnv", () => {
     expect(result.config.intervalMs).toBe(300000);
   });
 
+  // STATUS_POLLER_INTERVAL_MS 오설정 방어 (M7).
+  //   비유한(NaN)·0·음수 → 기본 300000 폴백. setInterval(NaN)→0ms 폭주 +
+  //   evaluateHealth 은폐(now-lastTickAt > NaN*2 항상 false)를 파싱 단계에서 차단.
+  it.each([
+    ["5m", "단위 붙은 오타"],
+    ["abc", "숫자 아님"],
+    ["0", "0 (setInterval 폭주)"],
+    ["-100", "음수"],
+    ["", "빈 문자열"],
+    ["NaN", "리터럴 NaN"],
+    ["Infinity", "무한대"],
+  ])(
+    "STATUS_POLLER_INTERVAL_MS 가 %o (%s) 이면 기본 300000 으로 폴백한다",
+    (badValue) => {
+      const env = { ...validEnv, STATUS_POLLER_INTERVAL_MS: badValue };
+      const result = parsePollerConfigFromEnv(env);
+      if ("disabledReason" in result) {
+        throw new Error("config 가 반환돼야 한다");
+      }
+      expect(result.config.intervalMs).toBe(300000);
+    }
+  );
+
+  it("STATUS_POLLER_INTERVAL_MS 가 정상 숫자면 그 값을 그대로 쓴다", () => {
+    const env = { ...validEnv, STATUS_POLLER_INTERVAL_MS: "60000" };
+    const result = parsePollerConfigFromEnv(env);
+    if ("disabledReason" in result) {
+      throw new Error("config 가 반환돼야 한다");
+    }
+    expect(result.config.intervalMs).toBe(60000);
+  });
+
   it("authorInstallationId 는 숫자로 변환된다", () => {
     const env = { ...validEnv, AUTHOR_INSTALLATION_ID: "999" };
     const result = parsePollerConfigFromEnv(env);
