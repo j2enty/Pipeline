@@ -17,7 +17,7 @@
 - Sub-issue: <owner>/<영역>#<sub-N>
 - 플랜: Docs/claude/plans/<parent-N>-<slug>-<영역소문자>.md (먼저 읽기 — 구현 태스크·인수 기준의 단일 진실원)
 - 브랜치: feature/#<sub-N>-<slug>
-- Base 브랜치: develop
+- Base 브랜치: <base-branch>  (config `base-branch` 값으로 채움 — 하드코딩 금지, 기본 develop)
 - (재시도 호출 시) verifier reasons: <JSON or "없음"> — 직전 verifier 가 fail 사유를 넘겼으면 그 항목만 고친다(범위 확장 금지)
 
 위 입력으로 플랜대로 구현 → 커밋 → push → 테스트 그린까지 책임지고, 시스템프롬프트의
@@ -40,7 +40,7 @@ SKILL.md 8-c 루프가 수행한다.
 따릅니다.)
 
 ## 입력
-- 브랜치: <branch>  (diff: git -C <영역> diff origin/develop...HEAD)
+- 브랜치: <branch>  (diff: git -C <영역> diff origin/<base-branch>...HEAD — base 브랜치는 config `base-branch`, 기본 develop)
 - Executor testSummary: <JSON>
 - 플랜 문서: Docs/claude/plans/<parent-N>-<slug>-<영역소문자>.md
 - Parent 요구사항: Docs/claude/requirements/<parent-N>-<slug>.md

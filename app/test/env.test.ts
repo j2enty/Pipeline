@@ -100,9 +100,62 @@ describe("parsePollerConfigFromEnv", () => {
         modules: ["Backend", "iOS"],
         authorInstallationId: 12345,
         intervalMs: 60000,
+        // STATUS_TRIGGERS_* 미설정 → 기본 컬럼명 폴백
+        statusTriggersKickoff: "In Progress",
+        statusTriggersReview: "Bot Review",
       },
     });
   });
+
+  // #106 app-p5 — Status 트리거 컬럼명 주입. 프로젝트마다 컬럼명이 다를 수 있어
+  // 하드코딩하지 않고 env 로 주입한다. 미설정/빈값 → 기본값, 명시값 → 그 값.
+  it("STATUS_TRIGGERS_* 미설정 시 기본 컬럼명(In Progress / Bot Review)을 쓴다", () => {
+    const env = {
+      ...validEnv,
+      STATUS_TRIGGERS_KICKOFF: undefined,
+      STATUS_TRIGGERS_REVIEW: undefined,
+    };
+    const result = parsePollerConfigFromEnv(env);
+    if ("disabledReason" in result) {
+      throw new Error("config 가 반환돼야 한다");
+    }
+    expect(result.config.statusTriggersKickoff).toBe("In Progress");
+    expect(result.config.statusTriggersReview).toBe("Bot Review");
+  });
+
+  it("STATUS_TRIGGERS_* 가 커스텀 컬럼명이면 그 값을 그대로 쓴다", () => {
+    const env = {
+      ...validEnv,
+      STATUS_TRIGGERS_KICKOFF: "작업중",
+      STATUS_TRIGGERS_REVIEW: "리뷰대기",
+    };
+    const result = parsePollerConfigFromEnv(env);
+    if ("disabledReason" in result) {
+      throw new Error("config 가 반환돼야 한다");
+    }
+    expect(result.config.statusTriggersKickoff).toBe("작업중");
+    expect(result.config.statusTriggersReview).toBe("리뷰대기");
+  });
+
+  it.each([
+    ["", "빈 문자열"],
+    ["   ", "공백만"],
+  ])(
+    "STATUS_TRIGGERS_* 가 %o (%s) 이면 기본 컬럼명으로 폴백한다",
+    (badValue) => {
+      const env = {
+        ...validEnv,
+        STATUS_TRIGGERS_KICKOFF: badValue,
+        STATUS_TRIGGERS_REVIEW: badValue,
+      };
+      const result = parsePollerConfigFromEnv(env);
+      if ("disabledReason" in result) {
+        throw new Error("config 가 반환돼야 한다");
+      }
+      expect(result.config.statusTriggersKickoff).toBe("In Progress");
+      expect(result.config.statusTriggersReview).toBe("Bot Review");
+    }
+  );
 
   it("STATUS_POLLER_INTERVAL_MS 미설정 시 기본 300000(5분) 을 쓴다", () => {
     const env = { ...validEnv, STATUS_POLLER_INTERVAL_MS: undefined };
