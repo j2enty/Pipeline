@@ -63,9 +63,11 @@ bash "$CFG" status-field-id    # Status 필드 ID (Backlog/Planning/Ready/In Pro
 bash "$CFG" docs-context-dir   # Context md 디렉토리 (parent 모드 한정)
 bash "$CFG" status-trigger-review   # review 트리거 컬럼 (기본 Bot Review — 7-h 전환 출발 상태, 하드코딩 금지)
 bash "$CFG" status-trigger-kickoff  # kickoff 트리거 컬럼 (기본 In Progress — 7-h 누락 흡수 판정)
+bash "$CFG" status-column-in-review  # 7-h APPROVE 도착 컬럼 (기본 In Review — 하드코딩 금지)
+bash "$CFG" status-column-done       # 머지 완료 skip 컬럼 (기본 Done — 하드코딩 금지)
 ```
 
-> **트리거 Status 컬럼명은 config 로 구동한다(#106).** 7-h 의 Status 전환에서 "출발 상태"(기본 `Bot Review`)는 리터럴이 아니라 `status-trigger-review` 값으로 비교한다 — 폴러(App)가 이 값으로 `/review` 를 dispatch 하므로 SKILL 도 같은 값이어야 end-to-end 로 맞물린다. "In Progress" 누락 흡수 판정도 `status-trigger-kickoff` 값을 쓴다. 반면 **전환 도착 상태 `In Review` 는 비-트리거 컬럼이라 아직 기본명 고정**(config 재정의 미지원 — kickoff SKILL 와 동일 한계, 후속 #115).
+> **Status 컬럼명은 config 로 구동한다(#106·#115).** 7-h 의 Status 전환에서 "출발 상태"(기본 `Bot Review`)는 리터럴이 아니라 `status-trigger-review` 값으로 비교한다 — 폴러(App)가 이 값으로 `/review` 를 dispatch 하므로 SKILL 도 같은 값이어야 end-to-end 로 맞물린다. "In Progress" 누락 흡수 판정도 `status-trigger-kickoff` 값을 쓴다. **전환 도착 상태(기본 `In Review`)도 이제 config `status-column-in-review` 로 구동**한다 — 리터럴 조회를 쓰면 프로젝트가 도착 컬럼을 리네임했을 때 option id 가 빈 값이 되어 mutation 이 실패하므로, 7-h 는 `jq --arg` 로 config 값을 주입한다(#115). 스킵 판정의 `In Review`·`Done` 비교도 각각 `status-column-in-review`·`status-column-done` 값을 쓴다.
 
 | 이름 | 값 |
 |---|---|
@@ -545,7 +547,7 @@ OWNER="$(bash "$CFG" owner)"
 gh pr edit <N> --repo "$OWNER/<영역>" --remove-label review-blocked 2>/dev/null || true
 ```
 
-**Status 전환: review 트리거 컬럼(config `status-trigger-review`, 기본 `Bot Review`) → `In Review`** — `/kickoff` 가 PR 생성 직후 올린 트리거 컬럼을, Claude 리뷰 통과 시점에 사용자 hands-on 검증 단계(`In Review`)로 넘김. 출발 상태는 config 값으로 비교하고, 도착 상태 `In Review` 는 비-트리거 고정 컬럼이다:
+**Status 전환: review 트리거 컬럼(config `status-trigger-review`, 기본 `Bot Review`) → 도착 컬럼(config `status-column-in-review`, 기본 `In Review`)** — `/kickoff` 가 PR 생성 직후 올린 트리거 컬럼을, Claude 리뷰 통과 시점에 사용자 hands-on 검증 단계로 넘김. 출발 상태·도착 상태 모두 리터럴이 아니라 config 값으로 다룬다(도착 컬럼도 `status-column-in-review` 로 재정의 가능 — #115). 프로젝트가 도착 컬럼을 리네임했는데 리터럴 조회를 쓰면 option id 가 빈 값이 되어 mutation 이 실패하므로, 아래처럼 config 값을 `jq --arg` 로 주입한다:
 
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
@@ -553,6 +555,7 @@ OWNER="$(bash "$CFG" owner)"
 PROJECT_NUMBER="$(bash "$CFG" project-number)"
 PROJECT_ID="$(bash "$CFG" project-id)"
 STATUS_FIELD_ID="$(bash "$CFG" status-field-id)"
+IN_REVIEW="$(bash "$CFG" status-column-in-review)"   # 도착 컬럼 — config 재정의 가능(기본 In Review, 하드코딩 금지)
 
 # sub-issue node id 확보
 # 우선순위 A: /kickoff 세션 파일 있으면 areas.<area>.subIssue.nodeId 사용
@@ -588,9 +591,11 @@ query($issueId: ID!) {
 if [ -z "$ITEM_ID" ]; then
   echo "::error::Prep Project item id 조회 실패/빈 값 — Status 전환 스킵(R9: 에스컬 아님, APPROVE 유지). statusTransition.succeeded=false·error 기록 + 리포트 경고 필요." >&2
 else
-  # In Review option ID 동적 조회 (도착 상태 — 비-트리거 고정 컬럼, config 재정의 미지원)
+  # 도착 컬럼 option ID 동적 조회 (config `status-column-in-review`, 기본 In Review — #115).
+  # 컬럼명을 리터럴이 아니라 jq --arg 로 주입해, 프로젝트가 도착 컬럼을 리네임해도 옵션을 찾는다.
+  # (컬럼명을 리터럴로 박아 조회했다면 리네임 시 빈 id → mutation 실패로 카드가 안 넘어감.)
   IN_REVIEW_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
-    | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="In Review") | .id')
+    | jq -r --arg col "$IN_REVIEW" '.fields[] | select(.name=="Status") | .options[] | select(.name==$col) | .id')
 
   gh api graphql -f query='
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
@@ -607,7 +612,7 @@ fi
 
 **R9 보강 규칙**:
 
-- 전환 대상은 **현재 `Status == status-trigger-review`(기본 `Bot Review`) 인 항목만**. `In Review`·`Done` 이면 이미 전환됐거나 사용자 수동 진행이므로 스킵
+- 전환 대상은 **현재 `Status == status-trigger-review`(기본 `Bot Review`) 인 항목만**. `status-column-in-review`(기본 `In Review`)·`status-column-done`(기본 `Done`) 이면 이미 전환됐거나 사용자 수동 진행이므로 스킵
 - `Status == status-trigger-kickoff`(기본 `In Progress`) 면 경고 로그만 남기고 전환 진행 (누락 케이스 흡수)
 - 전환 실패는 **에스컬 아님**. REQUEST_CHANGES 로 격상하지 않고, 리뷰는 APPROVE 유지. 상태 파일의 `statusTransition` 객체(`succeeded: false` + `error` 필드)에 기록 + 최종 리포트에 경고 표시 (스키마: state-schema.md 의 `statusTransition.error`)
 - REQUEST_CHANGES 시에는 Status를 건드리지 않음 — `Bot Review` 유지 (review-blocked 라벨로 구분)
@@ -925,7 +930,7 @@ Status 전환 실패가 있었다면 경고 블록을 추가:
 - `gh pr review` CLI는 사용하지 말고 7-f 의 REST API 단일 POST 사용. 이유: line-specific comment + 명시적 `event` 조작이 CLI에선 제한적이고, Reviewer 봇 토큰 명의 부착이 필요
 - PR head SHA는 리뷰 시작 시점에 잠금. 리뷰 중 새 커밋이 push되면 SHA 불일치 경고 로그만 남기고 **진행한 리뷰는 제출** (다음 `/review`에서 재리뷰)
 - `review-blocked` 라벨명을 `blocked`와 혼동 금지 (`blocked`는 `/kickoff` 소유)
-- Status 전환 대상은 **`Status == status-trigger-review`(기본 `Bot Review`) 인 항목만**. `In Review`·`Done` 이면 스킵. `Status == status-trigger-kickoff`(기본 `In Progress`) 면 `/kickoff` 가 Status 전환에 실패한 케이스 — 전환은 진행하되 경고 로그 남김
+- Status 전환 대상은 **`Status == status-trigger-review`(기본 `Bot Review`) 인 항목만**. `status-column-in-review`(기본 `In Review`)·`status-column-done`(기본 `Done`) 이면 스킵. `Status == status-trigger-kickoff`(기본 `In Progress`) 면 `/kickoff` 가 Status 전환에 실패한 케이스 — 전환은 진행하되 경고 로그 남김
 - 수동 PR은 `linkedKickoffSession=null`로 유지. PR 본문 파싱으로 slug 추정하지 않음 (G1). 수동 PR 도 `Closes <owner>/<area>#<sub-N>` 가 있으면 Status 전환 시도 — 없으면 전환 스킵
 - 단일 모드 상태 파일 이름에 슬래시·특수문자 금지 (`pr-<repo>-<number>`에서 `<repo>`는 레포명만, org 생략)
 - Agent가 JSON 아닌 자유 텍스트로 응답하면 `fixing` 카테고리로 분류. 파싱 재시도 3회 초과 시 즉시 에스컬

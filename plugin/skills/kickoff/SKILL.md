@@ -67,9 +67,13 @@ bash "$CFG" docs-context-dir   # Context md 디렉토리
 bash "$CFG" base-branch        # PR·rebase base 브랜치 (기본 develop — 하드코딩 금지)
 bash "$CFG" status-trigger-kickoff  # kickoff 트리거 Status 컬럼 (기본 In Progress — 하드코딩 금지)
 bash "$CFG" status-trigger-review   # review 트리거 Status 컬럼 (기본 Bot Review — 하드코딩 금지)
+bash "$CFG" status-column-ready      # skip 분류·lead 게이트 컬럼 (기본 Ready — 하드코딩 금지)
+bash "$CFG" status-column-backlog    # skip 분류 컬럼 (기본 Backlog — 하드코딩 금지)
+bash "$CFG" status-column-in-review  # 사용자 검증 단계 컬럼 (기본 In Review — 하드코딩 금지)
+bash "$CFG" status-column-done       # 머지 완료 컬럼 (기본 Done — 하드코딩 금지)
 ```
 
-> **트리거 Status 컬럼명은 config 로 구동한다(#106).** 아래 본문·표에 나오는 `In Progress`/`Bot Review` 는 **기본값 표기**일 뿐이다. 실제 sub-issue Status 비교(G1 대상 판정·lead 게이트·skip 분류)와 PR 생성 후 Status 전환(GraphQL mutation)은 **리터럴이 아니라 위 `status-trigger-kickoff`/`status-trigger-review` 값**을 써야 한다. 폴러(App)가 이 값으로 dispatch 하므로, SKILL 도 같은 값으로 비교해야 end-to-end 로 맞물린다(컬럼명을 config 에서 바꾸면 폴러·SKILL 양쪽이 함께 따라간다). 이 두 컬럼만 config 로 재정의 가능하고, `In Review`·`Ready`·`Backlog`·`Done` 등 비-트리거 컬럼은 아직 기본명 고정이다(후속 #115).
+> **Status 컬럼명은 config 로 구동한다(#106·#115).** 아래 본문·표에 나오는 `In Progress`/`Bot Review`/`Ready`/`Backlog`/`In Review`/`Done` 은 **기본값 표기**일 뿐이다. 실제 sub-issue Status 비교(G1 대상 판정·lead 게이트·skip 분류)와 PR 생성 후 Status 전환(GraphQL mutation)은 **리터럴이 아니라 config 값**을 써야 한다 — 트리거 컬럼은 `status-trigger-kickoff`/`status-trigger-review`, 비-트리거 도착/경유 컬럼은 `status-column-ready`/`status-column-backlog`/`status-column-in-review`/`status-column-done`. 폴러(App)가 트리거 값으로 dispatch 하므로 SKILL 도 같은 값으로 비교해야 end-to-end 로 맞물린다(컬럼명을 config 에서 바꾸면 폴러·SKILL 양쪽이 함께 따라간다). 비-트리거 컬럼은 SKILL 전용이라 App/폴러 배선은 없고 이 리더만 읽는다(#115).
 
 | 이름 | 값 (config 키) |
 |---|---|
@@ -219,7 +223,7 @@ query($issueId: ID!) {
 영역별 sub-issue 상태를 다음 분류로 나눔:
 
 - **대상**: `Status == status-trigger-kickoff` (config 값, 기본 `In Progress`)
-- **스킵(리포트 표기)**: `Status=Ready`, `Status=Backlog`, sub-issue closed, `Status == status-trigger-review`(기본 `Bot Review`)·`In Review`·`Done` (이미 처리됨 — `/review` 사이클 또는 사용자 검증 단계)
+- **스킵(리포트 표기)**: `Status == status-column-ready`(기본 `Ready`), `Status == status-column-backlog`(기본 `Backlog`), sub-issue closed, `Status == status-trigger-review`(기본 `Bot Review`)·`status-column-in-review`(기본 `In Review`)·`status-column-done`(기본 `Done`) (이미 처리됨 — `/review` 사이클 또는 사용자 검증 단계)
 
 **G1-b 가드**: 대상이 0건이면 **중단 + 안내**:
 
@@ -229,9 +233,9 @@ query($issueId: ID!) {
 
 선행 모듈은 `bash "$CFG" --modules-where lead=true` 로 얻는다 (config 가 정하는 값 — 보통 1개, 2개 이상이면 정의순 직렬 선행). 아래에서 `<lead>` 는 그 모듈명.
 
-아래에서 트리거 컬럼 비교는 리터럴이 아니라 config `status-trigger-kickoff`(기본 `In Progress`) 값을 쓴다.
+아래에서 컬럼 비교는 리터럴이 아니라 config 값을 쓴다 — 트리거는 `status-trigger-kickoff`(기본 `In Progress`), Ready 는 `status-column-ready`(기본 `Ready`).
 
-- `<lead>` sub-issue 존재 + `Status=Ready` + 다른 영역 중 kickoff 트리거 컬럼(기본 `In Progress`) 존재 → **중단 + 안내**:
+- `<lead>` sub-issue 존재 + `Status == status-column-ready`(기본 `Ready`) + 다른 영역 중 kickoff 트리거 컬럼(기본 `In Progress`) 존재 → **중단 + 안내**:
 
   > `<lead>` sub-issue(`<owner>/<lead>#<N>`)가 Ready 상태. 인터페이스 계약 문제 방지 위해 선행 영역도 kickoff 트리거 컬럼(기본 In Progress)으로 올리고 재실행 권장. 의도적 우회는 향후 `--skip-lead-gate` 플래그로 지원 예정(M3+).
 
@@ -255,12 +259,12 @@ STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
      | 이전 상태 | 동작 |
      |---|---|
      | PR 있음 + `Status == status-trigger-review`(기본 `Bot Review`) | 스킵 (PR 생성 완료 — `/review` 사이클에서 처리) |
-     | PR 있음 + `Status=In Review` | 스킵 (사용자 hands-on 검증 단계) |
-     | PR 있음 + 머지 (Done) | 스킵 |
+     | PR 있음 + `Status == status-column-in-review`(기본 `In Review`) | 스킵 (사용자 hands-on 검증 단계) |
+     | PR 있음 + 머지 (`status-column-done`, 기본 `Done`) | 스킵 |
      | PR 없음 + 브랜치 있음 + `blocked` 라벨 | 라벨 제거 → 브랜치 체크아웃 → 자동 rebase → executor 이어서 (G4-b) |
      | PR 없음 + 브랜치 있음 + 라벨 없음 | 세션 크래시 간주. 브랜치 체크아웃 + 자동 rebase → executor 이어서 |
      | PR 없음 + 브랜치 없음 | 처음부터 (브랜치 생성부터) |
-     | `Status=Ready/Backlog` · 이슈 close | 스킵 (사용자 의사 존중) |
+     | `Status == status-column-ready/status-column-backlog`(기본 `Ready`/`Backlog`) · 이슈 close | 스킵 (사용자 의사 존중) |
 
    - `[처음부터]` → 분기 C 진입
    - `[취소]` → 종료
@@ -666,7 +670,7 @@ Context 문서:
 
 ## 원칙 (지켜야 할 것)
 
-- **Status In Progress만 처리** (G1) — Ready·Backlog는 스킵. 자동 전환 안 함. (트리거 컬럼명은 config `status-trigger-kickoff`, 기본 In Progress — 리터럴 하드코딩 아님)
+- **Status In Progress만 처리** (G1) — Ready·Backlog는 스킵. 자동 전환 안 함. (컬럼명은 config — 트리거는 `status-trigger-kickoff`(기본 In Progress), skip 대상은 `status-column-ready`·`status-column-backlog` — 리터럴 하드코딩 아님)
 - **Status `In Progress → Bot Review`는 PR 생성 직후 자동 전환** (G1) — `/kickoff` 가 담당(전환 대상 컬럼은 config `status-trigger-review`, 기본 Bot Review). `Bot Review → In Review` 전환은 `/review` APPROVE 후 `/review` 가 담당
 - **Sub-issue AC 체크박스 자동 체크** (G17) — verifier=pass + PR 생성 확정 후 `## AC` 섹션의 `- [ ]`를 전부 `- [x]`로 갱신. 다른 섹션 영향 없음. 실패해도 Status 전환은 계속
 - **원격 동기화 가드 보존** (G15) — PR 생성 직전 `rev-list` 로 로컬-원격 동기화 확인. executor 가 push 실패하고도 ready 반환하는 케이스(2026-04-20) 차단

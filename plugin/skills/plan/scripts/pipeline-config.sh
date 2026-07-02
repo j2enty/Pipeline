@@ -31,6 +31,10 @@
 #   base-branch                    claude-commands.base-branch (기본 develop — kickoff PR/rebase 대상 base 브랜치)
 #   status-trigger-kickoff         project.status-triggers.kickoff (기본 In Progress — 폴러/SKILL kickoff 트리거 컬럼)
 #   status-trigger-review          project.status-triggers.review  (기본 Bot Review — 폴러/SKILL review 트리거 컬럼)
+#   status-column-in-review        project.status-columns.in-review (기본 In Review — /review 7-h APPROVE 도착 컬럼, SKILL 전용)
+#   status-column-ready            project.status-columns.ready     (기본 Ready — kickoff skip 분류·lead 게이트, SKILL 전용)
+#   status-column-backlog          project.status-columns.backlog   (기본 Backlog — kickoff skip 분류, SKILL 전용)
+#   status-column-done             project.status-columns.done      (기본 Done — 머지 완료 skip, SKILL 전용)
 #   cross-check-tool               claude-commands.cross-check-tool (기본 codex — plan 교차검증용 외부 도구, 범용 pipeline:ask 에이전트에 전달됨)
 #   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
 #   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
@@ -71,6 +75,10 @@ if [ ! -f "$CONFIG_PATH" ]; then
     base-branch) printf 'develop\n' ;;  # kickoff PR/rebase base 브랜치 — 기본 develop (다른 스칼라와 달리 빈값 아님)
     status-trigger-kickoff) printf 'In Progress\n' ;;  # 폴러/SKILL kickoff 트리거 컬럼 — 기본 In Progress
     status-trigger-review) printf 'Bot Review\n' ;;     # 폴러/SKILL review 트리거 컬럼 — 기본 Bot Review
+    status-column-in-review) printf 'In Review\n' ;;  # /review 7-h APPROVE 도착 컬럼 — 기본 In Review (SKILL 전용)
+    status-column-ready) printf 'Ready\n' ;;          # kickoff skip 분류·lead 게이트 — 기본 Ready (SKILL 전용)
+    status-column-backlog) printf 'Backlog\n' ;;      # kickoff skip 분류 — 기본 Backlog (SKILL 전용)
+    status-column-done) printf 'Done\n' ;;            # 머지 완료 skip — 기본 Done (SKILL 전용)
     cross-check-tool) printf 'codex\n' ;;  # 외부 2차 의견 도구 — 기본 codex (다른 스칼라와 달리 빈값 아님)
     # --keys 는 정적 지원키 카탈로그라 config 유무와 무관하게 항상 동일 출력
     # (아래 python 블록의 --keys 분기와 동일 목록). --dump 는 config 내용 요약이라 부재 시 빈 게 맞음.
@@ -78,7 +86,9 @@ if [ ! -f "$CONFIG_PATH" ]; then
       'owner' 'parent-repository' 'parent-repo-name' 'project-number' 'slack-channel' \
       'project-name' 'project-id' 'status-field-id' 'area-field-id' \
       'author-login' 'local-account' 'docs-context-dir' 'base-branch' \
-      'status-trigger-kickoff' 'status-trigger-review' 'cross-check-tool' 'area-id.<Name>' \
+      'status-trigger-kickoff' 'status-trigger-review' 'cross-check-tool' \
+      'status-column-in-review' 'status-column-ready' 'status-column-backlog' 'status-column-done' \
+      'area-id.<Name>' \
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
       'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
       'metrics.usage-tracking-enabled' \
@@ -165,6 +175,15 @@ AREA_BLOCK = ai.group(2) if ai else ''
 # 들여쓰기만 캡처, 형제/최상위 dedent 에서 멈춤).
 st = re.search(r'^([ \t]+)status-triggers:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', PROJECT, re.MULTILINE)
 STATUS_TRIGGERS_BLOCK = st.group(2) if st else ''
+
+# project.status-columns 서브블록 — 비-트리거 도착/경유 컬럼명(#115). status-triggers 와
+# 나란히 두되 별개 블록이다(통합 맵 재설계 아님). /kickoff·/review SKILL 이 sub-issue Status
+# 비교·전환에 쓰는 컬럼명(in-review=APPROVE 도착, ready/backlog=kickoff skip 분류, done=머지
+# 완료 skip)을 config 로 재정의 가능하게 한다. 트리거와 달리 App 폴러는 소비하지 않고 SKILL
+# 전용(이 리더만 읽음). 블록 격리는 status-triggers·area-ids 와 동일 패턴 — 하위키가 modules[]
+# 플래그와 겹칠 여지를 원천 차단(더 깊은 들여쓰기만 캡처, 형제/최상위 dedent 에서 멈춤).
+sc = re.search(r'^([ \t]+)status-columns:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', PROJECT, re.MULTILINE)
+STATUS_COLUMNS_BLOCK = sc.group(2) if sc else ''
 
 def plan_bool(key, default='true'):
     """true/false 만 인정(따옴표 허용). 오타·누락 → default. install.sh get_plan_bool 동일."""
@@ -304,6 +323,18 @@ def resolve(key):
         return get_scalar_in(STATUS_TRIGGERS_BLOCK, 'kickoff', 'In Progress') or 'In Progress'
     if key == 'status-trigger-review':
         return get_scalar_in(STATUS_TRIGGERS_BLOCK, 'review', 'Bot Review') or 'Bot Review'
+    # status-column-{in-review,ready,backlog,done} — 비-트리거 도착/경유 컬럼명(#115). project.
+    # status-columns.<key> 에서 읽고, 부재·빈값 모두 기본 컬럼명으로 폴백해 "항상 비지 않은
+    # 컬럼명" 불변식 보장(status-trigger-*·base-branch 와 동일 철학). config 미지정 프로젝트는
+    # 현행 하드코딩 값과 100% 동일하게 동작(이식 안전). SKILL 전용 — App 폴러는 소비 안 함.
+    if key == 'status-column-in-review':
+        return get_scalar_in(STATUS_COLUMNS_BLOCK, 'in-review', 'In Review') or 'In Review'
+    if key == 'status-column-ready':
+        return get_scalar_in(STATUS_COLUMNS_BLOCK, 'ready', 'Ready') or 'Ready'
+    if key == 'status-column-backlog':
+        return get_scalar_in(STATUS_COLUMNS_BLOCK, 'backlog', 'Backlog') or 'Backlog'
+    if key == 'status-column-done':
+        return get_scalar_in(STATUS_COLUMNS_BLOCK, 'done', 'Done') or 'Done'
     # claude-commands 섹션 스칼라 — cross-check-tool 만 기본값 codex (나머지는 빈 값 기본)
     if key == 'cross-check-tool':
         # 키 부재뿐 아니라 명시적 빈값(cross-check-tool: "" / '')도 codex 로 폴백 —
@@ -346,7 +377,10 @@ elif arg == '--keys':
         'project-name', 'project-id', 'status-field-id', 'area-field-id',
         'author-login', 'local-account', 'docs-context-dir', 'base-branch',
         # 폴러/SKILL 공용 트리거 컬럼명 (project.status-triggers.*)
-        'status-trigger-kickoff', 'status-trigger-review', 'cross-check-tool', 'area-id.<Name>',
+        'status-trigger-kickoff', 'status-trigger-review', 'cross-check-tool',
+        # 비-트리거 도착/경유 컬럼 (project.status-columns.* — SKILL 전용, #115)
+        'status-column-in-review', 'status-column-ready', 'status-column-backlog', 'status-column-done',
+        'area-id.<Name>',
         'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
         'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled',
         # 계측 토글 (기본 false — opt-in). 워크플로 claude 래퍼가 읽어 코멘트 박제 on/off.
