@@ -61,6 +61,30 @@ it "RC-2 토글 키 출력이 plan↔kickoff 동일"
   [ "$ok" = 1 ] && pass
 )
 
+# RC-2b — 토글 default 폴백 경로 동일 (허위그린 차단, #112 리뷰 F1)
+#   config-reader-core-parity.yml 은 토글을 전부 명시해 리더의 공유 default 상수
+#   (plan_bool default='true' / metrics_bool default='false') 경로를 자극하지 못한다.
+#   → plan:/metrics: 서브블록을 생략한 fixture 로 default 폴백을 자극하고,
+#     (1) plan↔kickoff parity 강제 + (2) 실제 default 값까지 단언해
+#     plan 리더의 default 상수 드리프트가 반드시 레드로 드러나게 한다.
+it "RC-2b 토글 default 폴백(plan:/metrics: 생략)이 plan↔kickoff 동일 + 기대 default"
+(
+  CORE_FIX="$FIXTURES_DIR/config-reader-core-parity-defaults.yml"
+  ok=1
+  # plan.* 토글 4개 — default 는 true (config 에 plan: 서브블록 없음)
+  for key in plan.completeness-critic-enabled plan.consistency-critic-enabled \
+             plan.consistency-critic-dual-model plan.contract-doc-enabled; do
+    _assert_reader_parity "toggle-default:$key" "$key" || ok=0
+    kv="$(PIPELINE_CONFIG="$CORE_FIX" bash "$READER_KICKOFF" "$key" 2>/dev/null)"
+    assert_eq "true" "$kv" "plan 토글 default 가 true 가 아님(폴백 경로 미자극?): $key" || ok=0
+  done
+  # metrics.* 토글 — default 는 false (config 에 metrics: 서브블록 없음)
+  _assert_reader_parity "toggle-default:metrics.usage-tracking-enabled" metrics.usage-tracking-enabled || ok=0
+  mv="$(PIPELINE_CONFIG="$CORE_FIX" bash "$READER_KICKOFF" metrics.usage-tracking-enabled 2>/dev/null)"
+  assert_eq "false" "$mv" "metrics 토글 default 가 false 가 아님(폴백 경로 미자극?)" || ok=0
+  [ "$ok" = 1 ] && pass
+)
+
 # RC-3 — 모듈 플래그 전종류 + area-id legacy 폴백 동일
 it "RC-3 모듈 플래그/ area-id 폴백 출력이 plan↔kickoff 동일"
 (
