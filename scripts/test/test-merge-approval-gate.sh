@@ -143,9 +143,60 @@ it "T-AG-9 드리프트 가드: merge.yml org 쿼리가 '|| true' 로 감싸짐(
 (
   assert_file_present "$MERGE_YML" "merge.yml 경로 못 찾음" || return
   # org --jq 추출 라인 근처에 '|| true' 가 있어야 (owner=user 시 non-zero 를 흡수)
-  if grep -qF -- "--jq '.data.organization.projectV2' 2>/dev/null || true" "$MERGE_YML"; then
+  if grep -qF -- "--jq '.data.organization.projectV2' 2>\"\$ORG_STDERR\" || true" "$MERGE_YML"; then
     pass
   else
-    fail "merge.yml org 쿼리에 '2>/dev/null || true' 가드 없음 — set -euo pipefail 로 step 사망(#100 M5)"
+    fail "merge.yml org 쿼리에 '2>\"\$ORG_STDERR\" || true' 가드 없음 — set -euo pipefail 로 step 사망(#100 M5)"
+  fi
+)
+
+# ── M5 실행 스니펫 (merge.yml 구조 복제, gh 는 주입 스텁이 처리) ──────
+# merge.yml 의 "org 먼저 → 비면 user 폴백 + set -euo pipefail" 을 그대로 실행한다.
+# 핵심은 '|| true' 가 pipefail 사망을 막느냐 — 그래서 여기서 || true 를 빼면 gh 가
+# non-zero 일 때 assignment 가 set -e 로 이 함수(서브셸)를 죽여 호출부 rc≠0 이 된다.
+# (순수함수 select_project_meta 는 '선택'만 보증하지 못하는 실행 레벨 회귀를 잡는다 — 리뷰 minor #2)
+m5_fallback_snippet() {
+  set -euo pipefail
+  local org_stderr meta
+  org_stderr="$(mktemp)"
+  meta=$(gh api graphql -q 'organization{projectV2}' --jq '.data.organization.projectV2' 2>"$org_stderr" || true)
+  if [ -z "$meta" ] || [ "$meta" = "null" ]; then
+    meta=$(gh api graphql -q 'user{projectV2}' --jq '.data.user.projectV2' 2>/dev/null || true)
+  fi
+  echo "$meta"
+}
+
+# T-AG-10: M5 본질 회귀를 "실행"으로 검증
+it "T-AG-10 실행 검증: gh non-zero 여도 pipefail 하에서 폴백 진행(M5 본질)"
+(
+  # gh 스텁 — organization 쿼리(인자에 'organization' 포함)면 exit 1(owner=user 시
+  # NOT_FOUND 재현), 그 외(user)면 성공 JSON. 함수 호출 시점에 이 스텁이 lookup 된다.
+  gh() {
+    case "$*" in
+      *organization*) echo "GraphQL: Could not resolve to an Organization" >&2; return 1 ;;
+      *) echo '{"id":"USER"}' ;;
+    esac
+  }
+  rc=0
+  out="$(m5_fallback_snippet)" || rc=$?
+  assert_eq "0" "$rc" "gh non-zero 에 서브셸이 죽음 — || true 가드가 pipefail 생존 못 시킴(#100 M5 본질 회귀)" || return
+  assert_eq '{"id":"USER"}' "$out" "org 실패 시 user 폴백 결과가 안 나옴" && pass
+)
+
+# T-AG-11: M5 관측성 — 최종 실패 경로에서 stderr 를 캡처·노출해 진짜 장애를 숨기지 않는가
+# (2>/dev/null 로 통째로 버리면 auth·rate-limit·network 오류가 조용한 회귀가 됨 — 리뷰 minor #1)
+it "T-AG-11 드리프트 가드: merge.yml 이 org/user 조회 stderr 를 캡처·진단 노출(M5 관측성)"
+(
+  assert_file_present "$MERGE_YML" "merge.yml 경로 못 찾음" || return
+  # stderr 를 /dev/null 로 버리지 않고 임시파일로 캡처
+  if ! grep -qF 'ORG_STDERR="$(mktemp)"' "$MERGE_YML"; then
+    fail "merge.yml 이 org 조회 stderr 를 캡처하지 않음 — 진짜 장애가 조용히 묻힘(#100 관측성)"
+    return
+  fi
+  # 최종 실패 경로에서 캡처한 오류를 로그로 노출
+  if grep -qF '[org 조회 오류]' "$MERGE_YML" && grep -qF '[user 조회 오류]' "$MERGE_YML"; then
+    pass
+  else
+    fail "merge.yml 최종 실패 경로에 stderr 진단 노출 없음 — 실패 원인 사후 추적 불가"
   fi
 )

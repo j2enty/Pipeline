@@ -254,6 +254,10 @@ jobs:
           #    step 이 죽고 continue-on-error:true 가 그걸 삼켜 user 소유 Project 는 Status=Done
           #    전환이 "항상 조용히 실패"했다. 그래서 두 쿼리를 분리 호출한다 — org 를 먼저
           #    시도하고(예상된 실패이므로 stderr 억제 + || true), 비면 user 로 폴백한다.
+          #    관측성 — stderr 를 통째로 버리면 예상된 NOT_FOUND 뿐 아니라 auth·rate-limit·
+          #    network 같은 "진짜 장애"까지 가려져 조용한 회귀가 된다. 그래서 stderr 를 임시
+          #    파일에 캡처해 두고, 정상 경로에선 침묵하되 아래 최종 실패 시에만 원인을 노출한다.
+          ORG_STDERR="$(mktemp)"; USER_STDERR="$(mktemp)"
           # shellcheck disable=SC2016
           PROJECT_META=$(gh api graphql -f query='
             query($owner: String!, $number: Int!) {
@@ -269,7 +273,7 @@ jobs:
                 }
               }
             }' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
-            --jq '.data.organization.projectV2' 2>/dev/null || true)
+            --jq '.data.organization.projectV2' 2>"$ORG_STDERR" || true)
 
           if [ -z "$PROJECT_META" ] || [ "$PROJECT_META" = "null" ]; then
             # org 조회가 비었음 → user 소유로 재시도 (org 소유였다면 위에서 채워졌다).
@@ -288,11 +292,14 @@ jobs:
                   }
                 }
               }' -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" \
-              --jq '.data.user.projectV2' 2>/dev/null || true)
+              --jq '.data.user.projectV2' 2>"$USER_STDERR" || true)
           fi
 
           if [ -z "$PROJECT_META" ] || [ "$PROJECT_META" = "null" ]; then
             echo "Project 메타 조회 실패 (owner=$PROJECT_OWNER, number=$PROJECT_NUMBER) — Status 전환 스킵" >&2
+            # 진단 — project 미존재(정상 스킵)와 auth·rate-limit·network 오류(조용한 회귀)를 구분.
+            echo "  [org 조회 오류] $(head -3 "${ORG_STDERR:-/dev/null}" 2>/dev/null || true)" >&2
+            echo "  [user 조회 오류] $(head -3 "${USER_STDERR:-/dev/null}" 2>/dev/null || true)" >&2
             exit 0
           fi
 
