@@ -11,7 +11,7 @@ paths:
 
 | 위치 | 패턴 | 예시 |
 |---|---|---|
-| Pipeline 본체 `.github/workflows/` | `<동작>.yml` (prefix 없음) | `kickoff.yml`, `review.yml`, `merge.yml`, `critic.yml`, `critic-dispatch.yml`, `parent-autoclose.yml` |
+| Pipeline 본체 `.github/workflows/` | `<동작>.yml` (prefix 없음) | `kickoff.yml`, `review.yml`, `merge.yml`, `critic-dispatch.yml`, `parent-autoclose.yml` |
 | 영역 레포 호출자 `.github/workflows/` | `auto-<동작>.yml` (권장, Pipeline이 강제 안 함) | `auto-kickoff.yml`, `auto-review.yml` |
 
 - Pipeline 본체는 자동화 yml만 있어서 prefix redundant

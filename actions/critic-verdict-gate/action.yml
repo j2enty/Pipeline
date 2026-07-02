@@ -2,8 +2,7 @@
 #
 # 무엇을: parse-critic-verdict.sh 를 호출해 "이번 critic 실행이 쓴 상태파일"의 verdict 를
 #         fail-closed 로 파싱하고, 결과(verdict + 식별된 상태파일 경로)를 step output 으로
-#         내보낸다. self-hosted 러너의 critic 워크플로(critic.yml / critic-dispatch.yml)가
-#         공유한다.
+#         내보낸다. self-hosted 러너의 critic 워크플로(critic-dispatch.yml)가 쓴다.
 #
 # 왜 composite 인가:
 #   verdict 파싱·fail-closed 방어(#9 sentinel 식별·#B marker stale·#A allowlist 정규화)가

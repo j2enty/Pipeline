@@ -166,7 +166,7 @@ SCHEMA_MD="$REF/state-schema.md"
 absentE 'criticVerdict' "$CTX_MD" "(D-6b) context-md.md criticVerdict 死문 필드 부재"
 # D-6c 정정된 트리거 (d) — criticFindings 가 비어있지 않으면
 hasE 'criticFindings.* 가 비어있지 않' "$CTX_MD" "(D-6c) context-md.md 트리거 (d) criticFindings 비어있지 않음"
-# D-6d state-schema.md 8-c-bis ↔ critic.yml verdict 계약 잠금.
+# D-6d state-schema.md 8-c-bis ↔ parse-critic-verdict.sh verdict 계약 잠금.
 #   8-c-bis 블록(## 8-c-bis ~ 다음 ## 헤더)만 추출해 검사. (앵커가 사라지면 awk 가
 #   파일 끝까지 삼키지 않도록, 다음 '## ' 헤더를 터미네이터로 쓴다 — 특정 섹션명에 비의존.)
 SCHEMA_8CBIS="$(awk '/^## 8-c-bis/{f=1; next} f&&/^## /{exit} f{print}' "$SCHEMA_MD")"
@@ -178,8 +178,8 @@ if printf '%s' "$SCHEMA_8CBIS" | grep -q 'criticVerdict'; then
 #   정확히 일치하는지 검증. 문서↔소비자 한쪽만 바뀌면 FAIL → 런타임 계약 깨짐 사전 차단.
 #   (이번 #47 의 critical: 8-c-bis enum 을 approved/changes-requested/escalated 로 바꿔
 #    allowlist 와 어긋났는데 기존 테스트가 못 잡았음 → 이 테스트가 그걸 잠근다.)
-#   #99: allowlist 소비자가 critic.yml 인라인에서 parse-critic-verdict.sh 로 추출됐다
-#   (critic.yml·critic-dispatch.yml 공유 부품). 따라서 계약 잠금 대상도 추출본으로 옮긴다.
+#   #99: allowlist 소비자가 (이제 제거된) critic.yml 인라인에서 parse-critic-verdict.sh 로
+#   추출됐고, 캐노니컬 경로 critic-dispatch.yml 이 그 부품을 쓴다. 계약 잠금 대상도 추출본이다.
 VERDICT_ALLOWLIST_SH="$TEST_DIR/../../../../scripts/parse-critic-verdict.sh"
 # 8-c-bis 예시에서 "verdict": "a" | "b" | "c" 의 값 토큰만 추출(키 "verdict" 자체는 제외).
 #   colon 뒤의 값 부분만 잘라낸 뒤 따옴표 안 소문자 토큰을 모은다.
@@ -213,7 +213,7 @@ if printf '%s' "$SKILL_10A" | grep -q 'criticVerdict'; then
 
 echo -e "\n${C_CYAN}── (D-8) aggregate.verdict write 단계 존재 (#54) ──${C_NC}"
 # #54 critical: aggregate.verdict 를 상태파일에 쓰는 실행 단계가 처음부터 없어 항상 null →
-#   critic.yml allowlist 미스 → indeterminate → critic 자동머지 영구 차단. 8-c-bis 에 write 추가.
+#   parse-critic-verdict.sh allowlist 미스 → indeterminate → critic 자동머지 영구 차단. 8-c-bis 에 write 추가.
 #   SKILL.md 8-c-bis 에 jq 로 .aggregate.verdict 를 세팅하는 실행 블록이 있어야 한다.
 #   (8-c-bis 블록만 추출해 검사 — 다음 '#### ' 헤더를 터미네이터로.)
 #   (P3.1) tmpl 동기 검증은 제거 — 배포 SSOT 가 SKILL.md 로 일원화됐다.

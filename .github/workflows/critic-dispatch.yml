@@ -316,7 +316,7 @@ jobs:
               continue
             fi
 
-            # [M2] 머지 직전 상태 재확인. MERGED 는 다른 경로(critic.yml native trigger 등)가
+            # [M2] 머지 직전 상태 재확인. MERGED 는 다른 경로(수동 머지·동시 실행 등)가
             # 먼저 머지한 정상 케이스라 조용히 스킵. CLOSED 는 사람이 머지 없이 닫은 것이라
             # 의미가 다르므로(머지가 필요했는데 누군가 닫았을 수 있음) ::warning 으로 가시화한다
             # — 둘 다 머지는 불가라 fail-open 구멍은 아니지만, 무음으로 흘리지 않는다.
@@ -345,6 +345,26 @@ jobs:
             echo "::error::하나 이상의 영역 PR 머지 실패 — fail-closed 로 non-zero 종료(수동 처리 필요)."
             exit 1
           fi
+
+      # verdict=concerns 일 때 critic findings 를 major/minor 라벨 이슈로 추적한다.
+      # 원래 critic.yml 의 "Concerns — critic findings 추적" step 이 담당했으나, #99 로 native
+      # 경로(critic.yml)가 제거되며 App-dispatch(단일 경로)로 이관해 기능을 보존한다.
+      # tracking-enabled 는 caller yml 변경 없이 org/repo var(PIPELINE_TRACKING_ENABLED)로
+      # 자동 판단한다(reusable workflow 의 vars 는 caller 레포 컨텍스트 — critic.yml 의
+      # reviewer-bot-login 폴백과 동일 원리). 상태파일은 verdict 게이트가 이미 식별한
+      # resolved_state_file 을 재사용한다(재식별 없음). 머지 step 이 실패(exit 1)하면 이
+      # step 은 plain-if 라 GitHub Actions 기본 동작으로 스킵된다(머지 성공 시에만 추적).
+      - name: Concerns — critic findings 추적(라벨 이슈)
+        if: steps.verdict.outputs.critic_verdict == 'concerns' && vars.PIPELINE_TRACKING_ENABLED == 'true' && steps.verdict.outputs.resolved_state_file != ''
+        uses: ./.pipeline-action-checkout/actions/track-findings
+        with:
+          state-file-path: ${{ steps.verdict.outputs.resolved_state_file }}
+          finding-source: critic
+          owner: ${{ inputs.owner }}
+          parent-repo: ${{ inputs.parent-repository }}
+          major-label: ${{ vars.PIPELINE_TRACKING_MAJOR_LABEL || 'major-issue' }}
+          minor-label: ${{ vars.PIPELINE_TRACKING_MINOR_LABEL || 'minor-issue' }}
+          gh-token: ${{ steps.app-token.outputs.token }}
 
       # verdict=blocker — 머지하지 않고 parent 코멘트 + Slack 에스컬 + exit 1 (critic.yml 이식).
       - name: Blocker — Slack 에스컬레이션 + 머지 차단

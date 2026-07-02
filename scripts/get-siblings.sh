@@ -2,8 +2,10 @@
 # get-siblings.sh — PR이 닫는 sub-issue의 sibling 목록 조회
 #
 # 배경:
-#   auto-merge.yml 과 auto-critic.yml 양쪽에서 동일한 "PR → sub-issue → parent →
-#   sibling 목록" GraphQL 조회를 반복. 이 스크립트로 공통화.
+#   원래 auto-merge.yml 과 (지금은 제거된) native critic 경로 양쪽에서 동일한
+#   "PR → sub-issue → parent → sibling 목록" GraphQL 조회를 반복해 이 스크립트로 공통화했다.
+#   ※ #99 critic 경로 일원화 후 이 스크립트를 부르는 워크플로는 현재 없다(dead code).
+#     critic-dispatch.yml 의 sibling 승인 판정은 verify-sibling-approvals.sh 를 쓴다.
 #
 # 사용법:
 #   RESULT=$(GH_TOKEN=<token> ./scripts/get-siblings.sh <PR_REPO> <PR_NUMBER>)

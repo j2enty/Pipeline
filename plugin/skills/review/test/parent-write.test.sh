@@ -4,7 +4,7 @@
 # 배경(#94 critical, #54 와 동형): /review(생산자)가 parent 모드 상태파일
 #   (.pipeline/state/reviews/<slug>.json)을 만들 때 .parent({url, number})를
 #   결정적으로 기록하는 실행 단계가 SKILL.md Step 5 에 없었다. 그래서 LLM 이 비결정적으로
-#   채우거나 빠뜨려 null 로 남으면, 소비자 critic.yml / resolve-review-statefile.sh 가
+#   채우거나 빠뜨려 null 로 남으면, 소비자 critic-dispatch.yml(→ parse-critic-verdict.sh) / resolve-review-statefile.sh 가
 #   .parent.url == PARENT_URL 매칭에 실패 → indeterminate → fail-closed 로 머지 영구 차단.
 #
 # 이 테스트는 SKILL.md Step 5 에 "문서로 박힌" jq write 명령을 그대로 추출해 실제 적용한다

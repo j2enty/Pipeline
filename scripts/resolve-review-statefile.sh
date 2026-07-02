@@ -2,7 +2,7 @@
 # resolve-review-statefile.sh — "이번 /review 실행이 쓴 상태파일"을 결정적으로 식별
 #
 # 배경:
-#   critic.yml(과 review 계열 yml)은 self-hosted 공유 디렉토리
+#   critic 경로(critic-dispatch.yml → parse-critic-verdict.sh)와 review 계열 yml 은 self-hosted 공유 디렉토리
 #   ($VERDICT_STATE_DIR = working-directory/.pipeline/state/reviews)에서
 #   "이번 실행이 쓴 상태파일(.pipeline/state/reviews/<slug>.json)"을 직접 알 방법이 없어
 #   .parent.url 매칭 + marker(-nt)로 "추측"해 왔다(이슈 #9의 구조적 약점).
@@ -45,7 +45,7 @@
 # fail-closed 보존:
 #   폴백 critic 경로는 기존 critic.yml 의 방어(정확매칭·단일강제)를 그대로 유지한다.
 #   0개/복수 매칭은 indeterminate. sentinel 의 parent.url 교차검증으로 오염 sentinel 차단.
-#   (marker -nt stale 검증은 호출자(critic.yml)가 계속 담당 — 이 스크립트는 "어느 파일"만 결정.)
+#   (marker -nt stale 검증은 호출자(parse-critic-verdict.sh)가 계속 담당 — 이 스크립트는 "어느 파일"만 결정.)
 
 set -uo pipefail
 

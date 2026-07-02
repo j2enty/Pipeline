@@ -1,45 +1,45 @@
 #!/usr/bin/env bash
 # 이 파일은 run-tests.sh 에서 source 된다.
 # shellcheck disable=SC2034
-# 이슈 #14-② — critic.yml marker(-nt) stale 검증 시퀀스 단위테스트.
+# 이슈 #14-② — parse-critic-verdict.sh marker(-nt) stale 검증 시퀀스 단위테스트.
 #
 # 배경:
-#   critic.yml 의 verdict 파싱 step 은 (1) resolve-review-statefile.sh(sentinel 우선)로
-#   STATE_FILE 을 식별한 뒤, (2) 그 파일이 "이번 실행이 새로 쓴 것"인지 marker 파일과
-#   `-nt`(newer-than) 비교로 검증한다(fail-closed). resolve 스크립트 단위테스트(RS-1~13)는
-#   "어느 파일"만 검증할 뿐 이 `-nt` 신선도 경로를 안 탄다.
-#   이 파일은 critic.yml 의 결정 시퀀스(식별 → marker -nt → verdict|indeterminate)를
+#   verdict 파싱 로직(parse-critic-verdict.sh — critic-dispatch.yml 이 부름)은
+#   (1) resolve-review-statefile.sh(sentinel 우선)로 STATE_FILE 을 식별한 뒤, (2) 그 파일이
+#   "이번 실행이 새로 쓴 것"인지 marker 파일과 `-nt`(newer-than) 비교로 검증한다(fail-closed).
+#   resolve 스크립트 단위테스트(RS-1~13)는 "어느 파일"만 검증할 뿐 이 `-nt` 신선도 경로를 안 탄다.
+#   이 파일은 그 결정 시퀀스(식별 → marker -nt → verdict|indeterminate)를
 #   그대로 재현해 "sentinel 식별 + stale 파일 → indeterminate" 시나리오를 테스트로 고정한다.
 #
 # anti-drift:
-#   `-nt` 스니펫은 critic.yml 과 문자 그대로 동일하게 작성한다(드리프트 방지).
-#   MS-DRIFT 케이스가 critic.yml 에 그 핵심 라인이 실제로 존재하는지 grep 으로 단언한다.
+#   `-nt` 스니펫은 parse-critic-verdict.sh 와 문자 그대로 동일하게 작성한다(드리프트 방지).
+#   MS-DRIFT 케이스가 parse-critic-verdict.sh 에 그 핵심 라인이 실제로 존재하는지 grep 으로 단언한다.
 #
 # 종속성 제로: 각 케이스가 임시 디렉토리에 더미 상태파일/sentinel/marker 를 만든다.
 #   install.sh 불필요 → setup_install_env 안 씀.
 
 RESOLVE_SH="$REPO_ROOT/scripts/resolve-review-statefile.sh"
-# #99 — verdict 파싱(marker -nt stale 검증 포함)이 critic.yml 인라인에서
-# parse-critic-verdict.sh 로 추출됐다(critic.yml·critic-dispatch.yml 공유 부품).
+# #99 — verdict 파싱(marker -nt stale 검증 포함)이 (지금은 제거된) critic.yml 인라인에서
+# parse-critic-verdict.sh 로 추출됐고, 캐노니컬 경로 critic-dispatch.yml 이 그 부품을 쓴다.
 # anti-drift 가드는 이제 그 추출본을 대상으로 한다.
 PARSE_SH="$REPO_ROOT/scripts/parse-critic-verdict.sh"
 
 # 더미 상태파일 작성 — write_state_json <경로> <parent_url> [verdict]
-# critic.yml 이 읽는 .parent.url(식별)·.aggregate.verdict(판정) 둘 다 채운다.
+# parse-critic-verdict.sh 가 읽는 .parent.url(식별)·.aggregate.verdict(판정) 둘 다 채운다.
 write_state_json() {
   local path="$1" purl="$2" verdict="${3:-pass}"
   printf '{"parent":{"url":"%s"},"aggregate":{"verdict":"%s"}}\n' "$purl" "$verdict" > "$path"
 }
 
-# critic.yml 의 결정 시퀀스를 그대로 재현해 최종 verdict 를 stdout 1줄로 돌려준다.
+# parse-critic-verdict.sh 의 결정 시퀀스를 그대로 재현해 최종 verdict 를 stdout 1줄로 돌려준다.
 #   ① resolve-review-statefile.sh(critic 모드, sentinel 우선)로 STATE_FILE 식별
-#   ② marker 파일과 -nt 비교로 fresh/stale 판정 (스니펫은 critic.yml 과 문자 일치)
+#   ② marker 파일과 -nt 비교로 fresh/stale 판정 (스니펫은 parse-critic-verdict.sh 과 문자 일치)
 #   ③ 그 결과로 verdict(.aggregate.verdict) vs indeterminate
 # 입력: VERDICT_STATE_DIR / PARENT_URL / REVIEW_STATE_SENTINEL(옵션) / CRITIC_RUN_MARKER
 # 출력: pass|concerns|blocker|indeterminate 중 하나
 resolve_and_judge() {
   local state_file="" match_count=0 rc=0 critic_verdict=""
-  # ── ① 식별 (critic.yml 1순위: resolve 스크립트. sentinel unset 이면 빈값 전달 → 폴백) ──
+  # ── ① 식별 (parse-critic-verdict.sh 1순위: resolve 스크립트. sentinel unset 이면 빈값 전달 → 폴백) ──
   if [ -f "$RESOLVE_SH" ]; then
     state_file="$(VERDICT_STATE_DIR="$VERDICT_STATE_DIR" PARENT_URL="$PARENT_URL" \
       REVIEW_STATE_SENTINEL="${REVIEW_STATE_SENTINEL:-}" \
@@ -53,7 +53,7 @@ resolve_and_judge() {
   fi
 
   # ── ②③ marker(-nt) stale 검증 + verdict 읽기 ──
-  # 아래 STATE_FILE 변수명은 critic.yml 스니펫과 문자 일치를 위해 의도적으로 동일하게 쓴다.
+  # 아래 STATE_FILE 변수명은 parse-critic-verdict.sh 스니펫과 문자 일치를 위해 의도적으로 동일하게 쓴다.
   local STATE_FILE="$state_file"
   if [ "$match_count" -eq 1 ]; then
     # >>> parse-critic-verdict.sh 와 문자 그대로 동일 (anti-drift; MS-DRIFT 가 동기화 단언) >>>
@@ -67,12 +67,12 @@ resolve_and_judge() {
         CRITIC_VERDICT="indeterminate"
       fi
     fi
-    # <<< critic.yml 동일 구간 끝 <<<
+    # <<< parse-critic-verdict.sh 동일 구간 끝 <<<
   else
     CRITIC_VERDICT="indeterminate"
   fi
 
-  # critic.yml 의 enum allowlist 정규화와 동일.
+  # parse-critic-verdict.sh 의 enum allowlist 정규화와 동일.
   case "$CRITIC_VERDICT" in
     pass|concerns|blocker) ;;
     *) CRITIC_VERDICT="indeterminate" ;;
@@ -141,8 +141,8 @@ it "MS-3 marker 부재 → indeterminate"
 
 # MS-4 — sentinel 없음(resolve 스크립트 내부 폴백) + stale → indeterminate
 #   주의: 여기서 "폴백"은 resolve-review-statefile.sh 의 내부 .parent.url 정확매칭
-#   폴백이다(RESOLVE_SH 가 repo 에 존재하므로). critic.yml 의 "인라인 폴백"(Pipeline
-#   미체크아웃 → RESOLVE_SH 부재 시 yml 안에서 직접 매칭)과는 다른 경로다. 이 케이스
+#   폴백이다(RESOLVE_SH 가 repo 에 존재하므로). parse-critic-verdict.sh 의 "인라인 폴백"(Pipeline
+#   미체크아웃 → RESOLVE_SH 부재 시 스크립트 안에서 직접 매칭)과는 다른 경로다. 이 케이스
 #   목적은 "어느 식별 경로든 그 뒤의 marker -nt stale 검증이 공통 적용됨"을 고정하는 것.
 it "MS-4 sentinel 없음(resolve 내부 폴백) + stale → indeterminate"
 (
