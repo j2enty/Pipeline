@@ -39,7 +39,7 @@ on:
         required: false
         default: '.pipeline/state/reviews'
       reviewer-bot-login:
-        description: "Reviewer 봇 로그인 이름 (critic.yml 과 동일 의미). 미설정(빈값)이면 M3 승인 재검증을 스킵한다(기존 caller 하위호환 — degrade)."
+        description: "Reviewer 봇 로그인 이름 (critic.yml 과 동일 의미). 빈값이면 org var(PIPELINE_REVIEWER_BOT_LOGIN)로 폴백한다(critic.yml 과 동일). input·org var 둘 다 빈값이면 M3 승인 재검증을 스킵한다(degrade)."
         type: string
         required: false
         default: ''
@@ -177,8 +177,9 @@ jobs:
       #   즉 재검증은 verdict 게이트와 AND — "승인이 여전히 유효할 때만" 머지한다.
       # all-or-nothing: 멀티영역은 원자적으로 함께 머지돼야 하므로, 하나라도 재검증 실패면
       #   머지 루프를 아예 돌리지 않고 차단 + 에스컬레이션 + exit 1 한다(fail-closed).
-      # degrade: reviewer-bot-login 이 빈값이면(봇 판정 불가) 재검증을 스킵하고 현행 동작을
-      #   유지한다(기존 caller 하위호환). 활성화는 caller 가 reviewer-bot-login 을 넘겨야 한다.
+      # degrade: reviewer-bot-login(input) 이 빈값이면 org var(PIPELINE_REVIEWER_BOT_LOGIN)로
+      #   폴백한다(critic.yml 과 동일). 둘 다 빈값일 때만(봇 판정 불가) 재검증을 스킵하고 현행
+      #   동작을 유지한다(하위호환). 즉 org var 만 있으면 caller 변경 없이 자동 활성화된다.
       # if 는 pass/concerns 만 — 이 step 이 exit 1 로 실패하면 아래 머지 step 의 (상태함수 없는)
       #   if 에 암묵 success() 가 적용돼 머지 step 이 스킵된다 → 낡은 승인 머지 원천 차단.
       - name: M3 — 머지 직전 sibling 승인 재검증 (fail-closed)
@@ -189,7 +190,11 @@ jobs:
           OWNER: ${{ inputs.owner }}
           PARENT_REPO: ${{ inputs.parent-repository }}
           MODULES_IGNORE: ${{ inputs.modules-ignore }}
-          REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login }}
+          # critic.yml 라인 110 과 동일한 폴백 — input 이 빈값이면 org var 를 자동 사용한다.
+          # 이 폴백이 없으면 caller 가 reviewer-bot-login 을 안 넘길 때 항상 빈값이 돼
+          # M3 재검증이 프로덕션에서 늘 스킵(degrade)됐다(#99 PR2a 리뷰 지적). 이미 존재하는
+          # org var(PIPELINE_REVIEWER_BOT_LOGIN)를 쓰면 cross-repo caller 변경 없이 활성화된다.
+          REVIEWER_BOT_LOGIN: ${{ inputs.reviewer-bot-login != '' && inputs.reviewer-bot-login || vars.PIPELINE_REVIEWER_BOT_LOGIN }}
           STRICT_REVIEW_BOT_CHECK: ${{ inputs.strict-review-bot-check }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -197,9 +202,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # degrade — reviewer-bot-login 미설정이면 재검증 불가 → 스킵(현행 동작 유지).
+          # degrade — reviewer-bot-login(input) 도 org var(PIPELINE_REVIEWER_BOT_LOGIN) 도 없으면
+          # 봇 판정 불가 → 스킵(현행 동작 유지). org var 만 설정해도 자동 활성화된다.
           if [ -z "${REVIEWER_BOT_LOGIN:-}" ]; then
-            echo "M3 재검증 스킵(reviewer-bot-login 미설정) — 현행 동작 유지(degrade). 활성화하려면 caller 에 reviewer-bot-login 을 전달하세요."
+            echo "M3 재검증 스킵(reviewer-bot-login·org var 둘 다 미설정) — 현행 동작 유지(degrade). 활성화하려면 org var PIPELINE_REVIEWER_BOT_LOGIN 을 설정하거나 caller 에 reviewer-bot-login 을 전달하세요."
             exit 0
           fi
 
