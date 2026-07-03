@@ -629,8 +629,8 @@ bash "$METRICS" mark "$TSV" codex-crosscheck start
 Agent(
   description="⑤ 정합성 critic 2차 — 외부 모델 교차검증",
   subagent_type="pipeline:ask",
-  prompt="도구=${TOOL}. 모델=${MODEL}. effort=${EFFORT}. 정책=best-effort(도구 없으면 조용히 스킵). 작업=정합성 교차검증.
-          (모델·effort 가 빈값이면 도구 기본 모델 사용 — 값이 있을 때만 codex 모델 플래그 부착.)
+  prompt="도구=${TOOL}. 모델=[${MODEL}]. effort=[${EFFORT}]. 정책=best-effort(도구 없으면 조용히 스킵). 작업=정합성 교차검증.
+          (모델·effort 값은 대괄호 안이며, 빈 대괄호 []=미지정 → 도구 기본 모델 사용. 값이 있을 때만 codex 모델 플래그 부착. 예: 모델=[gpt-5.5] 는 값이 gpt-5.5 — 마침표까지 값에 넣지 말 것.)
           아래 두 문서의 정합성을 검토해줘: [사람용·AI용 문서 내용 전달]
           체크리스트: 사람용↔AI용 일대일 대응 / 미승인 결정 / 가정 반영 / 영역교차 일치 / 의도추적"
 )
