@@ -62,6 +62,10 @@ has 'subagent_type="pipeline:critic"' "$SKILL" "(A-3) pipeline:critic 호출"
 has 'subagent_type="pipeline:ask"' "$SKILL" "(A-3) pipeline:ask 호출(2차 교차검증, best-effort)"
 absent 'subagent_type="pipeline:cross-check"' "$SKILL" "(A-3) pipeline:cross-check 에이전트 잔재 0(ask 로 일반화)"
 has '"$CFG" cross-check-tool' "$SKILL" "(A-3) cross-check-tool 런타임 읽기(도구명 주입 — config 키는 유지)"
+# #83: 교차검증 모델·effort 도 통합 키(codex-model·codex-reasoning-effort)로 config 주입 → ask 프롬프트 전달
+has '"$CFG" codex-model' "$SKILL" "(A-3) codex-model 런타임 읽기(교차검증 모델 주입 — 통합 키)"
+has '"$CFG" codex-reasoning-effort' "$SKILL" "(A-3) codex-reasoning-effort 런타임 읽기(교차검증 effort 주입)"
+has '모델=\[${MODEL}\]' "$SKILL" "(A-3) ask 프롬프트에 모델 전달(대괄호 경계 — codex-model → pipeline:ask)"
 has '완결성 모드' "$SKILL" "(A-4) critic 완결성 모드 키워드"
 has '정합성 모드' "$SKILL" "(A-4) critic 정합성 모드 키워드"
 

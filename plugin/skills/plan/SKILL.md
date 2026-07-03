@@ -605,10 +605,14 @@ bash "$METRICS" mark "$TSV" consistency-critic end
 
 사용할 2차 도구는 config 키 `cross-check-tool`(기본 `codex`)에서 읽어 주입한다. codex 하드코딩이 아니라 도구명을 주입받는 방식이라, 다른 도구(gemini 등)로도 바꿀 수 있다.
 
+교차검증에 쓸 **모델·effort 도 config 주입**한다 — review 경로(`codex review`)와 **같은 통합 키**(`codex-model`·`codex-reasoning-effort`)를 공유한다. 둘 다 기본 빈값이며, 빈값이면 `pipeline:ask` 가 codex 모델 플래그를 안 붙여 codex 자체 기본 모델로 동작한다(회귀 없음). 모델명은 여기서 하드코딩하지 않고 config 에서 읽어 프롬프트로만 전달한다.
+
 ```bash
 CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
-TOOL="$(bash "$CFG" cross-check-tool)"   # 기본 codex (config 누락 시 codex)
-echo "cross-check-tool = $TOOL"
+TOOL="$(bash "$CFG" cross-check-tool)"     # 기본 codex (config 누락 시 codex)
+MODEL="$(bash "$CFG" codex-model)"          # 기본 빈값 (빈값이면 도구 기본 모델)
+EFFORT="$(bash "$CFG" codex-reasoning-effort)"  # 기본 빈값 (빈값이면 도구 기본)
+echo "cross-check-tool = $TOOL / codex-model = ${MODEL:-(도구 기본)} / effort = ${EFFORT:-(도구 기본)}"
 ```
 
 **[계측] codex 교차검증 시작** — `$DUAL`이 `true`라 2단계를 실제로 도는 경우에만 (best-effort
@@ -625,7 +629,8 @@ bash "$METRICS" mark "$TSV" codex-crosscheck start
 Agent(
   description="⑤ 정합성 critic 2차 — 외부 모델 교차검증",
   subagent_type="pipeline:ask",
-  prompt="도구=${TOOL}. 정책=best-effort(도구 없으면 조용히 스킵). 작업=정합성 교차검증.
+  prompt="도구=${TOOL}. 모델=[${MODEL}]. effort=[${EFFORT}]. 정책=best-effort(도구 없으면 조용히 스킵). 작업=정합성 교차검증.
+          (모델·effort 값은 대괄호 안이며, 빈 대괄호 []=미지정 → 도구 기본 모델 사용. 값이 있을 때만 codex 모델 플래그 부착. 예: 모델=[gpt-5.5] 는 값이 gpt-5.5 — 마침표까지 값에 넣지 말 것.)
           아래 두 문서의 정합성을 검토해줘: [사람용·AI용 문서 내용 전달]
           체크리스트: 사람용↔AI용 일대일 대응 / 미승인 결정 / 가정 반영 / 영역교차 일치 / 의도추적"
 )

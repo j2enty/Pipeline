@@ -44,6 +44,7 @@ it "RC-1 공유 스칼라/파생 키 출력이 plan↔kickoff 동일"
   for key in owner parent-repository parent-repo-name project-number slack-channel \
              project-name project-id status-field-id area-field-id \
              author-login local-account docs-context-dir \
+             codex-model codex-reasoning-effort \
              base-branch status-trigger-kickoff status-trigger-review \
              status-column-in-review status-column-ready status-column-backlog status-column-done; do
     _assert_reader_parity "scalar:$key" "$key" || ok=0
