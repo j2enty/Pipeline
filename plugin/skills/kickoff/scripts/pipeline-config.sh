@@ -39,6 +39,8 @@
 #   status-column-ready            project.status-columns.ready     (기본 Ready — kickoff skip 분류·lead 게이트, SKILL 전용)
 #   status-column-backlog          project.status-columns.backlog   (기본 Backlog — kickoff skip 분류, SKILL 전용)
 #   status-column-done             project.status-columns.done      (기본 Done — 머지 완료 skip, SKILL 전용)
+#   codex-review-model             claude-commands.codex-review-model (기본 빈값 — /review codex 2차 리뷰 모델명, 빈값이면 미주입=codex 기본)
+#   codex-review-reasoning-effort  claude-commands.codex-review-reasoning-effort (기본 빈값 — 위 모델 reasoning effort, 빈값이면 미주입)
 #   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
 #   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
 #                                  planner·review·kickoff·lead·default-status·cross-area-group)
@@ -98,6 +100,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
       'project-name' 'project-id' 'status-field-id' 'area-field-id' \
       'author-login' 'local-account' 'docs-context-dir' 'base-branch' \
       'status-trigger-kickoff' 'status-trigger-review' \
+      'codex-review-model' 'codex-review-reasoning-effort' \
       'status-column-in-review' 'status-column-ready' 'status-column-backlog' 'status-column-done' \
       'area-id.<Name>' \
       'reviewer-app-id' 'reviewer-bot-slug' 'reviewer-token-key' 'slack-token-key' \
@@ -351,8 +354,12 @@ def resolve(key):
     # (review 전용 4키 reviewer-app-id·reviewer-bot-slug·reviewer-token-key·
     #  slack-token-key 포함 — install.sh parse_config() 와 동일하게 claude-commands
     #  블록 내부 스칼라로 읽음. --dump 에는 노출 안 함, 개별 키 읽기로만 접근.)
+    # codex-review-model·codex-review-reasoning-effort — /review codex 2차 리뷰 주입값.
+    # 기본 빈값(다른 빈값 기본 CC 스칼라와 동일 처리) — 빈값이면 SKILL 이 codex 플래그를
+    # 안 붙여 codex 자체 기본으로 동작(본체 회귀 없음). 민감키 아님 → --dump 에도 노출.
     if key in ('project-name', 'project-id', 'status-field-id', 'area-field-id',
                'author-login', 'local-account', 'docs-context-dir',
+               'codex-review-model', 'codex-review-reasoning-effort',
                'reviewer-app-id', 'reviewer-bot-slug', 'reviewer-token-key',
                'slack-token-key'):
         return get_scalar_in(CC, key)
@@ -390,6 +397,8 @@ elif arg == '--keys':
         'author-login', 'local-account', 'docs-context-dir', 'base-branch',
         # 폴러/SKILL 공용 트리거 컬럼명 (project.status-triggers.*)
         'status-trigger-kickoff', 'status-trigger-review',
+        # /review codex 2차 리뷰 모델·effort 주입값 (기본 빈값 — 빈값이면 codex 기본, #121)
+        'codex-review-model', 'codex-review-reasoning-effort',
         # 비-트리거 도착/경유 컬럼 (project.status-columns.* — SKILL 전용, #115)
         'status-column-in-review', 'status-column-ready', 'status-column-backlog', 'status-column-done',
         'area-id.<Name>',
@@ -408,6 +417,7 @@ elif arg == '--dump':
     keys = ['owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
             'project-name', 'project-id', 'status-field-id', 'area-field-id',
             'author-login', 'local-account', 'docs-context-dir',
+            'codex-review-model', 'codex-review-reasoning-effort',
             'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
             'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled']
     for k in keys:

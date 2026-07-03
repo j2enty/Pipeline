@@ -105,6 +105,11 @@ claude-commands:
   local-account: j2enty
   docs-context-dir: Docs/claude/context
 
+  # /review 의 codex 2차 코드리뷰에 쓸 모델·reasoning effort (본체 기본은 빈값=codex 기본).
+  # Reclip 계정은 더 강한 모델이 가용하므로 gpt-5.5 + high 로 주입한다.
+  codex-review-model: gpt-5.5
+  codex-review-reasoning-effort: high
+
   # ── 구버전 area-ids 맵 — modules[].area-id 로 이관 완료 ──────────────
   # 리더·install.sh 는 modules[].area-id 를 우선 읽고, 없을 때만 이 맵으로 폴백한다.
   # 신규 이식에서는 modules[].area-id 사용 권장(이 맵은 하위호환 폴백용으로만 유지).
