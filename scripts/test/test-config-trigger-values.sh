@@ -62,7 +62,7 @@ it "T-ST-1 status-triggers 커스텀 컬럼명을 STATUS_TRIGGERS_* 로 정확�
 it "T-ST-2 status-triggers 미지정 시 STATUS_TRIGGERS_* 빈 값(App 기본값 폴백 위임)"
 (
   # reclip 예시엔 status-triggers 가 없다 — 빈 값이어야 App(lib/env.ts)이 기본 컬럼명 폴백.
-  setup_install_env "$REPO_ROOT/examples/reclip/pipeline-config.yml"
+  setup_install_env "$REPO_ROOT/projects/reclip/pipeline-config.yml"
   eval "$(parse_config 2>/dev/null)"
   assert_eq "" "$STATUS_TRIGGERS_KICKOFF" "미지정인데 빈 값 아님" || return
   assert_eq "" "$STATUS_TRIGGERS_REVIEW"  "미지정인데 빈 값 아님" && pass

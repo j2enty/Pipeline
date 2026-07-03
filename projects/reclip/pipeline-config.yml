@@ -1,5 +1,5 @@
 # Reclip 프로젝트 Pipeline 설정
-# 첫 번째 적용 사례 — examples/reclip/
+# 첫 번째 적용 사례 — projects/reclip/
 
 project:
   owner: MKFactory-Reclip

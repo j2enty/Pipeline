@@ -95,7 +95,7 @@ install.sh 를 실제로 돌려 드러난 버그·위반 (전부 수정 완료):
 | eval 버그 | parse_config 의 JSON 배열 emit 이 따옴표 없이 나가 `eval` 이 공백에서 깨짐 (멀티모듈 install 불가의 원인) | `a2745e8` |
 | 인자 검증 | `--env-file`/`--port` 값 누락·플래그 흡수 시 침묵 실패 | `a2745e8` |
 | Admin 하드코딩 | `[ "$MOD_NAME" = "Admin" ]` → 모듈별 `strict-review-bot-check` config | `1310a20` |
-| 호출자 yml 고정 | `examples/reclip` 출처 + `j2enty/Pipeline@main` + `"Backend CI"` + `'reclip-review-bot'` 하드코딩 → 제네릭 템플릿(`templates/caller-workflows/`) + config 주입/vars 참조 | `2be98e4` |
+| 호출자 yml 고정 | `projects/reclip` 출처 + `j2enty/Pipeline@main` + `"Backend CI"` + `'reclip-review-bot'` 하드코딩 → 제네릭 템플릿(`templates/caller-workflows/`) + config 주입/vars 참조 | `2be98e4` |
 | organization() 고정 | Project v2 조회가 org 전용 → `repositoryOwner{ ... on ProjectV2Owner }` (org/user 둘 다) | `ab23250` |
 
 > organization→repositoryOwner 는 reclip org project#3 실측으로 하위호환 확인 (old 33개 == new 33개).

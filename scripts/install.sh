@@ -4,7 +4,7 @@
 # 사용법:
 #   ./scripts/install.sh [<pipeline-config.yml 경로>] [옵션]
 #
-# 기본 config 경로: examples/reclip/pipeline-config.yml
+# 기본 config 경로: projects/reclip/pipeline-config.yml
 #
 # 옵션:
 #   --env-file <path>    생성할 .env 경로 (기본: app/.env)
@@ -127,7 +127,7 @@ while [ $# -gt 0 ]; do
 done
 
 # 기본값 적용
-CONFIG_FILE="${CONFIG_FILE:-$REPO_ROOT/examples/reclip/pipeline-config.yml}"
+CONFIG_FILE="${CONFIG_FILE:-$REPO_ROOT/projects/reclip/pipeline-config.yml}"
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/app/.env}"
 
 # 색상 출력

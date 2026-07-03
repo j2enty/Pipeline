@@ -492,7 +492,7 @@
 - 이중리뷰(Claude architect+Codex): 종속성제로·"메우지말고분류" 위반 없음. 과적합 3건 보정("색상구분"→일반화 / rate limit 발동조건 축소 / expected.md 과적합 가드).
 
 **완료: Reclip 재배포 (`c3f6bad`)**
-- `install.sh --update-commands-only --non-interactive` (examples/reclip config) → Reclip `.claude/commands/` 3개 갱신 → Reclip develop 커밋·push.
+- `install.sh --update-commands-only --non-interactive` (projects/reclip config) → Reclip `.claude/commands/` 3개 갱신 → Reclip develop 커밋·push.
 - 배포본 검증: critic 5개·model=opus 4개·rate limit룰·미치환 placeholder 0. 덤으로 review·kickoff 파일명 드리프트(A1 미배포분)도 해소.
 - → 운영 `/plan`이 이제 critic 단계 실제 실행.
 

@@ -223,16 +223,16 @@ SLACK_WEBHOOK_URL=              # Janus 미설정·실패 시 폴백 웹훅 (sec
 | 디렉토리 | 역할 | 내용 |
 |---|---|---|
 | `config/` | 스키마·템플릿 | 빈 껍데기 — 어떤 값을 채워야 하는지 주석으로 안내 |
-| `examples/<project>/` | 실제 적용 사례 | 채워진 예시 — 새 프로젝트 이식 시 참고용 |
+| `projects/<project>/` | 프로젝트별 실설정 | 실제 운영 값 — install.sh 가 읽어 런타임 config 생성 (예제 아님) |
 
 ```
 config/
 └── pipeline-config.example.yml     # 빈 껍데기 + 항목별 설명 주석
 
-examples/
+projects/
 └── reclip/
-    ├── pipeline-config.yml          # Reclip 설정 (채워진 버전)
-    └── .github/workflows/           # 영역 레포 호출자 yml 예시
+    ├── pipeline-config.yml          # Reclip 실설정 (채워진 버전)
+    └── .github/workflows/           # 영역 레포 호출자 yml
 ```
 
 ### 이식 흐름

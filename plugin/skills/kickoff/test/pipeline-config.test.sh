@@ -221,8 +221,8 @@ ea_planner="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.planne
 [ "$ea_planner" = "true" ] && pass "빈 planner → 기본 true" || fail "빈 planner 기본값" "실제='$ea_planner'"
 rm -f "$EMPTY_ABSORB"
 
-# ── install.sh parity — 실제 examples/reclip config 모듈 의미론 골든 ──
-RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"
+# ── install.sh parity — 실제 projects/reclip config 모듈 의미론 골든 ──
+RECLIP="$TEST_DIR/../../../../projects/reclip/pipeline-config.yml"
 if [ -f "$RECLIP" ]; then
   rb="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Backend.lead 2>/dev/null)"
   [ "$rb" = "true" ] && pass "parity: reclip Backend lead==true" || fail "parity: reclip Backend lead" "실제='$rb'"
