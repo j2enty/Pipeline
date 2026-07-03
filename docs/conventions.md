@@ -161,7 +161,7 @@ STATUS_TRIGGERS_REVIEW=        # 폴러가 review 를 트리거할 Status 컬럼
 
 > `STATUS_TRIGGERS_*` 는 config `project.status-triggers.{kickoff,review}` 에서 온다. **같은 config 키를 두 소비자가 읽어 정렬한다**: (1) App 폴러가 env 로 읽어 dispatch 판정, (2) `/kickoff`·`/review` SKILL 이 리더 친화키 `status-trigger-kickoff`/`status-trigger-review` 로 읽어 sub-issue Status 비교·전환. 둘이 같은 값을 봐야 "폴러 dispatch ↔ SKILL 비교"가 end-to-end 로 맞물린다(컬럼명을 config 에서 바꾸면 양쪽이 함께 따라감). 미설정(빈 값)이면 App·리더 모두 기본 컬럼명으로 폴백 — 컬럼명이 기본과 같은 프로젝트는 설정 없이도 동작한다(이식 안전).
 >
-> **범위 한계**: config 로 재정의 가능한 건 이 **두 트리거 컬럼**(kickoff=`In Progress`, review=`Bot Review`)뿐이다. `In Review`(리뷰 승인 후 도착 상태)·`Ready`·`Backlog`·`Done` 등 비-트리거 컬럼은 SKILL 에 기본명 고정 — 이 컬럼들을 리네임하는 건 아직 미지원이다(전면 파라미터화는 후속 #115 추적).
+> **비-트리거 도착/경유 컬럼**(#115): `In Review`(리뷰 승인 후 도착 상태)·`Ready`·`Backlog`·`Done` 도 config `project.status-columns.{in-review,ready,backlog,done}` 로 재정의 가능하다. 트리거와 달리 App 폴러는 소비하지 않고 `/kickoff`·`/review` SKILL 전용이라 App/`install.sh` 배선은 없고 리더 친화키 `status-column-{in-review,ready,backlog,done}` 로만 읽는다. 미설정 시 각 기본명(`In Review`/`Ready`/`Backlog`/`Done`)으로 폴백 — 기본과 같은 프로젝트는 무설정으로 동작(이식 안전). 특히 `in-review` 는 `/review` 7-h APPROVE 도착 컬럼이라 리네임 후 config 미반영 시 option id 조회가 빈 값→mutation 실패로 APPROVE 된 카드가 검증 단계로 못 넘어간다.
 
 **장애 알림 경로** — App 이 장애 알림을 보낼 때 쓰는 설정(전부 옵션). Janus 게이트웨이를 우선하고, 비활성/실패 시 Slack 웹훅으로 폴백한다:
 
@@ -277,6 +277,10 @@ examples/
 | `base-branch` | `claude-commands` (직속) | string | `develop` | `/kickoff` 이 PR 생성(`gh pr create --base`)·재개 rebase(`git rebase origin/<base>`) 대상으로 쓰는 base 브랜치. `main` 이 기본인 새 프로젝트로 이식할 때 존재하지 않는 develop 참조 실패를 막는 주입 키. 빈값도 `develop` 로 폴백(항상 비지 않음). `install.sh` 는 파싱하지 않음 — 런타임 리더 전용(3벌 리더 공유 코어) |
 | `status-trigger-kickoff` | `project.status-triggers.kickoff` | string | `In Progress` | `/kickoff` 이 처리 대상 sub-issue 를 고르는 Status 컬럼명(G1 대상 판정·lead 게이트·skip 분류). App 폴러 env `STATUS_TRIGGERS_KICKOFF` 와 **같은 config 키**를 읽어 dispatch↔비교를 정렬. 빈값도 기본으로 폴백. 리더 전용(App 은 env 로 별도 수신) |
 | `status-trigger-review` | `project.status-triggers.review` | string | `Bot Review` | `/kickoff` 이 PR 생성 후 전환하고 `/review` 가 전환 출발점으로 비교하는 Status 컬럼명. App 폴러 env `STATUS_TRIGGERS_REVIEW` 와 같은 config 키. 빈값도 기본으로 폴백. 리더 전용 |
+| `status-column-in-review` | `project.status-columns.in-review` | string | `In Review` | `/review` 7-h 이 APPROVE 후 전환하는 도착 컬럼명(GraphQL option id 를 `jq --arg` 로 조회). `/kickoff`·`/review` skip 판정의 "사용자 검증 단계" 비교에도 사용. 비-트리거(App 폴러 미소비) — SKILL 리더 전용. 빈값도 기본으로 폴백 |
+| `status-column-ready` | `project.status-columns.ready` | string | `Ready` | `/kickoff` 이 "처리 대상 아님"으로 skip 분류하는 컬럼명 + lead 게이트 비교. 비-트리거 — SKILL 리더 전용. 빈값도 기본으로 폴백 |
+| `status-column-backlog` | `project.status-columns.backlog` | string | `Backlog` | `/kickoff` 이 skip 분류하는 컬럼명. 비-트리거 — SKILL 리더 전용. 빈값도 기본으로 폴백 |
+| `status-column-done` | `project.status-columns.done` | string | `Done` | `/kickoff`·`/review` 이 머지 완료로 간주해 skip 하는 컬럼명. 비-트리거 — SKILL 리더 전용. 빈값도 기본으로 폴백 |
 
 ### 계측 토글 카탈로그 (`claude-commands.metrics:` 항목)
 
