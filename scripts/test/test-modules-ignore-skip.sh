@@ -35,7 +35,7 @@ it "T-MI-2 빈배열·파싱실패 → false(안전 기본값)"
 # T-MI-3: reclip config — 등록 대상에서 Design 만 빠지고 5개 유지
 it "T-MI-3 reclip 등록 대상: Design 제외, Backend/Admin/Frontend/iOS/Android 유지"
 (
-  setup_install_env "$REPO_ROOT/examples/reclip/pipeline-config.yml"
+  setup_install_env "$REPO_ROOT/projects/reclip/pipeline-config.yml"
   eval "$(parse_config 2>/dev/null)"
   registered=""
   for i in $(seq 0 $((MODULE_COUNT - 1))); do
@@ -55,7 +55,7 @@ it "T-MI-3 reclip 등록 대상: Design 제외, Backend/Admin/Frontend/iOS/Andro
 #   Design 을 MODULES 에 남기면 폴러가 dispatch 대상으로 오인 → 제외돼야 함.
 it "T-MI-4 MODULES_JSON 에서 modules-ignore(Design) 제외"
 (
-  setup_install_env "$REPO_ROOT/examples/reclip/pipeline-config.yml"
+  setup_install_env "$REPO_ROOT/projects/reclip/pipeline-config.yml"
   eval "$(parse_config 2>/dev/null)"
   assert_eq '["Backend","Admin","Frontend","iOS","Android"]' "$MODULES_JSON" "MODULES_JSON 에 Design 이 남음(폴러 오인)" || return
   assert_not_contains "$MODULES_JSON" "Design" "MODULES_JSON 에 Design 포함" && pass

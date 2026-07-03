@@ -340,20 +340,20 @@ ea_lead="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Alpha.lead 2>/d
 [ "$ea_lead" = "false" ] && pass "lead: false 정상(흡수 영향 없음)" || fail "lead false" "실제='$ea_lead'"
 rm -f "$EMPTY_ABSORB"
 
-# ── install.sh parity — 실제 examples/reclip config 로 핵심값 ──
-RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"
+# ── install.sh parity — 실제 projects/reclip config 로 핵심값 ──
+RECLIP="$TEST_DIR/../../../../projects/reclip/pipeline-config.yml"
 if [ -f "$RECLIP" ]; then
   pname="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" project-name 2>/dev/null)"
   if [ "$pname" = "Reclip" ]; then
-    pass "parity: examples/reclip project-name == 'Reclip'"
+    pass "parity: projects/reclip project-name == 'Reclip'"
   else
-    fail "parity: examples/reclip project-name" "실제='$pname'"
+    fail "parity: projects/reclip project-name" "실제='$pname'"
   fi
   beid="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" area-id.Backend 2>/dev/null)"
   if [ "$beid" = "7a506b5e" ]; then
-    pass "parity: examples/reclip area-id.Backend == '7a506b5e'"
+    pass "parity: projects/reclip area-id.Backend == '7a506b5e'"
   else
-    fail "parity: examples/reclip area-id.Backend" "실제='$beid'"
+    fail "parity: projects/reclip area-id.Backend" "실제='$beid'"
   fi
   # 모듈 의미론 골든 — Backend lead / Design 동작제외·Backlog
   rb_lead="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" module.Backend.lead 2>/dev/null)"

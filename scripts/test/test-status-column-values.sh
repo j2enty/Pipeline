@@ -149,7 +149,7 @@ it "SC-6 status-columns 부분 지정 — 지정 키는 값, 미지정 키는 �
 it "SC-7 reclip 예시 config 는 status-columns 미지정 → 전부 기본값(이식 안전 회귀)"
 (
   # 실제 배포 예시가 status-columns 없이도 현행 컬럼명 그대로 동작함을 못박는다.
-  ex="$REPO_ROOT/examples/reclip/pipeline-config.yml"
+  ex="$REPO_ROOT/projects/reclip/pipeline-config.yml"
   ok=1
   for i in "${!_SC_KEYS[@]}"; do
     v="$(PIPELINE_CONFIG="$ex" bash "$READER_KICKOFF" "${_SC_KEYS[$i]}" 2>/dev/null)"

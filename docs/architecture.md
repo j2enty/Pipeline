@@ -23,10 +23,10 @@ Pipeline/
 ├── actions/                # composite actions (재사용 step)
 ├── scripts/                # yml·App에서 호출하는 헬퍼 + install.sh
 ├── config/                 # 프로젝트별 설정 스키마·템플릿
-└── examples/               # 적용 사례 (Reclip 등)
+└── projects/               # 프로젝트별 실설정 (Reclip 등)
     └── <project>/
         ├── pipeline-config.yml      # 모듈 리스트·프로젝트 번호 등
-        └── .github/workflows/      # 영역 레포에 설치할 호출자 yml 예시
+        └── .github/workflows/      # 영역 레포에 설치할 호출자 yml
 ```
 
 - 본체 = `.claude-plugin/` + `plugin/`(= `agents/` + `skills/`) + `app/` + `.github/workflows/` + `actions/` + `scripts/`
@@ -35,7 +35,7 @@ Pipeline/
   설치 시 딸려가지 않고, `claude plugin validate plugin/ --strict` 도 깨끗하다. 로드: `claude --plugin-dir plugin`
 - `plugin/agents/`·`plugin/skills/` 는 Claude Code 플러그인 컴포넌트. 외부 오케스트레이터(자동 조율 레이어)
   없이도 `pipeline:*` 일꾼이 따라오게 하는 자산 — 프로젝트 식별자 하드코딩 금지 동일 적용
-- 프로젝트별 설정·예시는 `examples/`로 격리
+- 프로젝트별 실설정은 `projects/`로 격리
 
 ## 이식 메커니즘
 

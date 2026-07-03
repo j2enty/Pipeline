@@ -268,9 +268,9 @@ ea_planner="$(PIPELINE_CONFIG="$EMPTY_ABSORB" bash "$READER" module.Zeta.planner
 [ "$ea_planner" = "true" ] && pass "빈 planner → 기본 true" || fail "빈 planner 기본값" "실제='$ea_planner'"
 rm -f "$EMPTY_ABSORB"
 
-# ── install.sh parity — 실제 examples/reclip config 로 신규 4키 값 ──
+# ── install.sh parity — 실제 projects/reclip config 로 신규 4키 값 ──
 # (런타임 읽은 값 == install.sh 가 치환했을 값 임을 실제 설정 파일로 확인)
-RECLIP="$TEST_DIR/../../../../examples/reclip/pipeline-config.yml"
+RECLIP="$TEST_DIR/../../../../projects/reclip/pipeline-config.yml"
 if [ -f "$RECLIP" ]; then
   declare -a RECLIP_EXPECT=(
     "project-name:Reclip"
@@ -284,9 +284,9 @@ if [ -f "$RECLIP" ]; then
     k="${pair%%:*}"; exp="${pair#*:}"
     act="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" "$k" 2>/dev/null)"
     if [ "$act" = "$exp" ]; then
-      pass "parity: examples/reclip $k == '$exp'"
+      pass "parity: projects/reclip $k == '$exp'"
     else
-      fail "parity: examples/reclip $k" "실제='$act'"
+      fail "parity: projects/reclip $k" "실제='$act'"
     fi
   done
 else

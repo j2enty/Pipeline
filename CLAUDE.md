@@ -103,7 +103,7 @@ App 코드와 GHA workflow를 한 레포(Pipeline)에서 본다. yml 디렉토�
 
 ## 첫 적용 사례
 
-Reclip 프로젝트(상위 워크스페이스)가 첫 적용 사례. 학습한 패턴은 일반화해서 본체에 반영하고, Reclip 전용 설정은 `examples/reclip/` 또는 외부 secrets로만 둔다.
+Reclip 프로젝트(상위 워크스페이스)가 첫 적용 사례. 학습한 패턴은 일반화해서 본체에 반영하고, Reclip 전용 설정은 `projects/reclip/` 또는 외부 secrets로만 둔다.
 
 
 ## 규칙
