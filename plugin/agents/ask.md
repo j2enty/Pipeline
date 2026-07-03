@@ -27,6 +27,14 @@ tools: Bash, Read
   또렷한 텍스트로 전달하고 끝낸다(차단/진행 판단은 호출자가 한다).
 - **정책이 없으면 best-effort 를 기본**으로 한다(보수적 — 자동화 차단 방지).
 
+## 모델·effort 주입 (선택 — codex 분기 전용)
+
+호출자가 프롬프트에 **`모델=<값>`·`effort=<값>`** 를 함께 줄 수 있다(예: `도구=codex. 모델=<모델명>. effort=<effort>. ...`). 이는 codex 교차검증 모델·reasoning effort 를 config 주입값으로 지정하려는 것이다. 규약은 단순하다.
+
+- 프롬프트에서 `모델=<값>`·`effort=<값>` 를 읽어 각각 `MODEL`·`EFFORT` 셸 변수에 넣는다. 값이 **비어있거나 지정 안 됐으면 빈 문자열**로 둔다.
+- **codex 도구일 때만** 그 값이 비어있지 않으면 `-c model="$MODEL"`·`-c model_reasoning_effort="$EFFORT"` 로 주입한다. 빈값이면 플래그를 **안 붙인다**(codex 자체 기본 모델 — 회귀 없음).
+- codex 가 아닌 도구는 모델 플래그를 붙이지 않는다(CLI 마다 형식이 달라 추측 금지). 모델명은 호출자가 config 에서 읽어 넘긴 것이므로 여기서 하드코딩하지 않는다.
+
 ## best-effort 원칙 (절대 어기지 말 것)
 
 best-effort 정책일 때의 존재 이유는 "있으면 좋은 외부 의견"이다. **그것을 못 얻는다고
@@ -50,6 +58,8 @@ best-effort 정책일 때의 존재 이유는 "있으면 좋은 외부 의견"�
 TOOL="codex"                       # ← 호출자가 프롬프트로 준 도구명으로 대체
 REQUEST="<호출자가 준 요청을 그대로>"
 POLICY="best-effort"               # ← 호출자가 준 정책(best-effort | 필수). 미지정이면 best-effort.
+MODEL=""                           # ← 호출자가 "모델=<값>" 를 줬으면 그 값. 없으면 빈값(codex 기본).
+EFFORT=""                          # ← 호출자가 "effort=<값>" 를 줬으면 그 값. 없으면 빈값(codex 기본).
 
 # 정책별 graceful 반환 문구 선택
 fail_msg() {  # $1 = 사유(가능하면 도구 출력 끝부분을 실어 진단을 살린다)
@@ -68,7 +78,8 @@ else
   # (2) 타임아웃 래핑으로 무응답 hang 방지 — macOS=gtimeout, Linux=timeout (둘 다 없으면 미적용)
   TO="$(command -v gtimeout || command -v timeout || true)"
   if [ "$TOOL" = "codex" ]; then
-    OUT="$( ${TO:+"$TO" 300} codex exec "$REQUEST" 2>&1 )"; RC=$?
+    # 모델·effort 는 값이 있을 때만 -c 플래그 부착(빈값이면 codex 기본 — 회귀 없음). codex 분기 전용.
+    OUT="$( ${TO:+"$TO" 300} codex exec ${MODEL:+-c model="$MODEL"} ${EFFORT:+-c model_reasoning_effort="$EFFORT"} "$REQUEST" 2>&1 )"; RC=$?
   else
     OUT=""; RC=1                    # 비-codex: 호출 형식 불명이면 추측 실행 금지(→ 아래서 graceful)
   fi

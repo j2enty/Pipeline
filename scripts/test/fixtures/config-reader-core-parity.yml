@@ -52,6 +52,9 @@ claude-commands:
   author-login: parity-author
   local-account: parity-local
   docs-context-dir: docs/context
+  # codex 교차검증 공통 모델·effort (plan·review 공유 코어 — 3벌 리더가 동일하게 읽어야 함, #83)
+  codex-model: unified-model-x
+  codex-reasoning-effort: high
   # 아래 키들은 리더별로 의도적으로 다르다(비교 대상 아님):
   #   reviewer-* / slack-token-key → kickoff·review 만 / cross-check-tool → plan 만
   reviewer-app-id: "9999"

@@ -36,8 +36,8 @@
 #   status-column-backlog          project.status-columns.backlog   (기본 Backlog — kickoff skip 분류, SKILL 전용)
 #   status-column-done             project.status-columns.done      (기본 Done — 머지 완료 skip, SKILL 전용)
 #   cross-check-tool               claude-commands.cross-check-tool (기본 codex — plan 교차검증용 외부 도구, 범용 pipeline:ask 에이전트에 전달됨)
-#   codex-review-model             claude-commands.codex-review-model (기본 빈값 — /review codex 2차 리뷰 모델명, 빈값이면 미주입=codex 기본)
-#   codex-review-reasoning-effort  claude-commands.codex-review-reasoning-effort (기본 빈값 — 위 모델 reasoning effort, 빈값이면 미주입)
+#   codex-model                    claude-commands.codex-model (기본 빈값 — plan codex exec 교차검증 + review codex review 두 경로 공통 모델명, 빈값이면 미주입=codex 기본)
+#   codex-reasoning-effort         claude-commands.codex-reasoning-effort (기본 빈값 — 위 모델 reasoning effort, 빈값이면 미주입)
 #   area-id.<Name>                 modules[Name].area-id 우선 → legacy claude-commands.area-ids.<Name> 폴백
 #   module.<Name>.<flag>           modules[Name].<flag> (flag: role·ci-workflow-name·area-id·
 #                                  planner·review·kickoff·lead·default-status·cross-area-group)
@@ -89,7 +89,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
       'project-name' 'project-id' 'status-field-id' 'area-field-id' \
       'author-login' 'local-account' 'docs-context-dir' 'base-branch' \
       'status-trigger-kickoff' 'status-trigger-review' 'cross-check-tool' \
-      'codex-review-model' 'codex-review-reasoning-effort' \
+      'codex-model' 'codex-reasoning-effort' \
       'status-column-in-review' 'status-column-ready' 'status-column-backlog' 'status-column-done' \
       'area-id.<Name>' \
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
@@ -344,12 +344,13 @@ def resolve(key):
         # get_scalar_in 의 default 는 키 부재 시만 적용되므로(#57 빈따옴표 → 빈문자열),
         # 빈값을 한 번 더 codex 로 보정해 "항상 비지 않은 도구명" 불변식을 보장한다.
         return get_scalar_in(CC, 'cross-check-tool', 'codex') or 'codex'
-    # codex-review-model·codex-review-reasoning-effort — /review codex 2차 리뷰 주입값.
-    # cross-check-tool 과 달리 기본 빈값(다른 빈값 기본 CC 스칼라와 동일 처리) — 빈값이면
-    # SKILL 이 codex 플래그를 안 붙여 codex 자체 기본으로 동작(본체 회귀 없음).
+    # codex-model·codex-reasoning-effort — plan codex exec 교차검증 + review codex review
+    # 두 경로 공통 주입값(#83 통합 키). cross-check-tool 과 달리 기본 빈값(다른 빈값 기본
+    # CC 스칼라와 동일 처리) — 빈값이면 SKILL 이 codex 플래그를 안 붙여 codex 자체 기본으로
+    # 동작(본체 회귀 없음).
     if key in ('project-name', 'project-id', 'status-field-id', 'area-field-id',
                'author-login', 'local-account', 'docs-context-dir',
-               'codex-review-model', 'codex-review-reasoning-effort'):
+               'codex-model', 'codex-reasoning-effort'):
         return get_scalar_in(CC, key)
     # 알 수 없는 키 — fail-soft 빈 값 (stderr 경고)
     sys.stderr.write(f"⚠️  pipeline-config: 알 수 없는 키 '{key}' (빈 값)\n")
@@ -385,8 +386,8 @@ elif arg == '--keys':
         'author-login', 'local-account', 'docs-context-dir', 'base-branch',
         # 폴러/SKILL 공용 트리거 컬럼명 (project.status-triggers.*)
         'status-trigger-kickoff', 'status-trigger-review', 'cross-check-tool',
-        # /review codex 2차 리뷰 모델·effort 주입값 (기본 빈값 — 빈값이면 codex 기본, #121)
-        'codex-review-model', 'codex-review-reasoning-effort',
+        # plan·review codex 교차검증 공통 모델·effort 주입값 (기본 빈값 — 빈값이면 codex 기본, #83)
+        'codex-model', 'codex-reasoning-effort',
         # 비-트리거 도착/경유 컬럼 (project.status-columns.* — SKILL 전용, #115)
         'status-column-in-review', 'status-column-ready', 'status-column-backlog', 'status-column-done',
         'area-id.<Name>',
@@ -401,7 +402,7 @@ elif arg == '--dump':
     keys = ['owner', 'parent-repository', 'parent-repo-name', 'project-number', 'slack-channel',
             'project-name', 'project-id', 'status-field-id', 'area-field-id',
             'author-login', 'local-account', 'docs-context-dir', 'cross-check-tool',
-            'codex-review-model', 'codex-review-reasoning-effort',
+            'codex-model', 'codex-reasoning-effort',
             'plan.completeness-critic-enabled', 'plan.consistency-critic-enabled',
             'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled']
     for k in keys:

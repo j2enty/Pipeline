@@ -87,14 +87,14 @@ assert_key reviewer-bot-slug blue-review-bot
 assert_key reviewer-token-key BLUE_REVIEW_BOT
 assert_key slack-token-key BLUE_SLACK_WEBHOOK
 
-# ── codex-review-model / codex-review-reasoning-effort (/review 가 실제 소비하는 키 — #121) ──
+# ── codex-model / codex-reasoning-effort (plan·review codex 교차검증 공통 통합 키 — #83) ──
 # 빈값 기본 스칼라 — 기본 픽스처엔 키가 없으므로 빈값(빈값이면 SKILL 이 codex 플래그 미부착 → codex 기본).
-assert_key codex-review-model ""
-assert_key codex-review-reasoning-effort ""
+assert_key codex-model ""
+assert_key codex-reasoning-effort ""
 # config 에 명시되면 그 값 반환 (주입 모델명은 real 모델명 회피 — 리더 동작만 검증)
-CRM_FIX="$(mktemp)"; printf 'claude-commands:\n  codex-review-model: model-x\n  codex-review-reasoning-effort: high\n' > "$CRM_FIX"
-assert_key codex-review-model model-x "$CRM_FIX"
-assert_key codex-review-reasoning-effort high "$CRM_FIX"
+CRM_FIX="$(mktemp)"; printf 'claude-commands:\n  codex-model: model-x\n  codex-reasoning-effort: high\n' > "$CRM_FIX"
+assert_key codex-model model-x "$CRM_FIX"
+assert_key codex-reasoning-effort high "$CRM_FIX"
 rm -f "$CRM_FIX"
 
 # ── (회귀) 알 수 없는 키 → 빈 값 (fail-soft) ──
@@ -107,9 +107,9 @@ assert_key plan.contract-doc-enabled true "$MISSING"
 # 신규 4키도 config 부재 시 빈 값 (fail-soft, exit 0)
 assert_key reviewer-app-id "" "$MISSING"
 assert_key reviewer-token-key "" "$MISSING"
-# codex-review 주입 키도 config 부재 시 빈값 (폴백 기본값 없음)
-assert_key codex-review-model "" "$MISSING"
-assert_key codex-review-reasoning-effort "" "$MISSING"
+# codex 교차검증 주입 키도 config 부재 시 빈값 (폴백 기본값 없음)
+assert_key codex-model "" "$MISSING"
+assert_key codex-reasoning-effort "" "$MISSING"
 
 # ── 신규 4키 fail-soft: config 는 있으나 키 부재 → 빈 값 + exit 0 ──
 NO_REVIEW="$(mktemp)"
