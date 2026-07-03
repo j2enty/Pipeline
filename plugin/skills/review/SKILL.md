@@ -431,8 +431,16 @@ else:
 `--codex` 플래그가 있을 때 개별 PR 판정 직후 실행. **판정(verdict)은 변경하지 않음** — 보조 관점 제공용.
 
 ```bash
-# <영역> 디렉토리에서 실행 — base 브랜치 대비 변경사항 리뷰
-CODEX_OUTPUT=$(cd <영역> && codex review --base <baseRefName> -c model="gpt-5.3-codex-spark" 2>&1)
+# <영역> 디렉토리에서 실행 — base 브랜치 대비 변경사항 리뷰.
+# 사용 모델·reasoning effort 는 config 주입(codex-review-model·codex-review-reasoning-effort).
+# 둘 다 기본 빈값 — 빈값이면 해당 플래그를 안 붙여 codex 자체 기본 모델로 동작(회귀 없음).
+# 계정 종류에 따라 가용 모델이 달라, 프로젝트가 config 로 더 강한 모델을 선택할 수 있다.
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+CODEX_REVIEW_MODEL="$(bash "$CFG" codex-review-model)"
+CODEX_REVIEW_EFFORT="$(bash "$CFG" codex-review-reasoning-effort)"
+CODEX_OUTPUT=$(cd <영역> && codex review --base <baseRefName> \
+  ${CODEX_REVIEW_MODEL:+-c model="$CODEX_REVIEW_MODEL"} \
+  ${CODEX_REVIEW_EFFORT:+-c model_reasoning_effort="$CODEX_REVIEW_EFFORT"} 2>&1)
 ```
 
 - 실행 실패(에러·타임아웃) 시 `CODEX_OUTPUT="(실행 실패)"` 로 처리하고 계속 진행 — Codex 실패가 파이프라인을 막지 않음

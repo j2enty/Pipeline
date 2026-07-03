@@ -123,6 +123,21 @@ rm -f "$CCT_EMPTY"
 CCT_MISSING="$(mktemp -u)/none.yml"
 assert_key cross-check-tool codex "$CCT_MISSING"
 
+# ── codex-review-model / codex-review-reasoning-effort (/review codex 2차 리뷰 주입 — #121) ──
+# cross-check-tool 과 달리 빈값 기본 스칼라다(다른 claude-commands 빈값 스칼라와 동일).
+# 픽스처엔 키가 없으므로 기본 빈값이어야 한다(빈값이면 SKILL 이 codex 플래그 미부착 → codex 기본).
+assert_key codex-review-model ""
+assert_key codex-review-reasoning-effort ""
+# config 에 명시되면 그 값 반환 (주입 모델명은 real 모델명 회피 — 리더 동작만 검증)
+CRM_FIX="$(mktemp)"; printf 'claude-commands:\n  codex-review-model: model-x\n  codex-review-reasoning-effort: high\n' > "$CRM_FIX"
+assert_key codex-review-model model-x "$CRM_FIX"
+assert_key codex-review-reasoning-effort high "$CRM_FIX"
+rm -f "$CRM_FIX"
+# config 파일 부재 시에도 빈값 (cross-check-tool 과 달리 폴백 기본값 없음)
+CRM_MISSING="$(mktemp -u)/none.yml"
+assert_key codex-review-model "" "$CRM_MISSING"
+assert_key codex-review-reasoning-effort "" "$CRM_MISSING"
+
 # ── area-id ──
 assert_key area-id.Backend aa11bb22
 assert_key area-id.iOS cc33dd44
@@ -367,6 +382,11 @@ if [ -f "$RECLIP" ]; then
   # client cross-area-group 3개
   cg="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" --modules-where cross-area-group=client 2>/dev/null | tr '\n' ',')"
   [ "$cg" = "Frontend,iOS,Android," ] && pass "parity: reclip client 그룹==Frontend,iOS,Android" || fail "parity: reclip client 그룹" "실제='$cg'"
+  # codex 2차 리뷰 모델·effort 주입값 (#121) — Reclip 은 더 강한 모델 명시
+  crm="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" codex-review-model 2>/dev/null)"
+  [ "$crm" = "gpt-5.5" ] && pass "parity: reclip codex-review-model==gpt-5.5" || fail "parity: reclip codex-review-model" "실제='$crm'"
+  cre="$(PIPELINE_CONFIG="$RECLIP" bash "$READER" codex-review-reasoning-effort 2>/dev/null)"
+  [ "$cre" = "high" ] && pass "parity: reclip codex-review-reasoning-effort==high" || fail "parity: reclip codex-review-reasoning-effort" "실제='$cre'"
 else
   printf "(parity 스킵 — %s 없음)\n" "$RECLIP"
 fi
