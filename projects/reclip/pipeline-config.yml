@@ -135,6 +135,13 @@ claude-commands:
   metrics:
     usage-tracking-enabled: true
 
+  # 🔔 /plan 종료 시 Janus 버튼 알림 발사 (기본 OFF, #37). 이름표가 가리키는 env 는
+  #   운영 머신/컨테이너에서 실제 Janus 주소·토큰을 담는다(slack-token-key=RECLIP_SLACK_WEBHOOK 관례와 동일).
+  janus:
+    notify-enabled: true
+    base-url-key: RECLIP_JANUS_URL
+    token-key: RECLIP_JANUS_TOKEN
+
 tracking:
   # finding(리뷰 지적) 추적 이슈 자동 생성 on/off
   enabled: true

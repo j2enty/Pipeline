@@ -211,6 +211,20 @@ claude-commands:
     # 코멘트를 남긴다. 비용·효율 측정용. 미설정 시 false(계측 없음 = 기존 동작).
     usage-tracking-enabled: false
 
+  # /plan 종료 시 "버튼 달린 Slack 알림"을 Janus 게이트웨이로 발사(사용자가 버튼 1탭 →
+  #   sub-issue 를 kickoff 트리거 컬럼으로 자동 이동 → 폴러가 kickoff 발화). 기본 OFF(opt-in).
+  janus:
+    # 버튼 알림 발사 on/off. 미설정 시 false(발사 안 함 = 기존 동작).
+    #   ⚠️ /plan 실행 머신에서 Janus 에 도달 가능해야 실제로 나간다(미도달 시 조용히 스킵).
+    notify-enabled: false
+    # Janus base URL 이 담긴 env 변수의 "이름표"(값 자체 아님). 헬퍼(janus-notify.sh)가
+    #   JANUS_URL_KEY 로 받아 역참조한다. 빈값이면 헬퍼가 JANUS_BASE_URL 직접 env 로 폴백.
+    #   예: MY_JANUS_URL (이 이름의 env 에 실제 URL 이 있어야 함)
+    base-url-key: ""
+    # Janus 인증 토큰이 담긴 env 변수의 "이름표". 헬퍼가 JANUS_TOKEN_KEY 로 받아 역참조.
+    #   빈값이면 JANUS_AUTH_TOKEN 직접 env 로 폴백.
+    token-key: ""
+
 tracking:
   # finding(리뷰 지적) 추적 이슈 자동 생성 on/off (미설정 시 false)
   # true 이면 install.sh 가 영역 레포 + parent 레포에 추적 라벨을 자동 등록한다.
