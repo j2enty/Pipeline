@@ -65,6 +65,7 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `REVIEWER_INSTALLATION_ID` | 동일 | Installation ID |
 | `SLACK_WEBHOOK_URL` | 옵션 | 슬랙 인커밍 웹훅 — Janus 미설정·실패 시 장애 알림 폴백 경로 |
 | `JANUS_AUTH_TOKEN` | 옵션 | Janus 게이트웨이 Bearer 인증 토큰 — Janus 알림 경로 활성화에 필요 |
+| `JANUS_CALLBACK_SIGNING_SECRET` | 옵션 | Janus↔App **공유** HMAC 시크릿 — 콜백 수신부(POST `/janus/callback`) 서명 검증용. Slack signing secret 이 **아니다**. Janus 쪽 `JANUS_APP__<source_id>__SIGNING_SECRET` 과 동일 값이어야 한다. 미설정 시 콜백 라우트를 등록하지 않음(fail-closed) |
 
 옵셔널 동작:
 - Reviewer secret 미설정 + AI 리뷰 yml 미호출 → 정상 (사람이 리뷰하는 일반 자동화)
@@ -173,6 +174,20 @@ JANUS_ALERT_CHANNEL=            # Janus 알림 채널 ID
 JANUS_SOURCE_ID=pipeline        # 발신 소스 식별자 (옵션, 기본 "pipeline")
 SLACK_WEBHOOK_URL=              # Janus 미설정·실패 시 폴백 웹훅 (secret 카탈로그에 등재)
 ```
+
+**Janus 콜백 수신부** — Slack 버튼 1탭 → Project Status 전환(버튼 인터랙션을 Janus 가 서명해 App 으로 콜백). 전부 옵션이며, **서명 시크릿이 있어야만** 콜백 라우트가 열린다(fail-closed):
+
+```env
+# 이게 설정돼야 POST /janus/callback 라우트가 등록된다. 미설정이면 라우트 자체를 안 여는
+# fail-closed — 미검증 엔드포인트 노출을 원천 차단. secret 카탈로그에 등재.
+# ⚠️ Slack signing secret 이 아니라 Janus↔App 공유 시크릿이다(Janus 쪽
+#    JANUS_APP__<source_id>__SIGNING_SECRET 과 같은 값이어야 함).
+JANUS_CALLBACK_SIGNING_SECRET=
+# 콜백 replay 허용 창(초, 옵션, 기본 300) — timestamp 신선도 컷.
+JANUS_CALLBACK_REPLAY_WINDOW_S=300
+```
+
+> **서명 스킴**: `signature == "v0=" + hex(HMAC_SHA256(secret, "<timestamp>.<rawBody>"))` — timestamp 와 body 사이 구분자는 **점(`.`)**이다. 헤더는 `X-Janus-Signature: v0=<hex>` / `X-Janus-Timestamp: <epoch초>`. Janus 발사측(ingress)엔 콜론 구분(`v0:{ts}:{body}`)의 다른 스킴도 있으나 이 수신부는 점 스킴만 검증한다.
 
 ---
 
