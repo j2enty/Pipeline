@@ -50,6 +50,9 @@ const ITEM_ID_PREFIX = "PVTI_";
 const MIN_ITEMS = 1;
 const MAX_ITEMS = 50;
 
+// label 최대 길이 — Slack 메시지에 그대로 반영되므로 새니타이즈 후 절단한다.
+const MAX_LABEL_LENGTH = 80;
+
 // ── 순수 함수 1: 서명 검증 ────────────────────────────────────────────
 // signature === "v0=" + hex(HMAC_SHA256(secret, `${timestamp}.${rawBody}`)).
 //
@@ -129,6 +132,15 @@ export interface SetStatusValue {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+// label 새니타이즈 — Slack 메시지에 그대로 들어가므로 개행을 공백으로 접고
+// 최대 길이로 절단한다(메시지 레이아웃 파괴·과대 payload 방어).
+function sanitizeLabel(label: string): string {
+  const singleLine = label.replace(/[\r\n]+/g, " ").trim();
+  return singleLine.length > MAX_LABEL_LENGTH
+    ? singleLine.slice(0, MAX_LABEL_LENGTH)
+    : singleLine;
 }
 
 function hasPrefix(value: unknown, prefix: string): value is string {
@@ -221,33 +233,72 @@ export function validateSetStatusValue(input: unknown): SetStatusValue | null {
     projectId: rec.projectId,
     fieldId: rec.fieldId,
     optionId: rec.optionId,
-    items: items as string[],
-    label: rec.label,
+    // 중복 아이템 제거(유니크화) — 같은 아이템에 mutation 을 두 번 쏘지 않는다.
+    items: [...new Set(items as string[])],
+    // Slack 메시지 반영 대상이라 새니타이즈(개행 제거 + 최대 80자).
+    label: sanitizeLabel(rec.label),
   };
 }
 
-// ── 순수 함수 5: 멱등 dedupe ──────────────────────────────────────────
-// 같은 key 가 TTL 내면 false(이미 처리됨), 아니면 기록하고 true.
-// alert.ts 의 shouldSend 와 동형이되, 이쪽은 "처리 1회 보장"이라 기록 부수효과를 가진다.
+// ── 순수 함수 5: 멱등 dedupe (in-flight / completed 2단계) ─────────────
+// "성공 후 확정" 모델 — 처리 시작 시 in-flight 로만 마킹하고, 전건 성공했을 때만
+// completed 로 확정(TTL 적용)한다. 실패하면 키를 해제해 사용자가 버튼 재클릭으로
+// 복구할 수 있다(실행 전 확정 방식은 전건 실패 후에도 TTL 내 재시도가 스킵되는 함정).
+//
+// in-memory 수용 근거: 단일 인스턴스 배포 + mutation 자체가 멱등(같은 optionId
+// 재설정은 무해)이라 재시작·중복 실행이 무해 — 외부 저장소 dedupe 는 불필요(수용).
 // map 은 호출부 주입 → 테스트에서 독립 Map 으로 검증 가능.
-export function shouldProcessOnce(
+export interface DedupeEntry {
+  state: "in-flight" | "completed";
+  at: number;
+}
+
+// 처리 시작 시도 — true 면 이 호출이 처리 소유권을 가진다(in-flight 마킹).
+//   - in-flight 존재 → false (동시 더블클릭 차단)
+//   - completed & TTL 내 → false (이미 성공 처리됨)
+//   - 그 외(기록 없음·completed 만료) → in-flight 마킹 후 true
+// in-flight 는 TTL 정리 대상이 아니다 — 처리부의 confirm/release 가 반드시 정리한다
+// (예외 경로 포함: processInteractionCallback 의 outer catch 가 release 로 수렴).
+export function beginProcessingOnce(
   key: string,
   now: number,
-  map: Map<string, number>,
+  map: Map<string, DedupeEntry>,
   ttlMs: number
 ): boolean {
-  const last = map.get(key);
-  if (last !== undefined && now - last < ttlMs) {
-    return false;
-  }
-  // 기록 + 만료 항목 정리(무한 성장 방지). 저트래픽이라 O(n) 정리로 충분.
-  map.set(key, now);
-  for (const [k, t] of map) {
-    if (now - t >= ttlMs) {
+  // 만료된 completed 항목 정리(무한 성장 방지). 저트래픽이라 O(n) 정리로 충분.
+  for (const [k, entry] of map) {
+    if (entry.state === "completed" && now - entry.at >= ttlMs) {
       map.delete(k);
     }
   }
+  const existing = map.get(key);
+  if (existing) {
+    if (existing.state === "in-flight") {
+      return false;
+    }
+    if (now - existing.at < ttlMs) {
+      return false;
+    }
+  }
+  map.set(key, { state: "in-flight", at: now });
   return true;
+}
+
+// 전건 성공 시에만 호출 — completed 확정(TTL 시작점 = now).
+export function confirmProcessed(
+  key: string,
+  now: number,
+  map: Map<string, DedupeEntry>
+): void {
+  map.set(key, { state: "completed", at: now });
+}
+
+// 실패(부분·전체·예외) 시 호출 — 키 해제로 버튼 재클릭 복구를 허용한다.
+export function releaseProcessing(
+  key: string,
+  map: Map<string, DedupeEntry>
+): void {
+  map.delete(key);
 }
 
 // ── 처리 코어에 주입되는 의존성(전부 주입 → 네트워크 없이 결정적 테스트) ──
@@ -266,13 +317,23 @@ export interface JanusCallbackDeps {
   // 현재 시각(epoch ms) — 테스트 결정성. 기본 Date.now.
   now?: () => number;
   // 멱등 dedupe 맵 — 미주입 시 모듈 공유 맵 사용.
-  dedupeMap?: Map<string, number>;
+  dedupeMap?: Map<string, DedupeEntry>;
   // dedupe TTL(ms) — 미주입 시 기본값.
   dedupeTtlMs?: number;
 }
 
 // 모듈 공유 dedupe 맵 — registerJanusCallback 경로가 쓰는 기본 맵.
-const moduleDedupeMap = new Map<string, number>();
+const moduleDedupeMap = new Map<string, DedupeEntry>();
+
+// 검증 실패(서명은 통과했지만 내용 불량) 누적 카운터 — 관측성.
+// notifyFailure 는 쿨다운으로 반복 알림이 가려지므로, warn 로그에 누적 수치를 실어
+// "얼마나 자주 일어나는지"를 로그만으로 추적 가능하게 한다(모듈 내 단순 카운터로 충분).
+const rejectCounters = {
+  parseFailed: 0, // kind=interaction 인데 정규화 실패
+  requiredFieldMissing: 0, // correlation_id 등 필수 필드 누락
+  sourceIdMismatch: 0, // source_id 가 기대값과 불일치
+  valueInvalid: 0, // set-status value strict 검증 실패
+};
 
 interface ResolvedDeps {
   app: Probot;
@@ -282,7 +343,7 @@ interface ResolvedDeps {
   sendMessageUpdate: typeof sendJanusMessageUpdate;
   notifyFailure: typeof notifyFailure;
   now: () => number;
-  dedupeMap: Map<string, number>;
+  dedupeMap: Map<string, DedupeEntry>;
   dedupeTtlMs: number;
 }
 
@@ -311,8 +372,13 @@ export async function processInteractionCallback(
 ): Promise<void> {
   const d = resolveDeps(deps);
   const log = d.app.log;
+  // outer catch 에서 dedupe 키를 해제할 수 있도록 try 밖에 선언 —
+  // in-flight 마킹 후 예외가 나면 반드시 release 해 재클릭 복구를 보장한다.
+  let inFlightDedupeKey: string | null = null;
   try {
-    // kind 분기 — interaction 만 처리, 나머지는 무시(후속 확장점이라 분기 구조 유지).
+    // kind 분기 — 후속 확장점 문서화 목적의 스위치(어떤 kind 가 오는지 여기서 보인다).
+    // kind 의 실검증(불변식 소유)은 parseInteractionPayload 가 담당한다 — 여기서
+    // interaction 이 통과해도 parse 가 다시 확인하므로 이 스위치는 관측·확장용이다.
     const kind = (parsedBody as Record<string, unknown> | null)?.kind;
     switch (kind) {
       case "interaction":
@@ -327,8 +393,12 @@ export async function processInteractionCallback(
 
     const interaction = parseInteractionPayload(parsedBody);
     if (!interaction) {
-      // kind 는 interaction 인데 필수 필드가 이상한 경우 — 위조 가능성, 관측만.
-      log.warn("Janus interaction 콜백 파싱 실패 — 무시");
+      // kind 는 interaction 인데 정규화 실패 — 위조 가능성, 관측만.
+      rejectCounters.parseFailed += 1;
+      log.warn(
+        { rejectedTotal: rejectCounters.parseFailed },
+        "Janus interaction 콜백 파싱 실패 — 무시"
+      );
       await d.notifyFailure(d.app, {
         title: "Janus 콜백 파싱 실패",
         context: "kind=interaction 이나 payload 정규화 실패",
@@ -346,10 +416,54 @@ export async function processInteractionCallback(
       return;
     }
 
+    // source_id 대조 — 다른 소스로 발급된 콜백이 흘러들어오면 무시(방어심층).
+    // alert.ts 와 동일하게 JANUS_SOURCE_ID(기본 "pipeline") 를 재사용한다.
+    const expectedSourceId = process.env.JANUS_SOURCE_ID || "pipeline";
+    if (interaction.sourceId !== expectedSourceId) {
+      rejectCounters.sourceIdMismatch += 1;
+      log.warn(
+        {
+          sourceId: interaction.sourceId,
+          rejectedTotal: rejectCounters.sourceIdMismatch,
+        },
+        "Janus 콜백 source_id 불일치 — 무시"
+      );
+      return;
+    }
+
+    // 필수 필드 강제 — correlation_id 가 비면 dedupeKey 가 ":set-status" 로 고정되어
+    // 서로 다른 정상 클릭이 TTL 내 조용히 유실된다. user/channel/message_ts 도
+    // 메시지 교체·귀속에 필수라 non-empty 를 강제한다. 누락 = 200 ack 후 무시+관측.
+    if (
+      !interaction.correlationId ||
+      !interaction.user ||
+      !interaction.channel ||
+      !interaction.messageTs
+    ) {
+      rejectCounters.requiredFieldMissing += 1;
+      log.warn(
+        {
+          correlationId: interaction.correlationId,
+          rejectedTotal: rejectCounters.requiredFieldMissing,
+        },
+        "Janus interaction 필수 필드 누락(correlation_id/user/channel/message_ts) — 무시"
+      );
+      await d.notifyFailure(d.app, {
+        title: "Janus 콜백 필수 필드 누락",
+        context: "correlation_id/user/channel/message_ts 중 빈 값 존재",
+        key: "janus-callback-required-field",
+      });
+      return;
+    }
+
     const value = validateSetStatusValue(interaction.actionValue);
     if (!value) {
+      rejectCounters.valueInvalid += 1;
       log.warn(
-        { correlationId: interaction.correlationId },
+        {
+          correlationId: interaction.correlationId,
+          rejectedTotal: rejectCounters.valueInvalid,
+        },
         "set-status value 검증 실패 — 무시"
       );
       await d.notifyFailure(d.app, {
@@ -360,16 +474,16 @@ export async function processInteractionCallback(
       return;
     }
 
-    // 멱등성 — correlation_id + action 키. 더블클릭 시 mutation 1세트만.
+    // 멱등성 — correlation_id + action 키로 in-flight 마킹(동시 더블클릭 차단).
+    // completed 확정은 전건 성공 후에만 — 실패 시 release 로 재클릭 복구 허용.
     const dedupeKey = `${interaction.correlationId}:${interaction.action}`;
-    if (
-      !shouldProcessOnce(dedupeKey, d.now(), d.dedupeMap, d.dedupeTtlMs)
-    ) {
+    if (!beginProcessingOnce(dedupeKey, d.now(), d.dedupeMap, d.dedupeTtlMs)) {
       log.debug({ dedupeKey }, "Janus 콜백 중복 — 멱등 스킵");
       return;
     }
+    inFlightDedupeKey = dedupeKey;
 
-    // Author 봇 미설정이면 mutation 권한이 없다 — 관측만 하고 종료.
+    // Author 봇 미설정이면 mutation 권한이 없다 — 관측 후 키 해제(설정 복구 후 재클릭 허용).
     if (d.authorInstallationId === null) {
       log.warn("AUTHOR_INSTALLATION_ID 미설정 — Status 전환 불가");
       await d.notifyFailure(d.app, {
@@ -377,21 +491,40 @@ export async function processInteractionCallback(
         context: "AUTHOR_INSTALLATION_ID 미설정",
         key: "janus-callback-no-auth",
       });
+      releaseProcessing(dedupeKey, d.dedupeMap);
+      inFlightDedupeKey = null;
       return;
     }
 
-    // items 루프로 개별 Status mutation 실행 → 실패 집계.
-    const results = await Promise.allSettled(
-      value.items.map((itemId) =>
-        d.updateItemStatus(d.app, d.authorInstallationId as number, {
+    // items 를 직렬로 mutation 실행 → 개별 실패 집계.
+    // GitHub 는 단일 토큰의 동시 mutation 을 secondary rate limit 대상으로 권고하지
+    // 않는다(직렬 권장) — 최대 50건이라 직렬 루프로 충분하고 동시성 풀은 불필요.
+    let failedCount = 0;
+    for (const itemId of value.items) {
+      try {
+        await d.updateItemStatus(d.app, d.authorInstallationId, {
           projectId: value.projectId,
           itemId,
           fieldId: value.fieldId,
           optionId: value.optionId,
-        })
-      )
-    );
-    const failedCount = results.filter((r) => r.status === "rejected").length;
+        });
+      } catch (err) {
+        failedCount += 1;
+        log.warn({ err, itemId }, "Status mutation 개별 실패");
+      }
+    }
+
+    // dedupe 확정/해제는 mutation 결과 직후에 — 이후 단계(메시지 교체)의 예외가
+    // 멱등 상태를 오염시키지 않게 한다.
+    if (failedCount === 0) {
+      // 전건 성공 → completed 확정(TTL 내 재클릭은 멱등 스킵).
+      confirmProcessed(dedupeKey, d.now(), d.dedupeMap);
+    } else {
+      // 부분·전체 실패 → 키 해제(버튼 재클릭으로 복구 가능. mutation 은 멱등이라
+      // 이미 성공한 아이템의 재실행도 무해).
+      releaseProcessing(dedupeKey, d.dedupeMap);
+    }
+    inFlightDedupeKey = null;
 
     // 원본 메시지 교체(버튼 제거) — Janus 타깃이 있을 때만.
     const janusTarget = d.resolveJanusTarget();
@@ -409,6 +542,10 @@ export async function processInteractionCallback(
     }
   } catch (err) {
     // 어떤 예외도 여기서 수렴 — 프로세스로 유출 금지.
+    // in-flight 로 남은 키가 있으면 해제(영구 차단 방지 — 재클릭 복구 보장).
+    if (inFlightDedupeKey !== null) {
+      releaseProcessing(inFlightDedupeKey, d.dedupeMap);
+    }
     log.warn({ err }, "Janus 콜백 처리 중 예외 — 수렴(본 로직 보호)");
     try {
       await d.notifyFailure(d.app, {
@@ -457,8 +594,18 @@ export function createJanusCallbackHandler(
       return;
     }
 
-    // express.raw 후 body 는 Buffer. 비어있으면 빈 버퍼로 방어.
-    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+    // express.raw 후 body 는 반드시 Buffer 다. Buffer 가 아니면 상위 미들웨어가 body 를
+    // 먼저 소비한 배선 사고 — 조용히 빈 버퍼로 대체하면 전 요청이 무증상 401 로 죽는
+    // "기능 무음 사망"이 되므로, 500 + error 로그로 시끄럽게 실패시킨다.
+    if (!Buffer.isBuffer(req.body)) {
+      deps.app.log.error(
+        { bodyType: typeof req.body },
+        "Janus 콜백 body 가 Buffer 가 아님 — 상위 미들웨어가 raw body 를 선소비 (배선 오류)"
+      );
+      res.status(500).json({ ok: false, error: "raw body 계약 위반" });
+      return;
+    }
+    const rawBody = req.body;
 
     // timestamp 신선도 — replay 컷.
     const nowEpochS = Math.floor((deps.now?.() ?? Date.now()) / 1000);
@@ -549,11 +696,16 @@ export function registerJanusCallback(
   const router = getRouter("/janus");
   // ⚠️ HMAC 검증에 raw body(바이트 원문)가 필수 → 이 라우터에만 raw 파서를 단다.
   // 전역 JSON 미들웨어를 쓰면 원문이 소실돼 서명이 깨진다.
-  router.post("/callback", express.raw({ type: "*/*" }), handler);
+  // inflate:false — 압축(gzip 등) 요청을 거부해 "서명 대상 바이트" 경계를 명확히 한다.
+  router.post("/callback", express.raw({ type: "*/*", inflate: false }), handler);
   deps.app.log.info("Janus 콜백 라우트 등록 — POST /janus/callback");
 }
 
 // ── 테스트 격리용 ─────────────────────────────────────────────────────
 export function resetJanusDedupeForTest(): void {
   moduleDedupeMap.clear();
+  rejectCounters.parseFailed = 0;
+  rejectCounters.requiredFieldMissing = 0;
+  rejectCounters.sourceIdMismatch = 0;
+  rejectCounters.valueInvalid = 0;
 }

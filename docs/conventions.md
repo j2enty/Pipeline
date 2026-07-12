@@ -65,7 +65,7 @@ GHA 표준 패턴 — 각 값을 개별 input으로 명시 노출. JSON config�
 | `REVIEWER_INSTALLATION_ID` | 동일 | Installation ID |
 | `SLACK_WEBHOOK_URL` | 옵션 | 슬랙 인커밍 웹훅 — Janus 미설정·실패 시 장애 알림 폴백 경로 |
 | `JANUS_AUTH_TOKEN` | 옵션 | Janus 게이트웨이 Bearer 인증 토큰 — Janus 알림 경로 활성화에 필요 |
-| `JANUS_CALLBACK_SIGNING_SECRET` | 옵션 | Janus↔App **공유** HMAC 시크릿 — 콜백 수신부(POST `/janus/callback`) 서명 검증용. Slack signing secret 이 **아니다**. Janus 쪽 `JANUS_APP__<source_id>__SIGNING_SECRET` 과 동일 값이어야 한다. 미설정 시 콜백 라우트를 등록하지 않음(fail-closed) |
+| `JANUS_CALLBACK_SIGNING_SECRET` | 옵션 | Janus↔App **공유** HMAC 시크릿 — 콜백 수신부(POST `/janus/callback`) 서명 검증용. Slack signing secret 이 **아니다**. Janus 쪽 `JANUS_APP__<source_id>__SIGNING_SECRET` 과 동일 값이어야 한다. 미설정 시 콜백 라우트를 등록하지 않음(fail-closed). **위협모델(수용 리스크)**: 수신부는 payload 의 Project 식별자(projectId/fieldId 등)를 서버측 allowlist 로 대조하지 않는 무상태 executor 다 — 이 시크릿이 탈취되면(또는 Janus 가 침해되면) Author 봇 권한 범위 내 Project 필드 변경이 가능하므로, 시크릿 관리가 곧 이 기능의 보안 경계다 |
 
 옵셔널 동작:
 - Reviewer secret 미설정 + AI 리뷰 yml 미호출 → 정상 (사람이 리뷰하는 일반 자동화)
