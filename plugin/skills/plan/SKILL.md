@@ -1017,12 +1017,25 @@ if [ "${#READY_ITEM_IDS[@]}" -eq 0 ]; then
   echo "Ready 상태 sub-issue 없음 — Janus 버튼 알림 스킵"; exit 0
 fi
 
-# 버튼 value(set-status) + buttons 배열 조립은 python3 로(셸 이스케이프 회피 + PR1 스키마 정확 일치).
-#   value 스키마 = app/src/lib/janus-callback.ts validateSetStatusValue 와 정확히 일치해야 한다:
-#     {v:1, t:"set-status", projectId(PVT_), fieldId(PVTSSF_), optionId, items[PVTI_…, 1~50], label}
-#   버튼 label(Slack 표시)엔 ':' 금지·75자 이내. action 은 'set-status' 고정.
-BUTTON_LABEL="${TRIGGER_COLUMN} 보내기 🚀"   # 트리거 컬럼명으로 조립(하드코딩 금지). 컬럼명이 짧아 75자 안전.
-BUTTONS_JSON="$(python3 -c '
+# 알림 텍스트 — parent 제목·sub-issue 개수·검증 안내(짧게). 버튼 1탭으로 '$TRIGGER_COLUMN' 전환.
+TEXT="🧑‍🍳 /plan 완료 — <parent-issue-title>
+sub-issue ${#READY_ITEM_IDS[@]}건이 Ready 에서 대기 중입니다. 플랜을 검토한 뒤 아래 버튼으로 '$TRIGGER_COLUMN' 로 보내면 자동 실행(kickoff)이 시작됩니다."
+
+# App 콜백의 items 상한(validateSetStatusValue MAX_ITEMS=50) 계약 미러링 — 50 초과 payload 는
+#   콜백이 200 ack 후 조용히 무시한다(눌러도 아무 일 없는 죽은 버튼). 초과 시 버튼을 생략하고
+#   텍스트만 발송 + 수동 이동 안내를 붙인다(알림 자체는 나감 — best-effort 유지).
+if [ "${#READY_ITEM_IDS[@]}" -gt 50 ]; then
+  BUTTONS_JSON=""
+  TEXT="$TEXT
+⚠️ sub-issue 가 50건을 초과해 버튼을 생략했습니다(콜백 items 상한 50). Project 보드에서 수동으로 이동해주세요."
+else
+  # 버튼 value(set-status) + buttons 배열 조립은 python3 로(셸 이스케이프 회피 + PR1 스키마 정확 일치).
+  #   value 스키마 = app/src/lib/janus-callback.ts validateSetStatusValue 와 정확히 일치해야 한다:
+  #     {v:1, t:"set-status", projectId(PVT_), fieldId(PVTSSF_), optionId, items[PVTI_…, 1~50], label}
+  #   버튼 label(Slack 표시)엔 ':' 금지·75자 이내 — 최종 방어(':' 제거·75자 절단)는
+  #   janus-notify.sh 가 수행하지만, 조립 시점부터 규칙을 지킨다. action 은 'set-status' 고정.
+  BUTTON_LABEL="${TRIGGER_COLUMN} 보내기 🚀"   # 트리거 컬럼명으로 조립(하드코딩 금지). 컬럼명이 짧아 75자 안전.
+  BUTTONS_JSON="$(python3 -c '
 import json, sys
 project_id, field_id, option_id, label, button_label = sys.argv[1:6]
 items = sys.argv[6:]
@@ -1031,10 +1044,7 @@ value = {"v": 1, "t": "set-status", "projectId": project_id, "fieldId": field_id
 button = {"action": "set-status", "label": button_label, "value": value}
 print(json.dumps([button], ensure_ascii=False))
 ' "$PROJECT_ID" "$STATUS_FIELD_ID" "$TRIGGER_OPTION_ID" "$TRIGGER_COLUMN" "$BUTTON_LABEL" "${READY_ITEM_IDS[@]}")"
-
-# 알림 텍스트 — parent 제목·sub-issue 개수·검증 안내(짧게). 버튼 1탭으로 '$TRIGGER_COLUMN' 전환.
-TEXT="🧑‍🍳 /plan 완료 — <parent-issue-title>
-sub-issue ${#READY_ITEM_IDS[@]}건이 Ready 에서 대기 중입니다. 플랜을 검토한 뒤 아래 버튼으로 '$TRIGGER_COLUMN' 로 보내면 자동 실행(kickoff)이 시작됩니다."
+fi
 
 # env 이름표(config)를 헬퍼에 넘김 — 간접확장(env 이름표를 실제 값으로 푸는 bash 전용 문법)은
 #   헬퍼(bash shebang) 안에서만 수행되므로 이 펜스가 zsh 여도 안전(slack-notify.sh 의

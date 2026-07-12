@@ -10,7 +10,11 @@
 #   JN-4 버튼 value 2000자 초과 → 버튼 제거하고 텍스트만 발송 (payload 에 buttons 없음)
 #   JN-5 비 2xx 응답 → 경고 + exit 0
 #   JN-6 정상 발송 payload 구조 (source_id 기본 pipeline·correlation_id·buttons object)
+#        + Authorization 헤더는 argv 가 아니라 stdin config(-K -)로 도착
 #   JN-7 base URL 뒤 슬래시 제거 → {base}/messages 정확 조립
+#   JN-8 악성 env 이름표(배열첨자 명령주입 시도) → 경고+스킵 exit 0, 명령 미실행·발송 없음
+#   JN-9 버튼 label ':' 제거·75자 절단 (헬퍼 측 최종 방어)
+#   JN-10 curl 타임아웃 인자(--connect-timeout/--max-time) 존재 + argv 에 토큰 부재
 #
 # 라이브 접근 없음 — curl 은 PATH 스텁으로 가로채 요청을 로그파일에 기록한다.
 
@@ -26,15 +30,20 @@ _setup_curl_stub() {
   if [ "$code" = "NET_FAIL" ]; then
     cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
+# 네트워크 실패 흉내 — stdin(-K - config)은 소비해 생산자 SIGPIPE 를 피한 뒤 실패.
+cat >/dev/null 2>&1 || true
 exit 7
 EOF
   else
     cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
-# 마지막 인자(URL)와 --data payload 를 로그로 남기고 HTTP 코드 반환.
-url="\${@: -1}"; data=""
-while [ \$# -gt 0 ]; do case "\$1" in --data) shift; data="\$1";; esac; shift; done
-{ echo "URL=\$url"; echo "DATA=\$data"; } >> "$CURL_LOG"
+# URL(마지막 인자)·전체 argv·--data payload·stdin config(-K -)를 로그로 남기고 HTTP 코드 반환.
+#   ARGS — 타임아웃 플래그 존재·argv 토큰 부재 단언용 / CFG — Authorization 헤더 stdin 도착 단언용
+url="\${@: -1}"; args="\$*"; data=""; kdash=0
+while [ \$# -gt 0 ]; do case "\$1" in --data) shift; data="\$1";; -K) shift; [ "\$1" = "-" ] && kdash=1;; esac; shift; done
+cfg=""
+[ "\$kdash" = 1 ] && cfg="\$(cat)"
+{ echo "URL=\$url"; echo "ARGS=\$args"; echo "CFG=\$cfg"; echo "DATA=\$data"; } >> "$CURL_LOG"
 printf '%s' "$code"
 EOF
   fi
@@ -149,7 +158,10 @@ assert v["projectId"].startswith("PVT_") and v["fieldId"].startswith("PVTSSF_")
 assert v["items"]==["PVTI_a","PVTI_b"] and v["label"]=="In Progress"
 print("ok")
 ' 2>/dev/null)"
-  assert_eq "ok" "$ok" "payload 구조가 PR1 스키마와 일치" && pass
+  assert_eq "ok" "$ok" "payload 구조가 PR1 스키마와 일치" || exit 0
+  # Authorization 헤더는 stdin config(-K -)로 도착해야 한다(argv 노출 금지의 대체 경로 검증).
+  assert_contains "$(cat "$CURL_LOG")" 'CFG=header = "Authorization: Bearer t"' "Bearer 헤더가 stdin config 로 도착" || exit 0
+  pass
 )
 
 # ── JN-7: base URL 뒤 슬래시 정규화 ─────────────────────────────────
@@ -162,5 +174,64 @@ it "JN-7 base URL 뒤 슬래시 제거 → {base}/messages 이중슬래시 없�
   log="$(cat "$CURL_LOG")"
   assert_contains "$log" "URL=http://h:8700/messages" "슬래시 정규화" || exit 0
   assert_not_contains "$log" "8700//messages" "이중슬래시 없음" || exit 0
+  pass
+)
+
+# ── JN-8: 악성 env 이름표 → 간접확장 전 가드로 스킵 ──────────────────
+#   bash 간접확장은 이름표에 배열첨자('x[$(cmd)]')가 섞이면 명령 실행 벡터가 된다.
+#   가드(is_valid_env_name)가 역참조 "전에" 걸러 명령 미실행·발송 스킵·exit 0 이어야 한다.
+it "JN-8 악성 env 이름표(명령주입 시도) → 경고+스킵 exit 0, 명령 미실행·발송 없음"
+(
+  dir="$(_setup_curl_stub 200)"
+  CURL_LOG="$dir/req.log"
+  marker="$dir/pwned"
+  rc=0
+  err="$(PATH="$dir:$PATH" \
+    JANUS_URL_KEY='x[$(touch '"$marker"')]' \
+    JANUS_TOKEN_KEY=MY_TOK MY_TOK="t" \
+    JANUS_BASE_URL="http://h:8700" JANUS_AUTH_TOKEN="t" \
+    bash "$NOTIFY" "#c" "txt" "" "" 2>&1 >/dev/null)" || rc=$?
+  assert_eq 0 "$rc" "악성 이름표여도 exit 0" || exit 0
+  assert_file_absent "$marker" "주입 명령이 실행되면 안 됨(marker 미생성)" || exit 0
+  [ ! -s "$CURL_LOG" ] || { fail "발송이 나감(스킵돼야 함)"; exit 0; }
+  assert_contains "$err" "유효한 env 식별자가 아님" "경고 메시지" || exit 0
+  pass
+)
+
+# ── JN-9: 버튼 label 새니타이즈 (':' 제거·75자 절단 — 헬퍼 측 최종 방어) ──
+it "JN-9 버튼 label ':' 제거 + 75자 초과 절단"
+(
+  dir="$(_setup_curl_stub 200)"
+  CURL_LOG="$dir/req.log"
+  longlabel="$(python3 -c 'print("가:"*50)')"   # ':' 포함 + 코드포인트 100자
+  btn='[{"action":"set-status","label":"'"$longlabel"'","value":{"v":1}}]'
+  PATH="$dir:$PATH" JANUS_BASE_URL="http://h:8700" JANUS_AUTH_TOKEN="t" \
+    bash "$NOTIFY" "#c" "txt" "$btn" "" >/dev/null 2>&1
+  data="$(grep '^DATA=' "$CURL_LOG" | sed 's/^DATA=//')"
+  ok="$(printf '%s' "$data" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+lab=d["buttons"][0]["label"]
+assert ":" not in lab, lab          # 콜론 제거됨
+assert len(list(lab))<=75, len(lab) # 코드포인트 75자 이내
+print("ok")
+' 2>/dev/null)"
+  assert_eq "ok" "$ok" "label 새니타이즈(콜론 제거·75자 절단)" && pass
+)
+
+# ── JN-10: 타임아웃 인자 + argv 토큰 부재 ────────────────────────────
+#   Janus 블랙홀(hang) 시 /plan 을 무기한 잡지 않도록 curl 상한 인자가 반드시 있어야 하고
+#   (타임아웃 실패는 기존 || 폴백이 000 으로 수렴 → exit 0), 토큰은 argv(ps 노출)에 없어야 한다.
+it "JN-10 curl --connect-timeout/--max-time 존재 + argv 에 Bearer 토큰 부재"
+(
+  dir="$(_setup_curl_stub 200)"
+  CURL_LOG="$dir/req.log"
+  PATH="$dir:$PATH" JANUS_BASE_URL="http://h:8700" JANUS_AUTH_TOKEN="secret-tok-xyz" \
+    bash "$NOTIFY" "#c" "txt" "" "" >/dev/null 2>&1
+  args_line="$(grep '^ARGS=' "$CURL_LOG")"
+  assert_contains "$args_line" "--connect-timeout 5" "connect-timeout 인자" || exit 0
+  assert_contains "$args_line" "--max-time 15" "max-time 인자" || exit 0
+  assert_not_contains "$args_line" "secret-tok-xyz" "argv 에 토큰 노출 금지" || exit 0
+  assert_contains "$(cat "$CURL_LOG")" 'CFG=header = "Authorization: Bearer secret-tok-xyz"' "토큰은 stdin config 로만" || exit 0
   pass
 )
