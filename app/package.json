@@ -15,10 +15,14 @@
   "dependencies": {
     "@octokit/auth-app": "^8.2.0",
     "@octokit/core": "^5.2.2",
+    "express": "^5.2.1",
     "probot": "^13.4.2"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^20.14.0",
+    "@types/supertest": "^7.2.0",
+    "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.0",
     "vitest": "^2.1.8"

@@ -115,3 +115,43 @@ export async function fetchProjectV2Items(
     };
   });
 }
+
+// Project v2 아이템 한 개의 Status(단일 선택 필드) 값을 optionId 로 전환한다.
+//
+// fetchProjectV2Items 와 동일하게 Author 봇(authorInstallationId) 권한으로 실행한다.
+// updateProjectV2ItemFieldValue mutation — singleSelectOptionId 로 Status 컬럼을 옮긴다.
+// projectId/itemId/fieldId/optionId 는 전부 호출부(Janus 콜백 value)가 검증해 넘긴다.
+export async function updateProjectV2ItemStatus(
+  app: Probot,
+  authorInstallationId: number,
+  params: {
+    projectId: string;
+    itemId: string;
+    fieldId: string;
+    optionId: string;
+  }
+): Promise<void> {
+  const octokit = await app.auth(authorInstallationId);
+  await octokit.graphql(
+    `
+    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+      updateProjectV2ItemFieldValue(
+        input: {
+          projectId: $projectId
+          itemId: $itemId
+          fieldId: $fieldId
+          value: { singleSelectOptionId: $optionId }
+        }
+      ) {
+        projectV2Item { id }
+      }
+    }
+    `,
+    {
+      projectId: params.projectId,
+      itemId: params.itemId,
+      fieldId: params.fieldId,
+      optionId: params.optionId,
+    }
+  );
+}

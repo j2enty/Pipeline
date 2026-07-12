@@ -100,16 +100,24 @@ function findPartialJanusMisconfig(): string[] {
   return [...missingKeys];
 }
 
-// Janus 게이트웨이 발송 타깃 — 아웃바운드 알림을 Slack 대신 Janus REST 로 보낸다.
-//   JANUS_BASE_URL/JANUS_AUTH_TOKEN/JANUS_ALERT_CHANNEL 이 모두 있어야 활성화.
-//   컨테이너에서 호스트 Janus 는 http://host.docker.internal:8700 로 닿는다.
-//   source_id 는 JANUS_SOURCE_ID(기본 "pipeline") — 하드코딩 대신 env 주입.
-function resolveJanusTarget(): {
+// Janus 게이트웨이 발송 타깃 — url/token/sourceId(+알림용 channel).
+//   channel 은 알림 발송(sendViaJanus)에만 쓰이고, 콜백 응답(메시지 교체)은
+//   콜백 payload 의 channel 을 쓰므로 이 타깃의 channel 을 쓰지 않는다.
+export interface JanusMessageTarget {
   url: string;
   token: string;
   sourceId: string;
   channel: string;
-} | null {
+}
+
+// Janus 게이트웨이 발송 타깃 — 아웃바운드 알림을 Slack 대신 Janus REST 로 보낸다.
+//   JANUS_BASE_URL/JANUS_AUTH_TOKEN/JANUS_ALERT_CHANNEL 이 모두 있어야 활성화.
+//   컨테이너에서 호스트 Janus 는 http://host.docker.internal:8700 로 닿는다.
+//   source_id 는 JANUS_SOURCE_ID(기본 "pipeline") — 하드코딩 대신 env 주입.
+//
+// export 이유: Janus 콜백 수신부(janus-callback.ts)가 원본 메시지 교체 시 같은 타깃
+// (base/token/source_id)을 재사용한다. 알림·콜백 두 소비자가 동일 해석을 공유한다.
+export function resolveJanusTarget(): JanusMessageTarget | null {
   const baseUrl = process.env.JANUS_BASE_URL;
   const token = process.env.JANUS_AUTH_TOKEN;
   const channel = process.env.JANUS_ALERT_CHANNEL;
@@ -126,7 +134,7 @@ function resolveJanusTarget(): {
 
 // Janus 로 발송(POST /messages). 비 2xx 면 throw → 호출부가 webhook 폴백을 태운다.
 async function sendViaJanus(
-  target: { url: string; token: string; sourceId: string; channel: string },
+  target: JanusMessageTarget,
   opts: { title: string; context: string; url?: string }
 ): Promise<void> {
   const response = await fetch(`${target.url}/messages`, {
@@ -144,6 +152,49 @@ async function sendViaJanus(
   });
   if (!response.ok) {
     throw new Error(`Janus 응답 비정상 status=${response.status}`);
+  }
+}
+
+// Janus 메시지 교체용 버튼 — 실패 시 "다시 시도" 재부착 등에 쓴다.
+//   value 는 콜백에 담겨 온 action_value 원문을 그대로 되돌려 보낸다
+//   (재클릭 시 동일 payload 로 다시 콜백되도록).
+export interface JanusMessageButton {
+  action: string;
+  label: string;
+  value: unknown;
+}
+
+// Janus 원본 메시지 교체(POST /messages/update) — 콜백 응답으로 결과 텍스트로 바꾼다.
+//   buttons 미지정 → 바디에 buttons 없음 = 버튼 제거됨(성공 경로).
+//   buttons 지정 → 재부착(실패 경로의 "다시 시도" 등).
+//   channel/ts 는 콜백 payload 에서 온 원본 메시지 좌표. 비 2xx 면 throw(호출부가 삼킴).
+export async function sendJanusMessageUpdate(
+  target: JanusMessageTarget,
+  opts: {
+    channel: string;
+    ts: string;
+    text: string;
+    buttons?: JanusMessageButton[];
+  }
+): Promise<void> {
+  const response = await fetch(`${target.url}/messages/update`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${target.token}`,
+    },
+    body: JSON.stringify({
+      source_id: target.sourceId,
+      channel: opts.channel,
+      ts: opts.ts,
+      text: opts.text,
+      // undefined 는 JSON.stringify 가 필드째 생략 → "버튼 제거" 계약 유지.
+      buttons: opts.buttons,
+    }),
+    signal: AbortSignal.timeout(resolveTimeoutMs()),
+  });
+  if (!response.ok) {
+    throw new Error(`Janus 메시지 교체 응답 비정상 status=${response.status}`);
   }
 }
 

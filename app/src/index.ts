@@ -4,6 +4,7 @@ import { startStatusPoller } from "./pollers/status-poller";
 import { parsePollerConfigFromEnv } from "./lib/env";
 import { notifyFailure } from "./lib/alert";
 import { registerHealthcheck } from "./lib/healthcheck";
+import { registerJanusCallback } from "./lib/janus-callback";
 import {
   getLastTickAt,
   isPollerEnabled,
@@ -38,7 +39,25 @@ export default (app: Probot, { getRouter }: ApplicationFunctionOptions) => {
     isPollerEnabled,
     intervalMs: pollerIntervalMs,
   }));
+
+  // Janus 콜백 수신부 등록 — Slack 버튼 1탭 → Status 전환.
+  //   서명 시크릿(JANUS_CALLBACK_SIGNING_SECRET) 미설정 시 라우트 미등록(fail-closed).
+  //   Author 봇 권한으로 Status mutation 을 실행하므로 installation id 를 주입한다.
+  registerJanusCallback(getRouter, {
+    app,
+    authorInstallationId: resolveAuthorInstallationId(),
+  });
 };
+
+// AUTHOR_INSTALLATION_ID env → number | null. 미설정/비정상 → null(콜백 처리부가 관측).
+function resolveAuthorInstallationId(): number | null {
+  const raw = process.env.AUTHOR_INSTALLATION_ID;
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
 
 // 환경변수 → StatusPoller 옵션 변환 후 시작
 //
