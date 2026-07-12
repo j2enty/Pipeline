@@ -12,6 +12,8 @@
 # 잠그는 복제군(각 군은 서로 바이트 동일해야 함):
 #   - gh-app-token.sh      : scripts/ ↔ plugin/skills/review/scripts/
 #   - slack-notify.sh      : scripts/ ↔ plugin/skills/kickoff/scripts/ ↔ plugin/skills/review/scripts/
+#   - janus-notify.sh      : scripts/ ↔ plugin/skills/plan/scripts/
+#     (지금은 plan 만 발사측(/plan Step 9.8). kickoff/review 복제는 후속(#37 PR3) 몫.)
 #   - pipeline-config.sh   : plugin/skills/kickoff/scripts/ ↔ plugin/skills/review/scripts/
 #     (plan 사본은 의도적으로 다르다 — reviewer 전용 4키 없음 + cross-check-tool 있음.
 #      plan 의 "공유 파싱 코어" 드리프트는 test-reader-core-parity.sh 가 동작 기준으로 잡는다.)
@@ -61,4 +63,11 @@ it "SP-3 pipeline-config.sh 복제본 바이트 동일 (kickoff ↔ review)"
   _assert_group_identical "pipeline-config(kickoff/review)" \
     "plugin/skills/kickoff/scripts/pipeline-config.sh" \
     "plugin/skills/review/scripts/pipeline-config.sh" && pass
+)
+
+it "SP-4 janus-notify.sh 복제본 바이트 동일 (본체 ↔ plan 플러그인)"
+(
+  _assert_group_identical "janus-notify" \
+    "scripts/janus-notify.sh" \
+    "plugin/skills/plan/scripts/janus-notify.sh" && pass
 )

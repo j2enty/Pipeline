@@ -307,6 +307,18 @@ projects/
 |---|---|---|---|---|
 | `usage-tracking-enabled` | `claude-commands.metrics` | boolean | `false` | 이슈/PR 1건 처리 시 claude 호출의 시간·토큰·비용을 대상 이슈/PR 코멘트로 박제 on/off. on 이면 kickoff/review/critic/critic-dispatch 의 각 claude 호출이 `📊 usage …` 코멘트를 남긴다(`--output-format stream-json` 의 `result` 이벤트에서 추출). off 면 claude 직접 호출과 100% 동일 동작(코멘트 없음). **추가**: `/plan` 의 단계별 소요시간 계측(§9.7)도 이 토글로 게이트된다 — on 이면 parent 이슈에 `📊 plan timing` 코멘트(단계별 소요시간 표)를 남긴다. off 여도 콘솔 최종 리포트의 시간 표는 항상 출력된다(코멘트만 토글). 계측 자체는 `plugin/skills/plan/scripts/plan-metrics.sh` 가 단계 경계 시각(`date +%s`)을 temp 상태파일(`${TMPDIR:-/tmp}/plan-metrics-<parent-N>-<slug>.tsv`)에 기록·집계하며, plan 산출물·dry-run 로컬 문서는 바꾸지 않는다. |
 
+### Janus 버튼 알림 카탈로그 (`claude-commands.janus:` 항목)
+
+`/plan` 이 종료 시(sub-issue 를 Prep Project "Ready" 에 만든 직후) **버튼 달린 Slack 알림**을 Janus 게이트웨이로 발사할 때 쓰는 토글·env 이름표. 계측 토글과 같이 **기본 OFF(opt-in)** — 이식 안전을 위해 새 프로젝트는 발사가 꺼진 상태로 시작한다. 사용자가 버튼을 1탭 하면 App(`POST /janus/callback`)이 그 sub-issue 들의 Status 를 kickoff 트리거 컬럼으로 바꾸고, 폴러가 kickoff 를 발화한다(터미널 `/kickoff` 수동 단계를 버튼 1탭으로 대체).
+
+| 키 | 위치 | 타입 | 기본값(미지정) | 의미 |
+|---|---|---|---|---|
+| `notify-enabled` | `claude-commands.janus` | boolean | `false` | `/plan` 종료 시 Janus 버튼 알림 발사 on/off. off 면 발사 자체를 스킵(기존 동작). **`/plan` 실행 머신에서 Janus 에 도달 가능해야 실제로 나간다** — 미도달(주소·토큰 미설정)이면 헬퍼(`janus-notify.sh`)가 조용히 스킵한다(옵셔널 어댑터, best-effort). SKILL 리더 전용 |
+| `base-url-key` | `claude-commands.janus` | string(env 이름표) | 빈 값 | Janus base URL 이 담긴 **env 변수의 이름표**(URL 값 자체가 아님). SKILL 이 이 값을 헬퍼에 `JANUS_URL_KEY` env 로 넘기면 헬퍼(bash)가 역참조(`${!VAR}`)해 실제 URL 을 얻는다. 빈값이면 헬퍼가 `JANUS_BASE_URL` 직접 env 로 폴백. (`slack-token-key` 와 동일한 "이름표 역참조" 기법 — 식별성 높은 값을 config·LLM 컨텍스트에 직접 담지 않기 위함) |
+| `token-key` | `claude-commands.janus` | string(env 이름표) | 빈 값 | Janus 인증 토큰이 담긴 env 변수의 이름표. SKILL 이 헬퍼에 `JANUS_TOKEN_KEY` env 로 넘기고 헬퍼가 역참조. 빈값이면 `JANUS_AUTH_TOKEN` 직접 env 로 폴백 |
+
+> 버튼 payload 의 `value` 는 App 의 `validateSetStatusValue`(`app/src/lib/janus-callback.ts`) 스키마와 **정확히 일치**해야 한다: `{v:1, t:"set-status", projectId(PVT_), fieldId(PVTSSF_), optionId, items[PVTI_…, 1~50], label}`. 어긋나면 콜백이 200 ack 후 조용히 무시한다. 버튼 `value` 가 2000자(Slack 인터랙티브 요소 제한)를 넘으면 헬퍼가 버튼을 빼고 텍스트만 발송한다(기능 저하지만 알림은 나감).
+
 ### GraphQL Project v2 식별자 카탈로그 (`claude-commands:` 항목) — 자동조회 대상
 
 `/kickoff`·`/review`·`/plan` 가 GitHub Project v2 를 GraphQL 로 조작(Status·Area 필드 변경)할 때 쓰는 노드 ID 들. 사용자가 알기 어려운 해시값이라 `install.sh` 가 **자동조회**한다.

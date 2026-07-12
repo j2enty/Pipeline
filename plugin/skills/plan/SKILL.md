@@ -967,6 +967,97 @@ fi
 rm -f "$TSV" 2>/dev/null || true
 ```
 
+### 9.8. Janus 버튼 알림 발사 (검토 후 1탭 kickoff — opt-in)
+
+`/plan`이 sub-issue들을 Prep Project "Ready"에 만든 직후, **버튼 달린 Slack 메시지**를 Janus
+게이트웨이로 발사한다. 사용자가 플랜을 검토하고 버튼을 1탭 하면 App(`/janus/callback`)이 그
+sub-issue들의 Status를 kickoff 트리거 컬럼(예: `In Progress`)으로 바꾸고, 기존 status-poller가
+자동으로 kickoff를 발화한다. 즉 "터미널로 돌아가 `/kickoff`를 치는" 수동 단계를 버튼 1탭으로 대체한다.
+
+**§9.7과 동형의 관례** — toggle 게이트 + dry-run self-guard + 전 경로 best-effort(발사 실패=
+파이프라인 실패 아님, `exit 0` 불변). 버튼 payload는 App의 `validateSetStatusValue`(PR1)와
+정확히 일치해야 한다(스키마가 어긋나면 콜백이 200 ack 후 조용히 무시).
+
+```bash
+CFG="${CLAUDE_SKILL_DIR}/scripts/pipeline-config.sh"
+NOTIFY="${CLAUDE_SKILL_DIR}/scripts/janus-notify.sh"
+
+# [게이트 1] Janus 버튼 알림 토글 — 기본 false(opt-in). false 면 조용히 스킵.
+if [ "$(bash "$CFG" janus.notify-enabled 2>/dev/null || echo false)" != "true" ]; then
+  echo "janus.notify-enabled=false — Janus 버튼 알림 스킵"; exit 0
+fi
+# [게이트 2 · R2 self-guard] dry-run 이면 외부 발송 스킵(방어적 이중 가드 — §9.7 과 동형.
+#   실제로는 §6a 정지선에서 이미 종료돼 이 펜스엔 도달하지 않지만, 규약대로 가드를 둔다).
+case " $ARGUMENTS " in *" --dry-run "*) echo "[DRY-RUN] Janus 버튼 알림 스킵"; exit 0 ;; esac
+# [게이트 3] project-id·status-field-id 없으면 set-status 버튼 payload 를 만들 수 없다 → 경고 후 스킵.
+if ! bash "$CFG" --require project-id status-field-id >/dev/null 2>&1; then
+  echo "⚠️  project-id/status-field-id config 없음 — Janus 버튼 알림 스킵" >&2; exit 0
+fi
+
+PROJECT_ID="$(bash "$CFG" project-id)"       # PVT_… (validateSetStatusValue 가 접두 검사)
+STATUS_FIELD_ID="$(bash "$CFG" status-field-id)"   # PVTSSF_…
+CHANNEL="$(bash "$CFG" slack-channel)"
+
+# kickoff 트리거 컬럼명은 config 에서 읽는다(하드코딩 금지) — 기본 In Progress.
+#   버튼이 sub-issue 를 이 컬럼으로 보내면 폴러가 kickoff 를 발화한다.
+TRIGGER_COLUMN="$(bash "$CFG" status-trigger-kickoff)"
+[ -n "$TRIGGER_COLUMN" ] || TRIGGER_COLUMN="In Progress"
+# 트리거 컬럼의 Status optionId 를 fire-time 에 동적 조회(Step 8-c 패턴 재사용 — 읽기 전용).
+TRIGGER_OPTION_ID="$(gh project field-list "$(bash "$CFG" project-number)" --owner "$(bash "$CFG" owner)" --format json \
+  | jq -r --arg s "$TRIGGER_COLUMN" '.fields[] | select(.name=="Status") | .options[] | select(.name==$s) | .id')"
+if [ -z "$TRIGGER_OPTION_ID" ]; then
+  echo "⚠️  '$TRIGGER_COLUMN' Status 옵션 조회 실패 — Janus 버튼 알림 스킵" >&2; exit 0
+fi
+
+# Step 8 에서 확보한 sub-issue 의 Project item ID 중, default-status 가 Ready(status-column-ready)로
+#   세팅된 것만 items 에 담는다 — Backlog 행(디자인·planner=false 류)은 폴러 대기 상태가 아니므로 제외.
+#   READY_ITEM_IDS 배열은 위 조건을 만족하는 item ID(PVTI_… 형식)로 채운다.
+READY_ITEM_IDS=( <Ready 로 세팅된 sub-issue 의 Project item ID 들 (PVTI_…)> )
+if [ "${#READY_ITEM_IDS[@]}" -eq 0 ]; then
+  echo "Ready 상태 sub-issue 없음 — Janus 버튼 알림 스킵"; exit 0
+fi
+
+# 알림 텍스트 — parent 제목·sub-issue 개수·검증 안내(짧게). 버튼 1탭으로 '$TRIGGER_COLUMN' 전환.
+TEXT="🧑‍🍳 /plan 완료 — <parent-issue-title>
+sub-issue ${#READY_ITEM_IDS[@]}건이 Ready 에서 대기 중입니다. 플랜을 검토한 뒤 아래 버튼으로 '$TRIGGER_COLUMN' 로 보내면 자동 실행(kickoff)이 시작됩니다."
+
+# App 콜백의 items 상한(validateSetStatusValue MAX_ITEMS=50) 계약 미러링 — 50 초과 payload 는
+#   콜백이 200 ack 후 조용히 무시한다(눌러도 아무 일 없는 죽은 버튼). 초과 시 버튼을 생략하고
+#   텍스트만 발송 + 수동 이동 안내를 붙인다(알림 자체는 나감 — best-effort 유지).
+if [ "${#READY_ITEM_IDS[@]}" -gt 50 ]; then
+  BUTTONS_JSON=""
+  TEXT="$TEXT
+⚠️ sub-issue 가 50건을 초과해 버튼을 생략했습니다(콜백 items 상한 50). Project 보드에서 수동으로 이동해주세요."
+else
+  # 버튼 value(set-status) + buttons 배열 조립은 python3 로(셸 이스케이프 회피 + PR1 스키마 정확 일치).
+  #   value 스키마 = app/src/lib/janus-callback.ts validateSetStatusValue 와 정확히 일치해야 한다:
+  #     {v:1, t:"set-status", projectId(PVT_), fieldId(PVTSSF_), optionId, items[PVTI_…, 1~50], label}
+  #   버튼 label(Slack 표시)엔 ':' 금지·75자 이내 — 최종 방어(':' 제거·75자 절단)는
+  #   janus-notify.sh 가 수행하지만, 조립 시점부터 규칙을 지킨다. action 은 'set-status' 고정.
+  BUTTON_LABEL="${TRIGGER_COLUMN} 보내기 🚀"   # 트리거 컬럼명으로 조립(하드코딩 금지). 컬럼명이 짧아 75자 안전.
+  BUTTONS_JSON="$(python3 -c '
+import json, sys
+project_id, field_id, option_id, label, button_label = sys.argv[1:6]
+items = sys.argv[6:]
+value = {"v": 1, "t": "set-status", "projectId": project_id, "fieldId": field_id,
+         "optionId": option_id, "items": items, "label": label}
+button = {"action": "set-status", "label": button_label, "value": value}
+print(json.dumps([button], ensure_ascii=False))
+' "$PROJECT_ID" "$STATUS_FIELD_ID" "$TRIGGER_OPTION_ID" "$TRIGGER_COLUMN" "$BUTTON_LABEL" "${READY_ITEM_IDS[@]}")"
+fi
+
+# env 이름표(config)를 헬퍼에 넘김 — 간접확장(env 이름표를 실제 값으로 푸는 bash 전용 문법)은
+#   헬퍼(bash shebang) 안에서만 수행되므로 이 펜스가 zsh 여도 안전(slack-notify.sh 의
+#   SLACK_TOKEN_KEY 위임과 동일 기법).
+# 전체를 || true 로 감싸 어떤 실패도 파이프라인을 막지 않게 한다(best-effort — exit 0 불변).
+JANUS_URL_KEY="$(bash "$CFG" janus.base-url-key)" \
+JANUS_TOKEN_KEY="$(bash "$CFG" janus.token-key)" \
+  bash "$NOTIFY" "$CHANNEL" "$TEXT" "$BUTTONS_JSON" "plan-<parent-N>" || true
+```
+
+> Janus 타깃(주소·토큰)이 이 실행 머신에서 미설정이면 헬퍼가 조용히 스킵한다(옵셔널 어댑터).
+> 즉 이 알림은 "있으면 편의, 없으면 무해" — /plan 산출물·정상 흐름엔 영향이 없다.
+
 ### 10. 최종 리포트
 
 사용자에게 요약 출력:
