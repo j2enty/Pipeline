@@ -4,6 +4,7 @@ import {
   notifyFailure,
   shouldSend,
   resetAlertCooldownForTest,
+  sendJanusMessageUpdate,
 } from "../src/lib/alert";
 
 // alert.ts — 장애 알림. 핵심 불변식:
@@ -264,5 +265,55 @@ describe("notifyFailure", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.source_id).toBe("pipeline");
+  });
+});
+
+// ── sendJanusMessageUpdate — 콜백 응답 메시지 교체의 wire 계약 ──
+describe("sendJanusMessageUpdate", () => {
+  const originalFetch = globalThis.fetch;
+  const target = {
+    url: "http://janus",
+    token: "tok",
+    sourceId: "pipeline",
+    channel: "unused",
+  };
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("buttons 미지정 → 바디에 buttons 키 자체가 없다 (버튼 제거 계약)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await sendJanusMessageUpdate(target, { channel: "C1", ts: "1.2", text: "done" });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://janus/messages/update");
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({
+      source_id: "pipeline",
+      channel: "C1",
+      ts: "1.2",
+      text: "done",
+    });
+    expect("buttons" in body).toBe(false);
+  });
+
+  it("buttons 지정 → 바디에 buttons 가 그대로 포함된다 (재부착 계약)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const buttons = [{ action: "set-status", label: "다시 시도", value: "{\"v\":1}" }];
+    await sendJanusMessageUpdate(target, {
+      channel: "C1",
+      ts: "1.2",
+      text: "retry",
+      buttons,
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.buttons).toEqual(buttons);
   });
 });

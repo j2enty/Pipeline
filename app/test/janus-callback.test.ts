@@ -211,6 +211,12 @@ describe("validateSetStatusValue", () => {
     const long = { ...valid, label: "가".repeat(100) };
     expect(validateSetStatusValue(long)?.label).toBe("가".repeat(80));
   });
+
+  it("label 절단은 코드포인트 단위 — 이모지(서로게이트 페어)를 반토막 내지 않는다", () => {
+    // "😀" 는 UTF-16 유닛 2개 — 유닛 단위 slice(0,80)라면 40번째 이모지에서 깨진다.
+    const emojiLong = { ...valid, label: "😀".repeat(100) };
+    expect(validateSetStatusValue(emojiLong)?.label).toBe("😀".repeat(80));
+  });
 });
 
 // ── 순수 함수: 멱등 dedupe (begin / confirm / release) ────────────────
@@ -350,7 +356,7 @@ describe("processInteractionCallback", () => {
     return { deps, updateItemStatus, sendMessageUpdate, notifyFailure, resolveJanusTarget };
   }
 
-  it("정상 → items 만큼 mutation + 메시지 교체 1회(성공 텍스트)", async () => {
+  it("정상 → items 만큼 mutation + 메시지 교체 1회(성공 텍스트·버튼 부재)", async () => {
     const { deps, updateItemStatus, sendMessageUpdate } = makeDeps();
     await processInteractionCallback(makePayload(), deps);
 
@@ -361,6 +367,8 @@ describe("processInteractionCallback", () => {
     expect(msg.text).toContain("In Progress");
     expect(msg.channel).toBe("C1");
     expect(msg.ts).toBe("1700.1");
+    // 성공 경로는 버튼 제거(buttons 미지정) — 더 누를 이유가 없다.
+    expect(msg.buttons).toBeUndefined();
   });
 
   it("성공 후 재클릭(같은 correlation) → mutation 1세트만 (completed 확정)", async () => {
@@ -466,7 +474,7 @@ describe("processInteractionCallback", () => {
     expect(updateItemStatus).toHaveBeenCalledTimes(2);
   });
 
-  it("mutation 부분 실패 → 실패 텍스트 + notifyFailure", async () => {
+  it("mutation 부분 실패 → 실패 텍스트 + notifyFailure + '다시 시도' 버튼 재부착", async () => {
     const { deps, sendMessageUpdate, notifyFailure } = makeDeps();
     (deps.updateItemStatus as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(undefined)
@@ -477,6 +485,16 @@ describe("processInteractionCallback", () => {
     const [, msg] = sendMessageUpdate.mock.calls[0];
     expect(msg.text).toContain("⚠️");
     expect(msg.text).toContain("1");
+    expect(msg.text).toContain("다시 시도");
+    // 실패 경로는 dedupe 키를 해제하므로 재클릭 수단(버튼)도 남아야 한다 —
+    // 콜백의 action_value 원문 그대로 재부착돼야 재클릭이 동일 payload 로 온다.
+    expect(msg.buttons).toEqual([
+      {
+        action: "set-status",
+        label: "다시 시도",
+        value: JSON.stringify(validValue),
+      },
+    ]);
     expect(notifyFailure).toHaveBeenCalled();
   });
 

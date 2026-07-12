@@ -8,6 +8,7 @@ import {
   resolveJanusTarget,
   sendJanusMessageUpdate,
   type JanusMessageTarget,
+  type JanusMessageButton,
 } from "./alert";
 
 // Janus 콜백 수신부 — 사용자가 Slack 버튼을 1탭 하면 Janus(외부 게이트웨이)가
@@ -136,10 +137,13 @@ function isNonEmptyString(value: unknown): value is string {
 
 // label 새니타이즈 — Slack 메시지에 그대로 들어가므로 개행을 공백으로 접고
 // 최대 길이로 절단한다(메시지 레이아웃 파괴·과대 payload 방어).
+// 절단은 코드포인트 단위([...str]) — String.slice 는 UTF-16 유닛 단위라
+// 이모지 같은 서로게이트 페어를 반토막 내 깨진 문자를 만들 수 있다.
 function sanitizeLabel(label: string): string {
   const singleLine = label.replace(/[\r\n]+/g, " ").trim();
-  return singleLine.length > MAX_LABEL_LENGTH
-    ? singleLine.slice(0, MAX_LABEL_LENGTH)
+  const codePoints = [...singleLine];
+  return codePoints.length > MAX_LABEL_LENGTH
+    ? codePoints.slice(0, MAX_LABEL_LENGTH).join("")
     : singleLine;
 }
 
@@ -526,14 +530,23 @@ export async function processInteractionCallback(
     }
     inFlightDedupeKey = null;
 
-    // 원본 메시지 교체(버튼 제거) — Janus 타깃이 있을 때만.
+    // 원본 메시지 교체 — Janus 타깃이 있을 때만.
     const janusTarget = d.resolveJanusTarget();
     if (failedCount === 0) {
+      // 성공 → 버튼 제거(buttons 미지정) — 더 누를 이유가 없다.
       const text = `✅ ${value.label} 이동 완료 (${interaction.user})`;
       await updateOriginalMessage(d, janusTarget, interaction, text);
     } else {
-      const text = `⚠️ ${failedCount}건 실패`;
-      await updateOriginalMessage(d, janusTarget, interaction, text);
+      // 실패 → 키를 해제했으므로(위) 재클릭 수단도 남겨야 한다 — 콜백에 담겨 온
+      // 원래 버튼을 "다시 시도"로 재부착(value 는 action_value 원문 그대로).
+      const text = `⚠️ ${failedCount}건 실패 — 버튼으로 다시 시도할 수 있습니다`;
+      await updateOriginalMessage(d, janusTarget, interaction, text, [
+        {
+          action: interaction.action,
+          label: "다시 시도",
+          value: interaction.actionValue,
+        },
+      ]);
       await d.notifyFailure(d.app, {
         title: "Janus set-status 일부 실패",
         context: `실패 ${failedCount}/${value.items.length} (correlation=${interaction.correlationId})`,
@@ -560,11 +573,13 @@ export async function processInteractionCallback(
 }
 
 // 원본 메시지 교체 — 타깃 없으면(=Janus 발송 설정 미비) 조용히 스킵.
+//   buttons 미지정 = 버튼 제거(성공), 지정 = 재부착(실패의 "다시 시도").
 async function updateOriginalMessage(
   d: ResolvedDeps,
   janusTarget: JanusMessageTarget | null,
   interaction: JanusInteraction,
-  text: string
+  text: string,
+  buttons?: JanusMessageButton[]
 ): Promise<void> {
   if (!janusTarget) {
     d.app.log.warn(
@@ -576,6 +591,7 @@ async function updateOriginalMessage(
     channel: interaction.channel,
     ts: interaction.messageTs,
     text,
+    buttons,
   });
 }
 

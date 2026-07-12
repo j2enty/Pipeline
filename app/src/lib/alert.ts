@@ -155,12 +155,27 @@ async function sendViaJanus(
   }
 }
 
-// Janus 원본 메시지 교체(POST /messages/update) — 콜백 응답으로 버튼을 제거하고
-// 결과 텍스트로 바꾼다. buttons 를 바디에 넣지 않음 = 버튼 제거됨.
+// Janus 메시지 교체용 버튼 — 실패 시 "다시 시도" 재부착 등에 쓴다.
+//   value 는 콜백에 담겨 온 action_value 원문을 그대로 되돌려 보낸다
+//   (재클릭 시 동일 payload 로 다시 콜백되도록).
+export interface JanusMessageButton {
+  action: string;
+  label: string;
+  value: unknown;
+}
+
+// Janus 원본 메시지 교체(POST /messages/update) — 콜백 응답으로 결과 텍스트로 바꾼다.
+//   buttons 미지정 → 바디에 buttons 없음 = 버튼 제거됨(성공 경로).
+//   buttons 지정 → 재부착(실패 경로의 "다시 시도" 등).
 //   channel/ts 는 콜백 payload 에서 온 원본 메시지 좌표. 비 2xx 면 throw(호출부가 삼킴).
 export async function sendJanusMessageUpdate(
   target: JanusMessageTarget,
-  opts: { channel: string; ts: string; text: string }
+  opts: {
+    channel: string;
+    ts: string;
+    text: string;
+    buttons?: JanusMessageButton[];
+  }
 ): Promise<void> {
   const response = await fetch(`${target.url}/messages/update`, {
     method: "POST",
@@ -173,6 +188,8 @@ export async function sendJanusMessageUpdate(
       channel: opts.channel,
       ts: opts.ts,
       text: opts.text,
+      // undefined 는 JSON.stringify 가 필드째 생략 → "버튼 제거" 계약 유지.
+      buttons: opts.buttons,
     }),
     signal: AbortSignal.timeout(resolveTimeoutMs()),
   });
