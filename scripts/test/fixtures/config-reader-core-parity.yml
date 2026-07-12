@@ -75,5 +75,11 @@ claude-commands:
   metrics:
     usage-tracking-enabled: true
 
+  # Janus 버튼 알림 — 3벌 리더가 동일하게 읽어야 하는 공유 코어(#37 PR2).
+  janus:
+    notify-enabled: true
+    base-url-key: PARITY_JANUS_URL
+    token-key: PARITY_JANUS_TOKEN
+
 tracking:
   enabled: false

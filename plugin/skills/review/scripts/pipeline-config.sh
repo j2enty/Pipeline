@@ -57,6 +57,9 @@
 #   plan.consistency-critic-dual-model     (기본 true)
 #   plan.contract-doc-enabled              (기본 true)
 #   metrics.usage-tracking-enabled         claude-commands.metrics.* (기본 false — opt-in)
+#   janus.notify-enabled                   claude-commands.janus.notify-enabled (기본 false — opt-in, /plan Step 9.8 버튼 알림)
+#   janus.base-url-key                     claude-commands.janus.base-url-key (Janus base URL 담은 env 이름표, 기본 빈값)
+#   janus.token-key                        claude-commands.janus.token-key (Janus 토큰 담은 env 이름표, 기본 빈값)
 #
 # fail-soft: config 부재·키 부재 시 빈 값(토글은 기본 true) + stderr 경고, exit 0.
 #   (dry-run/플랜 흐름이 config 없다고 중단되지 않도록 — 호출부가 빈 값 처리.)
@@ -86,6 +89,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;  # 토글 기본 ON (install.sh 기본과 일치)
     metrics.*-enabled) printf 'false\n' ;;  # 계측 토글 기본 OFF — opt-in (이식 안전)
+    janus.notify-enabled) printf 'false\n' ;;  # Janus 버튼 알림 토글 기본 OFF — opt-in
     base-branch) printf 'develop\n' ;;  # kickoff PR/rebase base 브랜치 — 기본 develop (다른 스칼라와 달리 빈값 아님)
     status-trigger-kickoff) printf 'In Progress\n' ;;  # 폴러/SKILL kickoff 트리거 컬럼 — 기본 In Progress
     status-trigger-review) printf 'Bot Review\n' ;;     # 폴러/SKILL review 트리거 컬럼 — 기본 Bot Review
@@ -107,6 +111,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
       'plan.completeness-critic-enabled' 'plan.consistency-critic-enabled' \
       'plan.consistency-critic-dual-model' 'plan.contract-doc-enabled' \
       'metrics.usage-tracking-enabled' \
+      'janus.notify-enabled' 'janus.base-url-key' 'janus.token-key' \
       '--list-modules' 'module.<Name>.<flag>' '--modules-where <flag>=<val>' '--modules-table' ;;
     --dump) : ;;
     # modules 인터페이스 — config 부재 시 모듈 없음(빈 출력). 단 표는 헤더행만.
@@ -179,6 +184,12 @@ PLAN_BLOCK = plan_m.group(2) if plan_m else ''
 metrics_m = re.search(r'^([ \t]+)metrics:\s*\n(.*?)(?=^\1\S|\Z)', CC, re.MULTILINE | re.DOTALL)
 METRICS_BLOCK = metrics_m.group(2) if metrics_m else ''
 
+# claude-commands.janus 서브블록 (plan·metrics 와 동일 앵커 — 들여쓰기 \1 캡처).
+# /plan Step 9.8 Janus 버튼 알림용 토글·env 이름표. notify-enabled 는 기본 false(opt-in),
+# base-url-key/token-key 는 Janus 타깃 env 이름표(빈값이면 SKILL 이 직접 env 로 폴백).
+janus_m = re.search(r'^([ \t]+)janus:\s*\n(.*?)(?=^\1\S|\Z)', CC, re.MULTILINE | re.DOTALL)
+JANUS_BLOCK = janus_m.group(2) if janus_m else ''
+
 # claude-commands.area-ids 서브블록
 ai = re.search(r'^([ \t]+)area-ids:[ \t]*\n((?:\1[ \t]+\S.*\n?|[ \t]*\n)*)', CC, re.MULTILINE)
 AREA_BLOCK = ai.group(2) if ai else ''
@@ -211,6 +222,13 @@ def metrics_bool(key, default='false'):
        계측 토글은 opt-in 이라 기본 false (plan_bool 의 기본 true 와 대비)."""
     m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
                   METRICS_BLOCK, re.MULTILINE | re.IGNORECASE)
+    return m.group(1).lower() if m else default
+
+def janus_bool(key, default='false'):
+    """janus 서브블록 boolean — true/false 만 인정(따옴표 허용). 오타·누락 → default.
+       Janus 버튼 알림은 opt-in 이라 기본 false (metrics_bool 과 동일 철학)."""
+    m = re.search(r'^[ \t]+' + re.escape(key) + r':\s*["\']?(true|false)["\']?\s*(?:#.*)?$',
+                  JANUS_BLOCK, re.MULTILINE | re.IGNORECASE)
     return m.group(1).lower() if m else default
 
 def project_number():
@@ -323,6 +341,16 @@ def resolve(key):
     if key.startswith('metrics.'):
         # 계측 토글 — 기본 false(opt-in). claude-commands.metrics.<key> 에서 읽음.
         return metrics_bool(key.split('.', 1)[1])
+    if key.startswith('janus.'):
+        # Janus 버튼 알림(/plan Step 9.8) — notify-enabled 는 bool(기본 false=opt-in),
+        # base-url-key/token-key 는 env 이름표 스칼라(기본 빈값). claude-commands.janus.<key>.
+        subkey = key.split('.', 1)[1]
+        if subkey == 'notify-enabled':
+            return janus_bool('notify-enabled')
+        if subkey in ('base-url-key', 'token-key'):
+            return get_scalar_in(JANUS_BLOCK, subkey)
+        sys.stderr.write(f"⚠️  pipeline-config: 알 수 없는 janus 키 '{key}' (빈 값)\n")
+        return ''
     # project 섹션 스칼라
     if key in ('owner', 'parent-repository', 'slack-channel'):
         return get_scalar_in(PROJECT, key)
@@ -409,6 +437,8 @@ elif arg == '--keys':
         'plan.consistency-critic-dual-model', 'plan.contract-doc-enabled',
         # 계측 토글 (기본 false — opt-in). 워크플로 claude 래퍼가 읽어 코멘트 박제 on/off.
         'metrics.usage-tracking-enabled',
+        # Janus 버튼 알림 (기본 false — opt-in). /plan Step 9.8 이 버튼 달린 Slack 알림 발사.
+        'janus.notify-enabled', 'janus.base-url-key', 'janus.token-key',
         # modules 인터페이스 — 모듈 동작 의미론(planner/review/kickoff/lead 등)
         '--list-modules', 'module.<Name>.<flag>', '--modules-where <flag>=<val>', '--modules-table',
     ]))
@@ -446,6 +476,7 @@ if [ "$rc" -ne 0 ] && [ "${1:-}" != "--require" ]; then
   case "${1:-}" in
     plan.*-enabled|plan.*-dual-model) printf 'true\n' ;;
     metrics.*-enabled) printf 'false\n' ;;  # 계측 토글 기본 OFF — opt-in
+    janus.notify-enabled) printf 'false\n' ;;  # Janus 버튼 알림 토글 기본 OFF — opt-in
     *) printf '\n' ;;
   esac
   exit 0

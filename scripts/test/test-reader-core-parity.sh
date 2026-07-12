@@ -46,6 +46,7 @@ it "RC-1 공유 스칼라/파생 키 출력이 plan↔kickoff 동일"
              author-login local-account docs-context-dir \
              codex-model codex-reasoning-effort \
              base-branch status-trigger-kickoff status-trigger-review \
+             janus.base-url-key janus.token-key \
              status-column-in-review status-column-ready status-column-backlog status-column-done; do
     _assert_reader_parity "scalar:$key" "$key" || ok=0
   done
@@ -58,7 +59,7 @@ it "RC-2 토글 키 출력이 plan↔kickoff 동일"
   ok=1
   for key in plan.completeness-critic-enabled plan.consistency-critic-enabled \
              plan.consistency-critic-dual-model plan.contract-doc-enabled \
-             metrics.usage-tracking-enabled; do
+             metrics.usage-tracking-enabled janus.notify-enabled; do
     _assert_reader_parity "toggle:$key" "$key" || ok=0
   done
   [ "$ok" = 1 ] && pass
