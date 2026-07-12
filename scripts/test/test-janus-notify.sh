@@ -13,7 +13,7 @@
 #        + Authorization 헤더는 argv 가 아니라 stdin config(-K -)로 도착
 #   JN-7 base URL 뒤 슬래시 제거 → {base}/messages 정확 조립
 #   JN-8 악성 env 이름표(배열첨자 명령주입 시도) → 경고+스킵 exit 0, 명령 미실행·발송 없음
-#   JN-9 버튼 label ':' 제거·75자 절단 (헬퍼 측 최종 방어)
+#   JN-9a/9b 버튼 label ':' 제거·75자 절단 — 두 분기 각각 실커버 (헬퍼 측 최종 방어)
 #   JN-10 curl 타임아웃 인자(--connect-timeout/--max-time) 존재 + argv 에 토큰 부재
 #
 # 라이브 접근 없음 — curl 은 PATH 스텁으로 가로채 요청을 로그파일에 기록한다.
@@ -199,11 +199,33 @@ it "JN-8 악성 env 이름표(명령주입 시도) → 경고+스킵 exit 0, 명
 )
 
 # ── JN-9: 버튼 label 새니타이즈 (':' 제거·75자 절단 — 헬퍼 측 최종 방어) ──
-it "JN-9 버튼 label ':' 제거 + 75자 초과 절단"
+#   두 분기를 각각 실커버한다: (a) 콜론 제거 — '가:'×50 은 제거 후 50cp 라 절단이 안 돌아
+#   콜론 분기 전용, (b) 절단 — 콜론 없는 100cp 입력이 정확히 75cp 로 잘려야 절단 분기 실행 입증.
+it "JN-9a 버튼 label ':' 제거 (콜론 분기 — 절단 미발동·내용 보존)"
 (
   dir="$(_setup_curl_stub 200)"
   CURL_LOG="$dir/req.log"
-  longlabel="$(python3 -c 'print("가:"*50)')"   # ':' 포함 + 코드포인트 100자
+  colonlabel="$(python3 -c 'print("가:"*50)')"   # ':' 포함, 제거 후 50cp(절단 미발동)
+  btn='[{"action":"set-status","label":"'"$colonlabel"'","value":{"v":1}}]'
+  PATH="$dir:$PATH" JANUS_BASE_URL="http://h:8700" JANUS_AUTH_TOKEN="t" \
+    bash "$NOTIFY" "#c" "txt" "$btn" "" >/dev/null 2>&1
+  data="$(grep '^DATA=' "$CURL_LOG" | sed 's/^DATA=//')"
+  ok="$(printf '%s' "$data" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+lab=d["buttons"][0]["label"]
+assert ":" not in lab, lab      # 콜론 제거됨
+assert lab=="가"*50, lab        # 내용 보존(제거만 — 절단 없음)
+print("ok")
+' 2>/dev/null)"
+  assert_eq "ok" "$ok" "label 콜론 제거(내용 보존)" && pass
+)
+
+it "JN-9b 버튼 label 75자 초과 절단 (절단 분기 실커버 — 결과 길이==75)"
+(
+  dir="$(_setup_curl_stub 200)"
+  CURL_LOG="$dir/req.log"
+  longlabel="$(python3 -c 'print("가"*100)')"   # 콜론 없음 + 100cp → 절단 분기가 반드시 실행
   btn='[{"action":"set-status","label":"'"$longlabel"'","value":{"v":1}}]'
   PATH="$dir:$PATH" JANUS_BASE_URL="http://h:8700" JANUS_AUTH_TOKEN="t" \
     bash "$NOTIFY" "#c" "txt" "$btn" "" >/dev/null 2>&1
@@ -212,11 +234,11 @@ it "JN-9 버튼 label ':' 제거 + 75자 초과 절단"
 import json,sys
 d=json.load(sys.stdin)
 lab=d["buttons"][0]["label"]
-assert ":" not in lab, lab          # 콜론 제거됨
-assert len(list(lab))<=75, len(lab) # 코드포인트 75자 이내
+assert len(list(lab))==75, len(list(lab))  # 정확히 75cp(<= 아니라 == — 절단 분기 실행 입증)
+assert lab=="가"*75, lab
 print("ok")
 ' 2>/dev/null)"
-  assert_eq "ok" "$ok" "label 새니타이즈(콜론 제거·75자 절단)" && pass
+  assert_eq "ok" "$ok" "label 75cp 절단(절단 분기 실행)" && pass
 )
 
 # ── JN-10: 타임아웃 인자 + argv 토큰 부재 ────────────────────────────

@@ -124,8 +124,9 @@ if buttons_raw.strip():
     if buttons:
         # 버튼 label 새니타이즈 — Slack 버튼 label 은 75자 제한이고 ":" 는 게이트웨이의
         # 구분자와 충돌 여지가 있어 제거한다. 헬퍼에 두는 이유: 모든 호출자(plan 뿐 아니라
-        # 이후 kickoff/review 복제까지)가 같은 방어를 공짜로 얻는다. 절단은 코드포인트
-        # 단위(list(str)) — 이모지 서로게이트 페어를 반토막 내지 않기 위함(App sanitizeLabel 동형).
+        # 이후 kickoff/review 복제까지)가 같은 방어를 공짜로 얻는다. 절단은 코드포인트 단위
+        # (list(str)) — python3 str 는 코드포인트 시퀀스라 멀티바이트 문자가 깨지지 않는다
+        # (단 grapheme 경계까지는 보장 안 함 — 결합 이모지 등은 구성요소 단위로 잘릴 수 있음).
         MAX_LABEL_LEN = 75
         for b in buttons:
             if isinstance(b, dict) and isinstance(b.get("label"), str):
