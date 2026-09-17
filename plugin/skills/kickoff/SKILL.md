@@ -9,8 +9,7 @@ disable-model-invocation: true
      아니라 실행 시 .claude/pipeline-config.yml 에서 읽는다. 코드펜스는 scripts/pipeline-config.sh
      리더로 값을 주입하고, 프로즈는 아래 "프로젝트 설정 (실행시 주입)" 블록을 참조한다.
      사람이 /pipeline:kickoff 로만 호출한다 (모델 자동호출 차단).
-     OMC(oh-my-claudecode) 의존은 --team/--ultra 경로에서만 발생하고, OMC 부재 시
-     --agent(pipeline:executor 병렬)로 자동 degrade 한다 — 정상 동작은 OMC 와 무관. -->
+     --team/--ultra 는 --agent(pipeline:executor 병렬)의 호환 별칭이다. -->
 
 # /kickoff — 영역별 코드 작업 파이프라인
 
@@ -30,8 +29,8 @@ disable-model-invocation: true
 /kickoff <parent-issue-url-or-number>                   # 런타임 자동 추천
 /kickoff <parent-issue-url-or-number> --agent           # Agent 병렬 강제
 /kickoff <parent-issue-url-or-number> --serial          # Agent 순차
-/kickoff <parent-issue-url-or-number> --team            # OMC team (tmux) — 없으면 --agent 폴백
-/kickoff <parent-issue-url-or-number> --ultra           # OMC ultrawork — 없으면 --agent 폴백
+/kickoff <parent-issue-url-or-number> --team            # --agent 별칭 (옛 사용법 호환)
+/kickoff <parent-issue-url-or-number> --ultra           # --agent 별칭 (옛 사용법 호환)
 /kickoff <parent-issue-url-or-number> --restart         # 상태 파일 무시, 처음부터
 /kickoff <parent-issue-url-or-number> --bot             # GHA 봇 실행 모드 (AskUserQuestion 스킵)
 ```
@@ -121,19 +120,19 @@ bash "$CFG" module.<Name>.kickoff            # 특정 모듈의 kickoff 대상 �
 
 > **대소문자 정확**: `module.<Name>.<flag>` 의 `<Name>` 은 표의 `name` 과 정확히 일치해야 한다 (예: `module.iOS.area-id` ≠ `module.IOS.area-id`). 표(`--modules-table`)의 `name` 컬럼을 그대로 쓴다.
 
-## 런타임 추천 룰 + OMC degrade
+## 런타임 추천 룰
 
-영역 수 `G`(= In Progress 대상 수 — `kickoff=false` 모듈 제외, lead 모듈 포함)별 추천 런타임과, OMC(oh-my-claudecode) 부재 시 폴백 규칙은 [런타임 결정 + OMC degrade](reference/runtime-degrade.md) 참조. 요지:
+영역 수 `G`(= In Progress 대상 수 — `kickoff=false` 모듈 제외, lead 모듈 포함)별 추천 런타임은 [런타임 결정](reference/runtime.md) 참조. 요지:
 
-- `--serial`·`--agent` 는 **`pipeline:executor` 직접 실행 — OMC 무관 (항상 가능)**.
-- `--team`·`--ultra` 는 OMC `oh-my-claudecode:team`/`oh-my-claudecode:ultrawork` 에 의존하되, **OMC 가 없으면 `--agent`(= `pipeline:executor` 병렬 N개)로 자동 degrade**. degrade 의 종착지는 항상 `--agent` 라, 이 skill 의 정상 동작은 OMC 설치 여부와 무관하다.
+- G=1 → `--serial`, G≥2 → `--agent`. 둘 다 **`pipeline:executor` 직접 실행 (항상 가능)**.
+- `--team`·`--ultra` 는 **`--agent` 의 호환 별칭**이다. 파싱 시 `--agent` 로 정규화하고 안내 한 줄을 남긴다.
 
 ## 수행 순서
 
 ### 1. 입력 파싱
 
 - `$ARGUMENTS`에서 parent URL 또는 번호 추출
-- 런타임 플래그 중 하나 추출 (`--agent|--team|--serial|--ultra`), 없으면 `RUNTIME_FLAG=null`
+- 런타임 플래그 중 하나 추출 (`--agent|--team|--serial|--ultra`), 없으면 `RUNTIME_FLAG=null`. `--team`/`--ultra` 는 `--agent` 로 정규화(원래 플래그는 `runtime.flagOverride` 에 기록, `--bot` 아니면 "`--agent` 와 같게 동작" 안내 한 줄)
 - `--restart` 플래그 추출
 - `--bot` 플래그 추출 → `BOT_MODE=true` (GHA 자동화 실행 컨텍스트)
 - 번호만 주어지면 config `parent-repo-name` 레포 기준으로 해석
@@ -292,9 +291,7 @@ STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
 - `--bot` 없으면 `AskUserQuestion`:
   > `{G}개 영역 → {RECOMMENDED} 런타임 추천. 진행할까요?`
   > `[진행]` `[다른 런타임 선택]` `[취소]`
-- "다른 런타임 선택" 시 options `[--agent, --team, --serial, --ultra]`로 재질문
-
-**OMC degrade 결정 (시작 시 1회 고정)** — 결정된 런타임이 `--team`/`--ultra` 면, 8-b 실행 시 OMC skill 호출을 시도하고 불가하면 `--agent` 로 폴백한다. 상세 분기는 [런타임 결정 + OMC degrade](reference/runtime-degrade.md) 참조. `--bot` 모드면 OMC 부재 시 조용히 `--agent` 로 진행.
+- "다른 런타임 선택" 시 options `[--agent, --serial]`로 재질문
 
 **G12 주의**: lead 선행 + 병렬 전환 시점에도 런타임 모드는 변경하지 않음 (시작 시 결정된 모드 유지). lead 단독 기간엔 단일 실행, lead PR 생성 후 나머지 N-1개를 같은 모드로 병렬 실행.
 
@@ -307,7 +304,7 @@ STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
   "schemaVersion": "1.0",
   "slug": "<SLUG>",
   "parent": {"url": "...", "repo": "<owner>/<parent-repo-name>", "number": <N>, "title": "..."},
-  "runtime": {"mode": "agent", "flagOverride": null, "decidedAt": "...", "triggeredBy": "user" | "bot", "omcDegrade": null},
+  "runtime": {"mode": "agent", "flagOverride": null, "decidedAt": "...", "triggeredBy": "user" | "bot"},
   "areas": {
     "<area>": {
       "subIssue": {"repo": "...", "number": 0, "nodeId": "..."},
@@ -326,7 +323,6 @@ STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
 ```
 
 - `parent.repo` 의 `<owner>`·`<parent-repo-name>` 은 config `owner`·`parent-repo-name` 로 채운다.
-- `runtime.omcDegrade` — team/ultra 가 OMC 부재로 agent 폴백됐으면 `"team→agent"` 등 기록(아니면 null).
 - 파일 쓰기는 원자적 (temp + `mv`). 매 상태 전이·retry 증가·에스컬·SIGINT 시 갱신.
 
 #### 8-b. 실행 단계 (영역별)
@@ -342,23 +338,16 @@ STATE_FILE=".pipeline/state/sessions/${SLUG}.json"
 **lead 없음** (lead 모듈 미지정 또는 In Progress 대상에 없음):
 - In Progress 영역 모두 런타임 플래그에 따라 병렬/직렬 실행
 
-**런타임별 호출 형태** (OMC degrade 포함 — 상세는 [reference/runtime-degrade.md](reference/runtime-degrade.md)):
+**런타임별 호출 형태** (상세는 [reference/runtime.md](reference/runtime.md)):
 
 ```python
-# --serial — OMC 무관
+# --serial
 for area in in_progress_areas:
     Agent(description="<area> 구현", subagent_type="pipeline:executor", prompt=EXECUTOR_PROMPT)  # 순차
 
-# --agent — OMC 무관 (한 메시지에서 N개 병렬)
+# --agent (별칭 --team·--ultra) — 한 메시지에서 N개 병렬
 # [Agent(..., subagent_type="pipeline:executor", ...) for area in in_progress_areas]
-
-# --team — OMC 있으면 Skill("oh-my-claudecode:team", task_list=[...], worker_count=N)
-#          OMC 없으면 → --agent 폴백 (pipeline:executor 병렬 N개)
-# --ultra — OMC 있으면 Skill("oh-my-claudecode:ultrawork")
-#          OMC 없으면 → --agent 폴백 (pipeline:executor 병렬 N개)
 ```
-
-> **degrade 분기 (prose)**: `--team`/`--ultra` 면 먼저 OMC skill 호출을 **시도**한다. 호출이 가능하면(OMC 설치됨) 그대로 OMC 에 위임하고, "skill not found / 사용 불가" 로 실패하면 **`--agent` 로 폴백**해 같은 In Progress 영역들을 한 메시지 안에서 `pipeline:executor` N개 병렬 호출한다. 폴백 시 상태 파일 `runtime.omcDegrade` 와 최종 리포트 런타임 표기를 `agent (team→agent degrade)` / `agent (ultra→agent degrade)` 로 남긴다. degrade 의 종착지는 항상 `--agent` 다.
 
 #### 8-c. 영역 단위 실행 블록 (`run_area`)
 
@@ -629,7 +618,7 @@ DOCS_CONTEXT_DIR="$(bash "$CFG" docs-context-dir)"
 /kickoff 완료 — <parent-title>
 
 Slug: <slug>
-런타임: <mode>   # OMC 폴백 시 "agent (team→agent degrade)" 등
+런타임: <mode>
 세션: .pipeline/state/sessions/<slug>.json
 
 영역별 상태 (/kickoff):
@@ -680,7 +669,7 @@ Context 문서:
 - **재시도 3분류 고정** (C3) — 수정 5회 / 일시 3회+백오프 / 즉시 에스컬. 사용자 override 없음
 - **PR 생성 ≠ 머지** — `/kickoff`는 "PR 생성 + `Bot Review` 전환 + `/review` 체이닝까지"가 책임. 머지는 사용자 hands-on 검증 후 (G4-a, G18)
 - **`/review` 자동 체이닝** (G18) — 모든 영역 `run_area` 종료 후 리뷰 가능한 PR이 1개 이상이면 `pipeline:review` 자동 호출. 체이닝 실패는 `/kickoff` 자체 실패로 취급하지 않음
-- **OMC degrade** — `--team`/`--ultra` 는 OMC 있을 때만, 없으면 `--agent`(pipeline:executor 병렬)로 폴백. `--serial`/`--agent` 는 OMC 무관. 정상 동작은 OMC 설치 여부와 무관
+- **런타임은 `pipeline:executor` 직접 실행만** — `--serial`(순차)·`--agent`(병렬). `--team`/`--ultra` 는 `--agent` 별칭이며 외부 오케스트레이터 skill 을 부르지 않음
 - **`kickoff=false` 모듈은 항상 제외** (C6) — 카운트·실행·리포트 모두. 제외 대상은 config `--modules-where kickoff=false` 가 정함 (특정 모듈명 하드코딩 안 함)
 - **Parent Status는 건드리지 않음** — 사용자 소유 (plan 과 일관)
 - **상태 파일 원자적 쓰기** — temp + `mv`, partial write 방지
@@ -693,8 +682,8 @@ Context 문서:
 - 모든 git 명령은 `git -C <영역>` 형태로 호출 (compound `cd <영역> && git ...` 금지). 권한 샌드박스가 `Bash(git -C <영역> *)` 와일드카드만 허용
 - PR 생성 후 Status 전환이 실패하면 PR은 남고 Status만 kickoff 트리거 컬럼(기본 In Progress) — **재실행 시 G4 매트릭스**에 따라 "PR 있음 + Status ≠ review 트리거 컬럼(config `status-trigger-review`, 기본 Bot Review)·In Review"는 스킵 안 될 수도 있으므로, Status 전환 실패는 에스컬(`immediate`)로 처리 권장
 - `Bot Review` 와 `In Review` 소유권 혼동 금지 — `Bot Review` 전환은 `/kickoff` (PR 생성 직후), `In Review` 전환은 `/review` (APPROVE 후). `/kickoff` 가 `In Review` 로 직접 전환하지 않음
-- `/review` 자동 체이닝 시 Skill 호출은 `Skill(skill="pipeline:review", args="<parent-url>")` 형태 (같은 플러그인 sibling skill — 네임스페이스 명시). OMC 플러그인이 따로 제공하는 review skill 과 혼동 금지 (그쪽은 `oh-my-claudecode:` 네임스페이스 — 우리가 부를 대상 아님)
-- `--team`/`--ultra` 는 OMC 없으면 `--agent` 로 자동 폴백 — OMC 없다고 조용히 직렬 실행하거나 실패하지 말 것. degrade 종착지는 항상 `--agent`(pipeline:executor 병렬)
+- `/review` 자동 체이닝 시 Skill 호출은 `Skill(skill="pipeline:review", args="<parent-url>")` 형태 (같은 플러그인 sibling skill — `pipeline:` 네임스페이스 명시). 다른 플러그인의 동명 review skill 을 부르지 말 것
+- `--team`/`--ultra` 를 받으면 `--agent`(pipeline:executor 병렬)로 실행 — 직렬 실행하거나 알 수 없는 플래그로 실패하지 말 것
 - `--agent|--team|--serial|--ultra` 두 개 이상 동시 지정 시 fail-fast (조용히 무시 금지)
 - executor 반환이 JSON 아닌 경우(모델 환각) → 재시도 1회 + 그래도 실패 시 `immediate / 반환 포맷 오류` 에스컬
 

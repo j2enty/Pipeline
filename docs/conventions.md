@@ -288,7 +288,7 @@ projects/
 | `consistency-critic-enabled` | `claude-commands.plan` | boolean | `true` | ⑤ 정합성 critic on/off |
 | `consistency-critic-dual-model` | `claude-commands.plan` | boolean | `true` | ⑤ 2차 모델 교차검증 on/off (on 이면 `cross-check-tool` 사용) |
 | `contract-doc-enabled` | `claude-commands.plan` | boolean | `true` | ② 영역 간 공유 계약 문서 생성 on/off |
-| `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어, 옛 oh-my-claudecode:ask 의 Pipeline 자체 대체) |
+| `cross-check-tool` | `claude-commands` (직속) | string | `codex` | ⑤ plan 교차검증용 외부 도구 CLI 이름 — 범용 `pipeline:ask` 에이전트에 전달됨(교차검증 용도로 best-effort 호출, 미설치·실패 시 스킵). codex 하드코딩 회피용 주입 키. (`pipeline:ask` = 외부 AI CLI 에게 작업을 위임하는 범용 호출 레이어) |
 | `codex-model` | `claude-commands` (직속) | string | 빈 값 | **plan `codex exec` 교차검증 + review `codex review` 두 경로 공통** — codex 교차검증에 주입할 모델명. 빈값이면 미주입=codex 자체 기본 모델(본체 기본 빈값, 회귀 없음). 계정 종류에 따라 가용 모델이 달라 프로젝트가 더 강한 모델을 쓸 수 있게 config 주입. 값이 있을 때만 `-c model=<값>` 플래그 부착(plan 은 `pipeline:ask` 프롬프트 경유, review 는 `codex review` 직접). SKILL 리더 전용 |
 | `codex-reasoning-effort` | `claude-commands` (직속) | string | 빈 값 | 위 `codex-model` 의 reasoning effort(예: `high`) — plan·review 교차검증 공통. 빈값이면 미주입=codex 기본. 값이 있을 때만 `-c model_reasoning_effort=<값>` 플래그 부착. SKILL 리더 전용 |
 | `base-branch` | `claude-commands` (직속) | string | `develop` | `/kickoff` 이 PR 생성(`gh pr create --base`)·재개 rebase(`git rebase origin/<base>`) 대상으로 쓰는 base 브랜치. `main` 이 기본인 새 프로젝트로 이식할 때 존재하지 않는 develop 참조 실패를 막는 주입 키. 빈값도 `develop` 로 폴백(항상 비지 않음). `install.sh` 는 파싱하지 않음 — 런타임 리더 전용(3벌 리더 공유 코어) |

@@ -6,8 +6,8 @@
 #   (A) skill 변환 불변식: placeholder 0, pipeline:executor·verifier 호출,
 #       disable-model-invocation, config 리더(--dump + CFG) 주입,
 #       모듈 동작은 리더 인터페이스(--modules-table/--modules-where)로 읽음(모듈명 비종속, #42).
-#   (B) OMC degrade: oh-my-claudecode 참조는 degrade(--agent 폴백) 컨텍스트에서만 허용,
-#       그 외 0. degrade 분기 문구 존재.
+#   (B) 런타임: pipeline:executor 직접 실행, --team/--ultra 는 --agent 별칭,
+#       oh-my-claudecode(OMC) 참조 0 (회귀 가드).
 #   (C) review 자동 체이닝: Skill(skill="pipeline:review") 존재.
 #   (D) 핵심 동작 보존: 8-c 재시도 루프·로컬-원격 동기화 가드·AC 치환·Status=Bot Review 전환.
 #   (E) 헬퍼 경로 ${CLAUDE_SKILL_DIR}/scripts (.omc/scripts 헬퍼 잔재 0).
@@ -74,52 +74,21 @@ hasE '\-\-modules-where (lead|kickoff)' "$SKILL" "(A-5a) --modules-where 로 lea
 absentE '"\$CFG" area-id\.(Backend|Admin|Frontend|iOS|Android|Design)' "$SKILL" "(A-5b) 모듈명 area-id.<이름> 개별호출 부재(하드코딩 제거)"
 absentE 'area-id\.IOS' "$SKILL" "(A-5b) area-id.IOS(오타) 부재"
 
-echo -e "\n${C_CYAN}── (B) OMC degrade (oh-my-claudecode 참조 통제) ──${C_NC}"
-# B-1 SKILL.md 의 oh-my-claudecode 참조는 전부 team/ultra degrade 컨텍스트(폴백 prose)
-#     또는 혼동 금지(네임스페이스 구분) 주의 줄에만 있어야 한다.
-#     #49-2: 화이트리스트에서 generic 토큰(agent·bare team·bare ultra)을 제거하고
-#     강한 degrade/disambiguation 컨텍스트 토큰만 허용한다. generic 'agent' 는 일반 산문
-#     어디에나 등장해서 진짜 잘못된 primary OMC 참조("…를 주 오케스트레이터로 쓴다" 류)도
-#     통과시켜 버린다. 'team'·'ultra' 도 bare 로는 너무 흔하므로 OMC 전용 플래그
-#     '--team'·'--ultra' 또는 명시 네임스페이스 'oh-my-claudecode:' 형태일 때만 인정.
-#     각 매치 줄에 다음 중 하나가 함께 있어야 한다:
-#       degrade·폴백·fallback (degrade 컨텍스트)
-#       혼동·네임스페이스      (disambiguation 컨텍스트)
-#       부재                   (OMC 부재 = degrade 트리거 컨텍스트)
-#       --team·--ultra         (OMC 전용 플래그 — bare team/ultra 아님)
-#       oh-my-claudecode:      (명시 OMC 네임스페이스 — 대안 경로 표기)
-OMC_CTX_RE='degrade|폴백|fallback|혼동|네임스페이스|부재|--team|--ultra|oh-my-claudecode:'
-OMC_LINES="$(grep -nE 'oh-my-claudecode' "$SKILL" || true)"
-if [ -z "$OMC_LINES" ]; then
-  # kickoff 은 degrade 를 설명해야 하므로 oh-my-claudecode 가 0이면 오히려 degrade 누락 의심.
-  fail "(B-1) oh-my-claudecode 참조 0 — team/ultra degrade 문맥 누락 의심"
-else
-  bad_ctx=0
-  while IFS= read -r line; do
-    if printf '%s' "$line" | grep -qE "$OMC_CTX_RE"; then :; else
-      bad_ctx=$((bad_ctx+1)); printf "    ↳ degrade 무관 oh-my-claudecode 줄: %s\n" "$line" >&2
-    fi
-  done <<EOF
-$OMC_LINES
-EOF
-  if [ "$bad_ctx" -eq 0 ]; then pass "(B-1) oh-my-claudecode 참조는 전부 team/ultra degrade 컨텍스트"; else fail "(B-1) degrade 무관 oh-my-claudecode 참조 $bad_ctx 건"; fi
-fi
-# reference/ 도 동일 — runtime-degrade.md 외에는 oh-my-claudecode 가 없어야 함
-OTHER_REF_OMC="$(grep -rlE 'oh-my-claudecode' "$REF" 2>/dev/null | grep -v 'runtime-degrade.md' || true)"
-if [ -z "$OTHER_REF_OMC" ]; then pass "(B-1) reference/ oh-my-claudecode 는 runtime-degrade.md 한정"; else fail "(B-1) runtime-degrade.md 밖 oh-my-claudecode 참조: $OTHER_REF_OMC"; fi
+echo -e "\n${C_CYAN}── (B) 런타임: executor 직접 실행 + 외부 오케스트레이터 참조 0 ──${C_NC}"
+# B-1 oh-my-claudecode(OMC) 참조 0 — OMC 의존 제거 후 회귀 가드.
+#     --team/--ultra 가 다시 외부 오케스트레이터 skill 을 부르게 되면 여기서 잡는다.
+absentE 'oh-my-claudecode' "$SKILL" "(B-1) SKILL.md oh-my-claudecode 참조 0"
+if grep -rqE 'oh-my-claudecode' "$REF"; then fail "(B-1) reference/ oh-my-claudecode 참조 0"; else pass "(B-1) reference/ oh-my-claudecode 참조 0"; fi
+absentE '\bOMC\b|omcDegrade' "$SKILL" "(B-1) SKILL.md OMC·omcDegrade 표기 0"
+if grep -rqE '\bOMC\b|omcDegrade' "$REF"; then fail "(B-1) reference/ OMC·omcDegrade 표기 0"; else pass "(B-1) reference/ OMC·omcDegrade 표기 0"; fi
 
-# B-2 degrade 분기 문구 — OMC 없으면 --agent 폴백
-hasE 'degrade' "$SKILL" "(B-2) degrade 키워드 존재"
-hasE '\-\-agent' "$SKILL" "(B-2) --agent 폴백 언급 존재"
-hasE '없으면.*--agent|--agent.*폴백|폴백.*--agent' "$SKILL" "(B-2) 'OMC 없으면 --agent 폴백' 분기 문구"
-# B-3 --serial/--agent 는 OMC 무관 (executor 직접) 명시
-hasE 'OMC 무관|OMC 와 무관|OMC 설치 여부와 무관' "$SKILL" "(B-3) executor 직접경로 OMC 무관 명시"
+# B-2 --team/--ultra 는 --agent 호환 별칭 (옛 사용법이 깨지지 않음)
+hasE '\-\-team.*\-\-agent.*별칭|\-\-agent.*별칭.*\-\-team|\-\-team.*\-\-ultra.*\-\-agent.*별칭' "$SKILL" "(B-2) --team/--ultra = --agent 별칭 명시"
+has 'subagent_type="pipeline:executor"' "$SKILL" "(B-2) 런타임은 pipeline:executor 직접 호출"
 
 echo -e "\n${C_CYAN}── (C) review 자동 체이닝 ──${C_NC}"
 has 'skill="pipeline:review"' "$SKILL" "(C-1) Skill(skill=\"pipeline:review\") 체이닝"
 hasE '자동 체이닝' "$SKILL" "(C-1) /review 자동 체이닝 보존"
-# 혼동 금지: oh-my-claudecode:review 로 체이닝하면 안 됨
-absentE 'skill="oh-my-claudecode:review"' "$SKILL" "(C-1) oh-my-claudecode:review 체이닝 부재(혼동 금지)"
 
 echo -e "\n${C_CYAN}── (D) 핵심 동작 보존 ──${C_NC}"
 # D-1 로컬-원격 동기화 가드 (G15, 2026-04-20 Android)
@@ -170,7 +139,7 @@ if grep -rqE 'BEGIN[ A-Z]*PRIVATE KEY|ghs_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}'
   fail "(F-1) reference/ 시크릿 패턴 부재"; else pass "(F-1) reference/ 시크릿 패턴 부재"; fi
 
 echo -e "\n${C_CYAN}── (G) reference 분리 ──${C_NC}"
-for rf in agent-prompts escalation context-md runtime-degrade minor-gaps; do
+for rf in agent-prompts escalation context-md runtime minor-gaps; do
   has "reference/$rf.md" "$SKILL" "(G-1) reference 링크: $rf"
   if [ -f "$REF/$rf.md" ]; then pass "(G-1) reference 파일 존재: $rf.md"; else fail "(G-1) reference 파일 없음: $rf.md"; fi
 done

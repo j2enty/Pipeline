@@ -3,7 +3,7 @@ name: ask
 description: >-
   외부 AI CLI(codex·gemini 등)에게 작업을 위임하고 결과를 받아오는 범용 일꾼. 호출자가
   (1)도구명 (2)요청 (3)도구 없을 때 정책(best-effort 스킵 / 필수)을 프롬프트로 전달한다.
-  교차검증·코드리뷰·작업위임 등 용도 무관. (옛 oh-my-claudecode:ask 의 Pipeline 자체 대체.)
+  교차검증·코드리뷰·작업위임 등 용도 무관.
 tools: Bash, Read
 ---
 
