@@ -1,9 +1,6 @@
 # macOS
 .DS_Store
 
-# OMC 세션 메타데이터
-.omc/
-
 # Pipeline 런타임 상태 (kickoff/review 가 생성하는 세션·리뷰 상태파일 — 커밋 대상 아님, #65)
 .pipeline/state/
 
